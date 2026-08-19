@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/devopsmike2/squadron/extension/changewindow"
@@ -215,6 +216,28 @@ type Group struct {
 	ChangeWindows []changewindow.Window `json:"change_windows,omitempty"`
 	CreatedAt     time.Time             `json:"created_at"`
 	UpdatedAt     time.Time             `json:"updated_at"`
+}
+
+// MarshalJSON normalizes a Group's labels so the field is ALWAYS
+// emitted as an object, never JSON null. A group that never had labels
+// carries a nil map, and Go marshals a nil map as `null` — which the
+// UI's `labels: Record<string,string>` type does not expect. One
+// unguarded `Object.entries(null)` on the Groups page was enough to
+// crash the route and blank the app shell (the Southern-pilot field
+// bug). The frontend now guards its own access AND the route sits
+// behind an error boundary, but the wire shape should be internally
+// consistent regardless: some groups already serialize `{}` here, so
+// every group should. This is a pure serialization concern — the
+// stored representation is untouched, no migration.
+func (g Group) MarshalJSON() ([]byte, error) {
+	// Alias sheds the MarshalJSON method so json.Marshal below does not
+	// recurse back into this function.
+	type groupAlias Group
+	ga := groupAlias(g)
+	if ga.Labels == nil {
+		ga.Labels = map[string]string{}
+	}
+	return json.Marshal(ga)
 }
 
 // Config represents an agent configuration

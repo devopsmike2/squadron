@@ -316,7 +316,16 @@ export default function GroupsPage() {
             </TableCell>
             <TableCell>
               <div className="flex flex-wrap gap-1">
-                {Object.entries(group.labels).map(([key, value]) => (
+                {/* Guard the labels map before iterating: the API can
+                    emit `labels: null` for a group that never had any
+                    (older rows / defense-in-depth is on the serializer
+                    now, but the UI must not depend on it). An unguarded
+                    Object.entries(null) throws and — with the whole
+                    route behind an error boundary now — degrades to a
+                    fallback instead of blanking the shell; `?? {}`
+                    keeps this cell rendering "No labels" like every
+                    other guarded .labels site in the codebase. */}
+                {Object.entries(group.labels ?? {}).map(([key, value]) => (
                   <span
                     key={key}
                     className="text-xs bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded"
@@ -324,7 +333,7 @@ export default function GroupsPage() {
                     {key}={value}
                   </span>
                 ))}
-                {Object.keys(group.labels).length === 0 && (
+                {Object.keys(group.labels ?? {}).length === 0 && (
                   <span className="text-xs text-muted-foreground">
                     No labels
                   </span>
