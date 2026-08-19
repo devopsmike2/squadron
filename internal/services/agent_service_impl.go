@@ -301,21 +301,32 @@ func (s *AgentServiceImpl) UpdateAgentDeliveredConfigHash(ctx context.Context, i
 }
 
 // UpdateAgentRegistration persists the mutable registration/grouping
-// fields (Name, Labels, Version, GroupID, GroupName) of an existing
-// agent. Status, LastSeen, EffectiveConfig, Capabilities and the
-// immutable CreatedAt are intentionally NOT written by this path —
-// status/last-seen have their own dedicated heartbeat updates and the
-// registration UPDATE must not clobber them. Used by the OpAMP server
-// when a registered agent re-reports a changed AgentDescription, and by
-// the operator group-assignment endpoint.
+// fields (Name, Labels, Version, GroupID, GroupName, Capabilities) of an
+// existing agent. Status, LastSeen, EffectiveConfig and the immutable
+// CreatedAt are intentionally NOT written by this path — status/last-seen
+// have their own dedicated heartbeat updates and the registration UPDATE
+// must not clobber them. Used by the OpAMP server when a registered agent
+// re-reports a changed AgentDescription, and by the operator
+// group-assignment / dismiss-duplicate endpoints.
+//
+// Capabilities are persisted here (they were previously only written by
+// CreateAgent and never re-written, so an agent whose row first registered
+// via telemetry discovery kept an empty capabilities column forever — the
+// root of the drift "2nd miss", PR #35). The store layer PRESERVES the
+// existing capabilities when the incoming list is empty, so the operator
+// endpoints (which pass a full agent loaded via GetAgent) and any
+// description-less caller can never wipe a previously-reported capability
+// set. PR #35 re-keyed supervised-drift off the delivered-hash presence,
+// not this persisted column, so persisting it does not change drift keying.
 func (s *AgentServiceImpl) UpdateAgentRegistration(ctx context.Context, agent *Agent) error {
 	storageAgent := &applicationstore.Agent{
-		ID:        agent.ID,
-		Name:      agent.Name,
-		Labels:    agent.Labels,
-		Version:   agent.Version,
-		GroupID:   agent.GroupID,
-		GroupName: agent.GroupName,
+		ID:           agent.ID,
+		Name:         agent.Name,
+		Labels:       agent.Labels,
+		Version:      agent.Version,
+		GroupID:      agent.GroupID,
+		GroupName:    agent.GroupName,
+		Capabilities: agent.Capabilities,
 	}
 	return s.appStore.UpdateAgentRegistration(ctx, storageAgent)
 }

@@ -553,3 +553,68 @@ func TestStoreUpdateAgentRegistrationNotFound(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found")
 	})
 }
+
+// TestStoreUpdateAgentRegistration_PersistsCapabilities: a reconnect re-reports
+// capabilities and they persist (PR #35 root cause was that they didn't).
+func TestStoreUpdateAgentRegistration_PersistsCapabilities(t *testing.T) {
+	withPopulatedMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: testAgentID, Name: "agent", Capabilities: []string{"accepts_remote_config"}}))
+		got, err := store.GetAgent(ctx, testAgentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.ElementsMatch(t, []string{"accepts_remote_config"}, got.Capabilities)
+	})
+}
+
+// TestStoreUpdateAgentRegistration_PreservesCapabilitiesOnEmpty: a later
+// capability-less registration must not wipe the stored set.
+func TestStoreUpdateAgentRegistration_PreservesCapabilitiesOnEmpty(t *testing.T) {
+	withPopulatedMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: testAgentID, Name: "agent", Capabilities: []string{"accepts_remote_config"}}))
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: testAgentID, Name: "agent", Capabilities: nil}))
+		got, err := store.GetAgent(ctx, testAgentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.ElementsMatch(t, []string{"accepts_remote_config"}, got.Capabilities)
+	})
+}
+
+// TestStoreDeleteGroup_NullsMembersAndRemovesGroupConfigs: deleting a group nulls
+// member agents' membership (no dangling ref) and removes the group's config,
+// leaving agent-scoped configs untouched.
+func TestStoreDeleteGroup_NullsMembersAndRemovesGroupConfigs(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		gid := "grp-del"
+		require.NoError(t, store.CreateGroup(ctx, &types.Group{ID: gid, Name: "grp"}))
+
+		aid := uuid.New()
+		gname := "grp"
+		require.NoError(t, store.CreateAgent(ctx, &types.Agent{
+			ID: aid, Name: "a1", GroupID: &gid, GroupName: &gname,
+			Status: types.AgentStatusOnline, LastSeen: testTimestamp,
+			CreatedAt: testTimestamp, UpdatedAt: testTimestamp}))
+		require.NoError(t, store.CreateConfig(ctx, &types.Config{ID: "cfg-group", GroupID: &gid, ConfigHash: "h", Content: "c", Version: 1, CreatedAt: testTimestamp}))
+		require.NoError(t, store.CreateConfig(ctx, &types.Config{ID: "cfg-agent", AgentID: &aid, ConfigHash: "h", Content: "c", Version: 1, CreatedAt: testTimestamp}))
+
+		require.NoError(t, store.DeleteGroup(ctx, gid))
+
+		got, err := store.GetAgent(ctx, aid)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Nil(t, got.GroupID, "member agent group_id must be nulled, not left dangling")
+
+		gcfg, err := store.GetLatestConfigForGroup(ctx, gid)
+		require.NoError(t, err)
+		assert.Nil(t, gcfg, "group config must be removed with the group")
+
+		acfg, err := store.GetLatestConfigForAgent(ctx, aid)
+		require.NoError(t, err)
+		require.NotNil(t, acfg, "agent-scoped config must be untouched")
+	})
+}

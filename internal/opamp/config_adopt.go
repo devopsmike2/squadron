@@ -129,6 +129,31 @@ func (s *Server) tryAdoptEffectiveConfig(ctx context.Context, agent *Agent) (str
 		return "", false
 	}
 
+	// Skeleton-persist guard (deferred #39 follow-up,
+	// knowledge/2026-08-12-supervisor-initial-config-skeleton-clobber.md).
+	// Do NOT capture a pipelines-bare / bootstrap-only effective config as a
+	// managed intent for a genuinely-unconfigured agent. Two shapes are refused:
+	//   1. no meaningfully-wired pipeline — components may be DEFINED but no
+	//      service::pipelines entry references a non-"nop" receiver AND a
+	//      non-"nop" exporter (an empty/absent service.pipelines, an unwired
+	//      config, or the supervisor's nop bootstrap fragment); and
+	//   2. the exact synthesized skeleton (DefaultOTelConfig, otlp -> otlp) that
+	//      Squadron itself would otherwise push as the fallback.
+	// Persisting either would seed a broken intent that then SHADOWS a real
+	// agent- or group-config assigned later (agent-scoped precedence), the exact
+	// clobber family this file's ADR 0039 work fixes. When adopt can't safely
+	// capture a real config we return ("", false): getConfigForAgent falls
+	// through to the transient DefaultOTelConfig push but persists NO intent, so
+	// the agent stays unconfigured and correctly resolves to any later
+	// agent/group config instead of a seeded skeleton. The guard is deliberately
+	// conservative — a legitimate real config always has at least one wired
+	// pipeline, so it is never blocked (ADR 0039 stays intact).
+	if !isAdoptableConfig(stripped) {
+		s.logger.Info("adopt-on-supervise: reported effective config has no wired pipelines (skeleton/bootstrap-only); leaving agent unconfigured rather than seeding a skeleton intent",
+			zap.String("agentId", agent.InstanceIdStr))
+		return "", false
+	}
+
 	cfg := &services.Config{
 		ID:         uuid.New().String(),
 		Name:       "auto-seeded on supervise",
@@ -240,6 +265,83 @@ func stripOpampExtension(content string) (string, error) {
 // extensions (health_check, zpages, oauth2client, ...) are never matched.
 func isOpampExtensionName(name string) bool {
 	return name == "opamp" || strings.HasPrefix(name, "opamp/")
+}
+
+// isAdoptableConfig reports whether an OTel collector config is a real, wired
+// config that is safe to persist as an adopted managed intent (ADR 0039 skeleton
+// guard). It refuses two shapes that must never be captured:
+//
+//  1. a config with no meaningfully-wired pipeline — see hasMeaningfulPipeline;
+//     covers an empty/absent service.pipelines, components defined but referenced
+//     in no pipeline, and the supervisor's nop bootstrap fragment; and
+//  2. the exact synthesized DefaultOTelConfig skeleton (otlp -> batch ->
+//     otlp(localhost:4317)) Squadron would otherwise push as the transient
+//     fallback — it has a technically-wired otlp pipeline so (1) passes it, but
+//     persisting the skeleton as an intent is precisely the bootstrap-only case
+//     the guard exists to block. Compared by the canonical confignorm hash so
+//     incidental whitespace differences don't defeat the check.
+//
+// It is conservative by construction: any legitimate real config has at least
+// one wired non-nop pipeline and is not the skeleton, so it is always adoptable.
+func isAdoptableConfig(content string) bool {
+	if !hasMeaningfulPipeline(content) {
+		return false
+	}
+	// Compare against the skeleton run through the SAME opamp-strip + YAML
+	// re-emit as `content`, so the check is indentation/formatting independent
+	// (confignorm normalizes values but not structural whitespace, and
+	// stripOpampExtension re-emits the tree canonically). A reported effective
+	// config that reduces to exactly the synthesized skeleton is refused.
+	if ref, err := stripOpampExtension(DefaultOTelConfig); err == nil {
+		if confignorm.Hash(content) == confignorm.Hash(ref) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasMeaningfulPipeline reports whether content declares at least one
+// service::pipelines entry that references a non-"nop" receiver AND a non-"nop"
+// exporter — i.e. a pipeline that actually moves telemetry. An absent or empty
+// service.pipelines, pipelines with empty receiver/exporter lists (components
+// defined but unwired), and nop-only bootstrap pipelines all return false. A
+// YAML parse failure returns false (fail closed: don't adopt something we can't
+// understand). Processors are intentionally ignored — a pipeline with receivers
+// and exporters but no processors is still meaningfully wired.
+func hasMeaningfulPipeline(content string) bool {
+	var doc struct {
+		Service struct {
+			Pipelines map[string]struct {
+				Receivers []string `yaml:"receivers"`
+				Exporters []string `yaml:"exporters"`
+			} `yaml:"pipelines"`
+		} `yaml:"service"`
+	}
+	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+		return false
+	}
+	for _, p := range doc.Service.Pipelines {
+		if hasNonNopComponent(p.Receivers) && hasNonNopComponent(p.Exporters) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNonNopComponent reports whether ids contains at least one component id that
+// is neither empty nor the "nop" receiver/exporter (bare "nop" or a named
+// "nop/<name>" instance). The nop component is the supervisor's bootstrap
+// placeholder and carries no real telemetry, so a pipeline wired only to nop is
+// not "meaningful".
+func hasNonNopComponent(ids []string) bool {
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || id == "nop" || strings.HasPrefix(id, "nop/") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // mappingValueNode returns the value node for key in a YAML mapping node, or nil

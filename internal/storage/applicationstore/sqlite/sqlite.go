@@ -1630,22 +1630,40 @@ func (s *Storage) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UU
 
 // UpdateAgentRegistration writes the mutable registration/grouping fields
 // of an existing agent. Callers pass a full *types.Agent (loaded via
-// GetAgent or built from a fresh OpAMP AgentDescription); only Name,
-// Labels, Version, GroupID, GroupName + updated_at are written — status,
-// last_seen, effective_config, capabilities, and the immutable id/created_at
-// are left untouched by their own update paths.
+// GetAgent or built from a fresh OpAMP AgentDescription); Name, Labels,
+// Version, GroupID, GroupName, Capabilities + updated_at are written —
+// status, last_seen, effective_config, and the immutable id/created_at are
+// left untouched by their own update paths.
+//
+// Capabilities are PRESERVE-ON-EMPTY: the column is overwritten only when the
+// incoming list is non-empty (CASE below). An OpAMP reconnect re-reports the
+// agent's capabilities, so they persist (fixing the telemetry-discovered
+// agent whose capabilities column was never re-written — PR #35 root cause);
+// but a description-less or capability-less caller can never wipe a
+// previously-persisted set. Empty is marshalled to "[]", the sentinel the
+// CASE checks.
 func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agent) error {
 	labelsJSON, _ := json.Marshal(agent.Labels)
+	capsJSON, _ := json.Marshal(agent.Capabilities)
+	// Normalize nil ("null") and empty to the "[]" sentinel the preserve CASE
+	// checks, so a nil OR empty incoming list both preserve the stored value.
+	if len(agent.Capabilities) == 0 {
+		capsJSON = []byte("[]")
+	}
 	tenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return err
 	}
 	query := `UPDATE agents
-		SET name = ?, labels = ?, version = ?, group_id = ?, group_name = ?, updated_at = CURRENT_TIMESTAMP
+		SET name = ?, labels = ?, version = ?, group_id = ?, group_name = ?,
+		    capabilities = CASE WHEN ? = '[]' THEN capabilities ELSE ? END,
+		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL`
 	args := []any{
 		agent.Name, string(labelsJSON), agent.Version,
-		agent.GroupID, agent.GroupName, agent.ID.String(),
+		agent.GroupID, agent.GroupName,
+		string(capsJSON), string(capsJSON),
+		agent.ID.String(),
 	}
 	if apply {
 		query += ` AND tenant_id = ?`
@@ -1904,26 +1922,65 @@ func (s *Storage) UpdateGroup(ctx context.Context, group *types.Group) error {
 	return nil
 }
 
+// DeleteGroup removes a group and cleans up references in one transaction so a
+// deleted group can never brick or dangle an agent (configs FK ON DELETE
+// hardening). Member agents' group_id/group_name are nulled — they fall back to
+// no-group resolution rather than pointing at a now-missing group (agents.group_id
+// has no DB FK, so this must be done in application code) — and the group's
+// group-scoped configs are removed. Everything is atomic: if the group turns out
+// not to exist, the transaction rolls back and no agent membership is touched.
 func (s *Storage) DeleteGroup(ctx context.Context, id string) error {
 	tenant, apply, err := tenantScope(ctx)
 	if err != nil {
 		return err
 	}
-	query := `DELETE FROM groups WHERE id = ?`
-	args := []any{id}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete group tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 1) Null out member agents' group membership.
+	nullQ := `UPDATE agents SET group_id = NULL, group_name = NULL, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?`
+	nullArgs := []any{id}
 	if apply {
-		query += ` AND tenant_id = ?`
-		args = append(args, tenant)
+		nullQ += ` AND tenant_id = ?`
+		nullArgs = append(nullArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, nullQ, nullArgs...); err != nil {
+		return fmt.Errorf("clear agent group membership: %w", err)
 	}
 
-	result, err := s.db.ExecContext(ctx, query, args...)
+	// 2) Delete the group's group-scoped configs.
+	cfgQ := `DELETE FROM configs WHERE group_id = ?`
+	cfgArgs := []any{id}
+	if apply {
+		cfgQ += ` AND tenant_id = ?`
+		cfgArgs = append(cfgArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, cfgQ, cfgArgs...); err != nil {
+		return fmt.Errorf("delete group configs: %w", err)
+	}
+
+	// 3) Delete the group itself.
+	delQ := `DELETE FROM groups WHERE id = ?`
+	delArgs := []any{id}
+	if apply {
+		delQ += ` AND tenant_id = ?`
+		delArgs = append(delArgs, tenant)
+	}
+	result, err := tx.ExecContext(ctx, delQ, delArgs...)
 	if err != nil {
 		return fmt.Errorf("failed to delete group: %w", err)
 	}
-
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("group not found: %s", id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete group: %w", err)
 	}
 
 	s.logger.Debug("Deleted group", zap.String("group_id", id))

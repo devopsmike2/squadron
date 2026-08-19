@@ -564,3 +564,81 @@ func TestSQLiteUpdateAgentRegistrationNotFound(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found")
 	})
 }
+
+// TestSQLiteUpdateAgentRegistration_PersistsCapabilities: a reconnect that
+// re-reports the agent's capabilities persists them (they used to be dropped by
+// this path — the drift "2nd miss" root cause, PR #35). RED before the fix
+// (capabilities stayed the create-time set).
+func TestSQLiteUpdateAgentRegistration_PersistsCapabilities(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		ctx := context.Background()
+		err := store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID:           agentID,
+			Name:         "agent",
+			Capabilities: []string{"accepts_remote_config", "reports_status"},
+		})
+		require.NoError(t, err)
+
+		got, err := store.GetAgent(ctx, agentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.ElementsMatch(t, []string{"accepts_remote_config", "reports_status"}, got.Capabilities)
+	})
+}
+
+// TestSQLiteUpdateAgentRegistration_PreservesCapabilitiesOnEmpty: a later
+// capability-less registration (e.g. an operator group PATCH) must NOT wipe a
+// previously-persisted capability set — the preserve-on-empty guard.
+func TestSQLiteUpdateAgentRegistration_PreservesCapabilitiesOnEmpty(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		ctx := context.Background()
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agentID, Name: "agent", Capabilities: []string{"accepts_remote_config"}}))
+		// Empty/nil capabilities on a subsequent write must preserve, not clear.
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agentID, Name: "agent", Capabilities: nil}))
+
+		got, err := store.GetAgent(ctx, agentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.ElementsMatch(t, []string{"accepts_remote_config"}, got.Capabilities)
+	})
+}
+
+// TestSQLiteDeleteGroup_NullsMembersAndRemovesGroupConfigs: deleting a group must
+// not leave a member agent pointing at a now-missing group (dangling membership)
+// nor orphan its group-scoped config. RED before the fix (agent.group_id stayed
+// set to the deleted group's id).
+func TestSQLiteDeleteGroup_NullsMembersAndRemovesGroupConfigs(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		ctx := context.Background()
+		gid := "grp-del"
+		require.NoError(t, store.CreateGroup(ctx, makeTestGroup(gid)))
+
+		aid := uuid.New()
+		a := makeTestAgent(aid)
+		gname := "grp"
+		a.GroupID = &gid
+		a.GroupName = &gname
+		require.NoError(t, store.CreateAgent(ctx, a))
+
+		require.NoError(t, store.CreateConfig(ctx, makeTestConfig("cfg-group", nil, &gid)))
+		require.NoError(t, store.CreateConfig(ctx, makeTestConfig("cfg-agent", &aid, nil)))
+
+		require.NoError(t, store.DeleteGroup(ctx, gid))
+
+		got, err := store.GetAgent(ctx, aid)
+		require.NoError(t, err)
+		require.NotNil(t, got, "member agent must survive its group's deletion")
+		assert.Nil(t, got.GroupID, "member agent group_id must be nulled, not left dangling")
+
+		gcfg, err := store.GetLatestConfigForGroup(ctx, gid)
+		require.NoError(t, err)
+		assert.Nil(t, gcfg, "group config must be removed with the group")
+
+		acfg, err := store.GetLatestConfigForAgent(ctx, aid)
+		require.NoError(t, err)
+		require.NotNil(t, acfg, "agent-scoped config must be untouched")
+		assert.Equal(t, "cfg-agent", acfg.ID)
+	})
+}
