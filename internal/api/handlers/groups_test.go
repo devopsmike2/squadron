@@ -15,6 +15,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/testutils"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -31,6 +32,85 @@ func setupGroupHandlersTest() (*GroupHandlers, *testutils.MockAgentService) {
 	logger := zap.NewNop()
 	handlers := NewGroupHandlers(mockService, mockSender, logger)
 	return handlers, mockService
+}
+
+// TestHandleGetGroup_ReportsAgentCount is the regression guard for the
+// pilot-reported bug: GET /api/v1/groups/:id (single-group detail)
+// returned agent_count: 0 even for a group that had members, because
+// the detail handler returned the stored Group struct without running
+// the membership enrichment that GET /api/v1/groups (the list) does.
+//
+// It seeds a group with 3 member agents (plus a decoy agent in another
+// group) and asserts the detail endpoint reports agent_count: 3 — the
+// same count the list endpoint reports. On unfixed main this FAILS with
+// agent_count: 0.
+func TestHandleGetGroup_ReportsAgentCount(t *testing.T) {
+	handlers, mockService := setupGroupHandlersTest()
+	ctx := context.Background()
+
+	groupID := "grp_members"
+	require.NoError(t, mockService.CreateGroup(ctx, &services.Group{
+		ID:   groupID,
+		Name: "southern-pilot",
+	}))
+	// A second group whose members must NOT be counted toward groupID.
+	otherGroupID := "grp_other"
+	require.NoError(t, mockService.CreateGroup(ctx, &services.Group{
+		ID:   otherGroupID,
+		Name: "other",
+	}))
+
+	// 3 members of groupID.
+	for i := 0; i < 3; i++ {
+		gid := groupID
+		require.NoError(t, mockService.CreateAgent(ctx, &services.Agent{
+			ID:      uuid.New(),
+			GroupID: &gid,
+		}))
+	}
+	// 1 decoy member of the other group + 1 ungrouped agent.
+	otherGID := otherGroupID
+	require.NoError(t, mockService.CreateAgent(ctx, &services.Agent{
+		ID:      uuid.New(),
+		GroupID: &otherGID,
+	}))
+	require.NoError(t, mockService.CreateAgent(ctx, &services.Agent{
+		ID: uuid.New(),
+	}))
+
+	// Detail endpoint must report the true member count.
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/groups/"+groupID, nil)
+	c.Params = gin.Params{{Key: "id", Value: groupID}}
+
+	handlers.HandleGetGroup(c)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var detail services.Group
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
+	assert.Equal(t, 3, detail.AgentCount,
+		"GET /groups/:id must compute agent_count from member agents, not return 0")
+
+	// And it must agree with the list endpoint for the same group.
+	wl := httptest.NewRecorder()
+	cl, _ := gin.CreateTestContext(wl)
+	cl.Request = httptest.NewRequest("GET", "/api/v1/groups", nil)
+	handlers.HandleGetGroups(cl)
+	require.Equal(t, http.StatusOK, wl.Code, "body: %s", wl.Body.String())
+
+	var listResp struct {
+		Groups []services.Group `json:"groups"`
+	}
+	require.NoError(t, json.Unmarshal(wl.Body.Bytes(), &listResp))
+	var listCount int
+	for _, g := range listResp.Groups {
+		if g.ID == groupID {
+			listCount = g.AgentCount
+		}
+	}
+	assert.Equal(t, listCount, detail.AgentCount,
+		"detail and list endpoints must report the same agent_count for a group")
 }
 
 // TestHandleCreateGroup_LearnFromVerdicts_DefaultsTrue exercises
