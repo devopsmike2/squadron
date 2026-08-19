@@ -1,6 +1,6 @@
 package sqlite
 
-const SchemaVersion = 16
+const SchemaVersion = 17
 
 // InitialSchema creates the initial SQLite database schema
 const InitialSchema = `
@@ -756,6 +756,35 @@ CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_regis
 INSERT OR IGNORE INTO schema_version (version) VALUES (16);
 `
 
+// AutomationsSchema adds the automations table (ADR 0038, first slice) —
+// condition-triggered auto-remediation rules. tenant_id is carried inline
+// (fresh DBs born with it; OSS single-tenant defaults to 'default'), mirroring
+// the born-with-tenant tables, so the store methods can scope like alert_rules
+// without a later ALTER + composite-key rebuild. Idempotent: CREATE TABLE IF
+// NOT EXISTS + CREATE INDEX IF NOT EXISTS — running it twice is a no-op.
+const AutomationsSchema = `
+CREATE TABLE IF NOT EXISTS automations (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	agent_id TEXT,
+	group_id TEXT,
+	trigger_type TEXT NOT NULL,
+	action_type TEXT NOT NULL,
+	cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+	max_attempts INTEGER NOT NULL DEFAULT 0,
+	dry_run INTEGER NOT NULL DEFAULT 0,
+	tenant_id TEXT NOT NULL DEFAULT 'default',
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_automations_enabled ON automations(enabled);
+CREATE INDEX IF NOT EXISTS idx_automations_tenant ON automations(tenant_id);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (17);
+`
+
 // Migrations is a list of all schema migrations
 var Migrations = []string{
 	InitialSchema,
@@ -774,4 +803,5 @@ var Migrations = []string{
 	ColdStartObservationSchema,
 	ErrorRateObservationSchema,
 	ConnectionRegistrySchema,
+	AutomationsSchema,
 }

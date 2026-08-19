@@ -164,6 +164,31 @@ const (
 	AuditEventAlertFired       = "alert.fired"
 	AuditEventAlertResolved    = "alert.resolved"
 
+	// ADR 0038 — agent automations. Every evaluation decision and every action
+	// the leader-only automation evaluator takes lands on the tamper-evident
+	// chain, so an operator can prove after the fact why an agent was (or was
+	// NOT) auto-restarted. TargetType is AuditTargetAgent, TargetID the agent
+	// acted on; the payload carries automation_id, automation_name, trigger,
+	// action, and a reason. The five verbs:
+	//   - .triggered:     an enabled rule's trigger transitioned to true for an
+	//                     agent (the condition was observed).
+	//   - .action_taken:  the action (supervisor restart) was dispatched.
+	//   - .action_failed: the action dispatch returned an error.
+	//   - .suppressed:    the action was NOT taken — cooldown not elapsed, or the
+	//                     rule is dry-run (reason distinguishes which).
+	//   - .escalated:     max-attempts reached in one outage; the evaluator STOPS
+	//                     auto-acting on this agent and hands off to a human.
+	AuditEventAutomationTriggered    = "automation.triggered"
+	AuditEventAutomationActionTaken  = "automation.action_taken"
+	AuditEventAutomationActionFailed = "automation.action_failed"
+	AuditEventAutomationSuppressed   = "automation.suppressed"
+	AuditEventAutomationEscalated    = "automation.escalated"
+
+	// AuditTargetAutomation is the target type for automation-rule CRUD events
+	// (rule lifecycle, as opposed to the per-agent action events above which
+	// target the agent). Reserved for the CRUD audit surface.
+	AuditTargetAutomation = "automation"
+
 	// Action runner lifecycle. action.dispatched fires when Squadron
 	// signs a request and writes it as pending. action.executed and
 	// action.failed fire when the runner posts a result; action.denied

@@ -30,6 +30,7 @@ type Store struct {
 	configs      map[string]*types.Config
 	savedQueries map[string]*types.SavedQuery
 	alertRules   map[string]*types.AlertRule
+	automations  map[string]*types.Automation
 	auditEvents  []*types.AuditEvent // append-only; sorted newest-first on read
 	// v0.89.250 continuous-discovery slice 1 — persisted scans, append-only,
 	// sorted newest-first on read.
@@ -146,6 +147,7 @@ func NewStore() *Store {
 		configs:          make(map[string]*types.Config),
 		savedQueries:     make(map[string]*types.SavedQuery),
 		alertRules:       make(map[string]*types.AlertRule),
+		automations:      make(map[string]*types.Automation),
 		auditEvents:      make([]*types.AuditEvent, 0, 64),
 		rollouts:         make(map[string]*types.Rollout),
 		rolloutApprovals: make(map[string]map[string]types.RolloutApproval),
@@ -819,6 +821,75 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
 	}
 	delete(s.alertRules, id)
 	return nil
+}
+
+// Automations (ADR 0038, first slice). Stored copies in/out so callers can't
+// mutate the map through a returned pointer, mirroring the alert-rule methods.
+
+func (s *Store) CreateAutomation(ctx context.Context, a *types.Automation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.automations[a.ID]; exists {
+		return fmt.Errorf("automation already exists: %s", a.ID)
+	}
+	cp := cloneAutomation(a)
+	s.automations[a.ID] = cp
+	return nil
+}
+
+func (s *Store) GetAutomation(ctx context.Context, id string) (*types.Automation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	a, ok := s.automations[id]
+	if !ok {
+		return nil, nil
+	}
+	return cloneAutomation(a), nil
+}
+
+func (s *Store) ListAutomations(ctx context.Context) ([]*types.Automation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.Automation, 0, len(s.automations))
+	for _, a := range s.automations {
+		out = append(out, cloneAutomation(a))
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateAutomation(ctx context.Context, a *types.Automation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.automations[a.ID]; !ok {
+		return fmt.Errorf("automation not found: %s", a.ID)
+	}
+	s.automations[a.ID] = cloneAutomation(a)
+	return nil
+}
+
+func (s *Store) DeleteAutomation(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.automations[id]; !ok {
+		return fmt.Errorf("automation not found: %s", id)
+	}
+	delete(s.automations, id)
+	return nil
+}
+
+// cloneAutomation deep-copies the value and the two nullable pointer fields so
+// a returned automation shares no mutable state with the stored copy.
+func cloneAutomation(a *types.Automation) *types.Automation {
+	cp := *a
+	if a.AgentID != nil {
+		v := *a.AgentID
+		cp.AgentID = &v
+	}
+	if a.GroupID != nil {
+		v := *a.GroupID
+		cp.GroupID = &v
+	}
+	return &cp
 }
 
 // Audit log management
@@ -1648,6 +1719,7 @@ func (s *Store) purge(context.Context) {
 	s.configs = make(map[string]*types.Config)
 	s.savedQueries = make(map[string]*types.SavedQuery)
 	s.alertRules = make(map[string]*types.AlertRule)
+	s.automations = make(map[string]*types.Automation)
 	s.auditEvents = make([]*types.AuditEvent, 0, 64)
 	s.rollouts = make(map[string]*types.Rollout)
 	s.apiTokens = make(map[string]*types.APIToken)

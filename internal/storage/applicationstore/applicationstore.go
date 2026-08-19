@@ -28,6 +28,9 @@ type SavedQuery = types.SavedQuery
 type AlertRule = types.AlertRule
 type AlertSeverity = types.AlertSeverity
 type ThresholdOperator = types.ThresholdOperator
+type Automation = types.Automation // ADR 0038 (agent automations)
+type AutomationTrigger = types.AutomationTrigger
+type AutomationAction = types.AutomationAction
 type AuditEvent = types.AuditEvent
 type AuditEventFilter = types.AuditEventFilter
 type AuditChainVerification = types.AuditChainVerification // ADR 0027 slice 1
@@ -91,6 +94,10 @@ const (
 	ThresholdLessOrEqual    = types.ThresholdLessOrEqual
 	ThresholdEqual          = types.ThresholdEqual
 	ThresholdNotEqual       = types.ThresholdNotEqual
+
+	AutomationTriggerAgentUnhealthy   = types.AutomationTriggerAgentUnhealthy
+	AutomationTriggerAgentSilent      = types.AutomationTriggerAgentSilent
+	AutomationActionSupervisorRestart = types.AutomationActionSupervisorRestart
 
 	RolloutStatePending         = types.RolloutStatePending
 	RolloutStateInProgress      = types.RolloutStateInProgress

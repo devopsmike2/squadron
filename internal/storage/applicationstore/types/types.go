@@ -118,6 +118,19 @@ type ApplicationStore interface {
 	UpdateAlertRule(ctx context.Context, rule *AlertRule) error
 	DeleteAlertRule(ctx context.Context, id string) error
 
+	// Automations (ADR 0038, first slice) — condition-triggered
+	// auto-remediation rules: trigger (agent health condition) → action
+	// (supervisor restart) → target (an agent XOR a group), under guardrails.
+	// CRUD-only entity; the leader-only automation evaluator
+	// (internal/automations) lists ENABLED rules each tick and dispatches the
+	// action through the existing OpAMP restart path. A missing Get returns
+	// (nil, nil); Update/Delete on a missing row returns "automation not found".
+	CreateAutomation(ctx context.Context, a *Automation) error
+	GetAutomation(ctx context.Context, id string) (*Automation, error)
+	ListAutomations(ctx context.Context) ([]*Automation, error)
+	UpdateAutomation(ctx context.Context, a *Automation) error
+	DeleteAutomation(ctx context.Context, id string) error
+
 	// Audit log
 	CreateAuditEvent(ctx context.Context, event *AuditEvent) error
 	ListAuditEvents(ctx context.Context, filter AuditEventFilter) ([]*AuditEvent, error)
@@ -1337,6 +1350,61 @@ type AlertRule struct {
 	WebhookURL        string            `json:"webhook_url,omitempty"`
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+// AutomationTrigger is the condition an Automation reacts to. First slice:
+// agent-health conditions derived the same way the silent-agent watcher and
+// drift detection derive them (last-seen wall clock + persisted status).
+type AutomationTrigger string
+
+const (
+	// AutomationTriggerAgentUnhealthy fires when an agent is unhealthy —
+	// persisted status offline/error, or silent past the threshold.
+	AutomationTriggerAgentUnhealthy AutomationTrigger = "agent_unhealthy"
+	// AutomationTriggerAgentSilent fires when an agent has stopped checking in
+	// (last-seen older than the silence threshold), mirroring the silent-agent
+	// watcher's classification.
+	AutomationTriggerAgentSilent AutomationTrigger = "agent_silent"
+)
+
+// AutomationAction is what an Automation does when its trigger holds. First
+// slice: supervisor_restart only — the native OpAMP RestartCommand
+// (accepts_restart_command), dispatched through the existing ConfigSender
+// restart path. No action-runner is required.
+type AutomationAction string
+
+const (
+	AutomationActionSupervisorRestart AutomationAction = "supervisor_restart"
+)
+
+// Automation is one condition-triggered auto-remediation rule (ADR 0038,
+// first slice): trigger → action → target, under guardrails. Target is an
+// agent XOR a group: exactly one of AgentID / GroupID is set (nil for the
+// other). Scope resolution mirrors config resolution — a group-scoped rule
+// matches an agent when the agent's GroupID equals the rule's GroupID.
+//
+// Guardrails are non-negotiable (ADR 0038): CooldownSeconds is the minimum
+// interval between actions per agent (no restart storms); MaxAttempts is the
+// number of actions per outage before the evaluator STOPS auto-acting and
+// escalates (a config-bricking crash must not be masked by infinite restarts);
+// DryRun evaluates and audits the decision without acting.
+type Automation struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Enabled bool    `json:"enabled"`
+	AgentID *string `json:"agent_id,omitempty"` // XOR GroupID
+	GroupID *string `json:"group_id,omitempty"` // XOR AgentID
+
+	Trigger AutomationTrigger `json:"trigger"`
+	Action  AutomationAction  `json:"action"`
+
+	// Guardrails.
+	CooldownSeconds int  `json:"cooldown_seconds"` // min interval between actions per agent
+	MaxAttempts     int  `json:"max_attempts"`     // actions per outage before escalate-and-stop
+	DryRun          bool `json:"dry_run"`          // evaluate + audit, do not act
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Agent represents an OpenTelemetry agent
