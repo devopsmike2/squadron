@@ -69,7 +69,17 @@ export function generatePipelineNodes(
     };
   }
 
-  if (!parsedConfig.service || !parsedConfig.service.pipelines) {
+  // yaml.load returns undefined/null for a config that is empty,
+  // whitespace-only, or comment-only (e.g. a brownfield agent's
+  // reported effective config). The `!effectiveConfig` guard above
+  // only catches a falsy string, so guard the parsed value too before
+  // dereferencing `.service`, otherwise the Pipeline tab throws.
+  if (
+    !parsedConfig ||
+    typeof parsedConfig !== "object" ||
+    !parsedConfig.service ||
+    !parsedConfig.service.pipelines
+  ) {
     return {
       nodes: [
         {
