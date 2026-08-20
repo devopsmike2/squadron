@@ -1198,7 +1198,13 @@ func configLooksRedacted(content string) bool {
 	return false
 }
 
-// RestartAgentResponse represents the response after restarting an agent
+// RestartAgentResponse represents the response after dispatching a restart to an
+// agent. Success=true means the restart command was DISPATCHED to the connected
+// agent over OpAMP (the agent advertises AcceptsRestartCommand and the frame was
+// handed to its connection) — it does NOT confirm the collector process actually
+// restarted. Squadron has no synchronous actuation signal; operators confirm the
+// restart by watching the agent's start time / uptime reset on its next health
+// report. See Message for the operator-facing wording.
 type RestartAgentResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
@@ -1243,12 +1249,17 @@ func (h *AgentHandlers) HandleRestartAgent(c *gin.Context) {
 		return
 	}
 
-	// 3. Return success response
-	h.logger.Info("Restart command sent to agent successfully",
+	// 3. Return success response. "Success" here means the restart command was
+	// DISPATCHED over OpAMP to a connected agent that advertises the restart
+	// capability — not that the collector process has restarted. Squadron cannot
+	// synchronously observe actuation, so keep the message honest about the gap
+	// (dispatch != confirmed restart) and point operators at the signal they can
+	// watch: the agent's start time / uptime resetting on its next health report.
+	h.logger.Info("Restart command dispatched to agent over OpAMP (delivery accepted; actuation not confirmed)",
 		zap.String("agent_id", agentID))
 
 	c.JSON(http.StatusOK, RestartAgentResponse{
 		Success: true,
-		Message: "Restart command sent to agent successfully",
+		Message: "Restart command dispatched to agent over OpAMP. This confirms delivery to the connected agent, not that the collector restarted; confirm actuation by watching the agent's start time / uptime reset on its next health report.",
 	})
 }
