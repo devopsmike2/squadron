@@ -73,6 +73,16 @@ func (m *MockAgentService) DeleteAgent(ctx context.Context, id uuid.UUID) error 
 	return args.Error(0)
 }
 
+func (m *MockAgentService) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+func (m *MockAgentService) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 func (m *MockAgentService) CreateGroup(ctx context.Context, group *services.Group) error {
 	args := m.Called(ctx, group)
 	return args.Error(0)

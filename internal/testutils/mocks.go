@@ -216,6 +216,31 @@ func (m *MockAgentService) DeleteAgent(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
+// RestoreAgent implements services.AgentService. The map-based mock does not
+// model tombstones, so restore is a no-op success for a present agent and a
+// not-found error otherwise.
+func (m *MockAgentService) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.agents[id]; !ok {
+		return fmt.Errorf("agent not found or not decommissioned: %s", id)
+	}
+	return nil
+}
+
+// PurgeAgent implements services.AgentService (hard delete).
+func (m *MockAgentService) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.agents[id]; !ok {
+		return fmt.Errorf("agent not found: %s", id)
+	}
+	delete(m.agents, id)
+	return nil
+}
+
 // CreateGroup implements services.AgentService
 func (m *MockAgentService) CreateGroup(ctx context.Context, group *services.Group) error {
 	m.mu.Lock()

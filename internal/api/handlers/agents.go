@@ -802,12 +802,20 @@ func (h *AgentHandlers) HandleClearAgentConfig(c *gin.Context) {
 // physically decommissioned sits forever in the agents table as
 // "offline" and clutters the inventory reconciliation view.
 //
-// The agent record is hard-deleted; the audit log retains the
-// decommission event for trail. Telemetry rows in the
-// metrics_*/logs/traces tables are unaffected (they carry an
-// agent_id but are not foreign-keyed). The next OpAMP heartbeat
-// from the same UUID would re-create the agent — which is what we
-// want if the host wasn't actually retired.
+// The agent record is SOFT-deleted (tombstoned) as of v0.51: the row is
+// retained (deleted_at set) so historical audit events keyed by id still
+// resolve and the CIP-007-6 R4.3 retention posture holds, while GetAgent /
+// ListAgents hide it from the operational view. The decommission event is
+// recorded on the audit trail. Telemetry rows in the metrics_*/logs/traces
+// tables are unaffected (they carry an agent_id but are not foreign-keyed).
+//
+// Because the row survives, a re-registration must NOT collide on the primary
+// key: the store's CreateAgent is revive-aware, so the next OpAMP heartbeat
+// from the same UUID un-tombstones the row and the agent re-joins the fleet
+// with the same id — which is what we want if the host wasn't actually retired.
+// For an agent that will not reconnect, POST /agents/:id/restore is the
+// operator recovery path, and DELETE /agents/:id/purge (agents:admin) hard-
+// deletes the row if it should not be retained.
 func (h *AgentHandlers) HandleDecommissionAgent(c *gin.Context) {
 	agentID := c.Param("id")
 	if agentID == "" {
@@ -825,6 +833,59 @@ func (h *AgentHandlers) HandleDecommissionAgent(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID})
+}
+
+// HandleRestoreAgent is POST /api/v1/agents/:id/restore. Operator recovery for
+// a decommissioned (soft-deleted) agent: clears the tombstone so the row
+// returns to the operational fleet with the SAME id, without waiting for the
+// agent's supervisor to reconnect over OpAMP (which now also self-revives it,
+// via CreateAgent's revive-on-reconnect upsert). This is the API the pilot
+// lacked when a decommissioned agent needed to be brought back without a
+// snapshot restore. Scoped agents:write like the sibling agent mutations.
+//
+// A missing agent, or one that is not decommissioned, returns 404 — there is
+// nothing to restore.
+func (h *AgentHandlers) HandleRestoreAgent(c *gin.Context) {
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+	if err := h.agentService.RestoreAgent(c.Request.Context(), agentUUID); err != nil {
+		h.logger.Warn("restore agent failed", zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "no decommissioned agent with that id"})
+		return
+	}
+	// Re-read so the response reflects the revived row.
+	agent, err := h.agentService.GetAgent(c.Request.Context(), agentUUID)
+	if err != nil || agent == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID, "restored": true})
+		return
+	}
+	c.JSON(http.StatusOK, agent)
+}
+
+// HandlePurgeAgent is DELETE /api/v1/agents/:id/purge. HARD-deletes an agent
+// row (tombstoned or live), permanently removing it — the escape hatch for a
+// stuck/orphaned row an operator does NOT want retained, which previously
+// required a snapshot restore or direct DB surgery. Because a hard delete
+// destroys the CIP-007-6 R4.3 audit-retention row that decommission
+// deliberately keeps, it is gated behind the stricter agents:admin scope,
+// distinct from the agents:write decommission/restore.
+func (h *AgentHandlers) HandlePurgeAgent(c *gin.Context) {
+	agentID := c.Param("id")
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid agent ID format"})
+		return
+	}
+	if err := h.agentService.PurgeAgent(c.Request.Context(), agentUUID); err != nil {
+		h.logger.Warn("purge agent failed", zap.String("agent_id", agentID), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "agent not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "agent_id": agentID, "purged": true})
 }
 
 // HandleDismissDuplicate is POST /api/v1/agents/:id/dismiss-duplicate.

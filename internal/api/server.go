@@ -2899,6 +2899,15 @@ func (s *Server) registerRoutes() {
 			// have been retired from the fleet. Audit-logged via
 			// the agent service's existing event publish.
 			agents.DELETE("/:id", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleDecommissionAgent)
+			// Operator recovery for a decommissioned (soft-deleted) agent:
+			// restore un-tombstones the row so it re-joins the fleet with the
+			// same id (agents:write, like decommission). Purge HARD-deletes the
+			// row (tombstoned or live) — it destroys the retained audit record,
+			// so it is gated behind the stricter agents:admin scope. Both mount
+			// on this real server router (not just registered in a package) so
+			// the pilot's stuck-agent recovery is actually reachable.
+			agents.POST("/:id/restore", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleRestoreAgent)
+			agents.DELETE("/:id/purge", middleware.RequireScope(services.ScopeAgentsAdmin), agentHandlers.HandlePurgeAgent)
 			// Backlog #5 — operator confirms a suspected-duplicate
 			// telemetry-only agent is a legitimate separate agent and
 			// clears the flag. Scoped like the sibling agent mutations.

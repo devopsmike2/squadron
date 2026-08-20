@@ -241,7 +241,14 @@ func (s *Store) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.agents[agent.ID]; exists {
+	// Revive-on-reconnect — mirrors the sqlite/postgres upsert. DeleteAgent
+	// tombstones a row (DeletedAt set) but keeps it for the audit trail. A
+	// tombstoned row is REVIVED here (its re-registration clears the tombstone,
+	// keeping the same id) so a decommissioned agent that reconnects over OpAMP
+	// re-joins the fleet instead of being stranded by a hard "already exists".
+	// A LIVE row is still a hard conflict.
+	existing, exists := s.agents[agent.ID]
+	if exists && existing.DeletedAt == nil {
 		return fmt.Errorf("agent already exists: %s", agent.ID)
 	}
 
@@ -256,6 +263,13 @@ func (s *Store) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	if agent.Capabilities != nil {
 		agentCopy.Capabilities = make([]string, len(agent.Capabilities))
 		copy(agentCopy.Capabilities, agent.Capabilities)
+	}
+
+	// Reviving a tombstoned row: clear the tombstone and retain the original
+	// registration time.
+	agentCopy.DeletedAt = nil
+	if exists && !existing.CreatedAt.IsZero() {
+		agentCopy.CreatedAt = existing.CreatedAt
 	}
 
 	s.agents[agent.ID] = &agentCopy
@@ -436,6 +450,35 @@ func (s *Store) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC()
 	agent.DeletedAt = &now
 	agent.UpdatedAt = now
+	return nil
+}
+
+// RestoreAgent clears the tombstone on a soft-deleted agent (mirrors the
+// sqlite/postgres stores). Operator recovery path. Errors if there is no
+// tombstoned agent with that id.
+func (s *Store) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	agent, exists := s.agents[id]
+	if !exists || agent.DeletedAt == nil {
+		return fmt.Errorf("agent not found or not decommissioned: %s", id)
+	}
+	agent.DeletedAt = nil
+	agent.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+// PurgeAgent HARD-deletes an agent (tombstoned or live), permanently removing
+// it. Mirrors the sqlite/postgres stores; gated behind agents:admin at the API.
+func (s *Store) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.agents[id]; !exists {
+		return fmt.Errorf("agent not found: %s", id)
+	}
+	delete(s.agents, id)
 	return nil
 }
 

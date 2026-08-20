@@ -32,7 +32,20 @@ type AgentService interface {
 	// endpoint. Callers pass a full *Agent (typically loaded via GetAgent
 	// then mutated) so unrelated fields round-trip unchanged.
 	UpdateAgentRegistration(ctx context.Context, agent *Agent) error
+	// DeleteAgent soft-deletes (tombstones) an agent, keeping the row for the
+	// audit trail. A decommissioned agent that reconnects over OpAMP is revived
+	// (see the store's revive-aware CreateAgent), so the tombstone does not
+	// permanently strand it.
 	DeleteAgent(ctx context.Context, id uuid.UUID) error
+	// RestoreAgent clears the tombstone on a decommissioned agent, returning it
+	// to the fleet with the same id. Operator recovery for an agent that will
+	// not self-revive on OpAMP reconnect. Errors if no decommissioned agent
+	// with that id exists.
+	RestoreAgent(ctx context.Context, id uuid.UUID) error
+	// PurgeAgent HARD-deletes an agent (tombstoned or live), permanently
+	// removing the row. Gated behind a stricter scope at the API because it
+	// destroys the retained audit-trail row.
+	PurgeAgent(ctx context.Context, id uuid.UUID) error
 
 	// Group operations
 	CreateGroup(ctx context.Context, group *Group) error

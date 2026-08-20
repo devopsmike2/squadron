@@ -48,9 +48,16 @@ type AuthService interface {
 // in AllScopes (so the UI picker can show it), and adding the
 // middleware.RequireScope("...") to every protected route that needs it.
 const (
-	ScopeWildcard      = "*"
-	ScopeAgentsRead    = "agents:read"
-	ScopeAgentsWrite   = "agents:write"
+	ScopeWildcard    = "*"
+	ScopeAgentsRead  = "agents:read"
+	ScopeAgentsWrite = "agents:write"
+	// ScopeAgentsAdmin gates DESTRUCTIVE agent operations that go beyond the
+	// normal agents:write mutations — specifically the hard PURGE of an agent
+	// row (DELETE /agents/:id/purge), which permanently removes the
+	// audit-retention row that the soft-delete/decommission deliberately keeps.
+	// Split out so an ordinary agents:write token can decommission (reversible,
+	// audit-preserving) but cannot permanently destroy the retained record.
+	ScopeAgentsAdmin   = "agents:admin"
 	ScopeGroupsRead    = "groups:read"
 	ScopeGroupsWrite   = "groups:write"
 	ScopeConfigsRead   = "configs:read"
@@ -196,7 +203,7 @@ const (
 // adding a new scope is a code change.
 func AllScopes() []string {
 	return []string{
-		ScopeAgentsRead, ScopeAgentsWrite,
+		ScopeAgentsRead, ScopeAgentsWrite, ScopeAgentsAdmin,
 		ScopeGroupsRead, ScopeGroupsWrite,
 		ScopeConfigsRead, ScopeConfigsWrite,
 		ScopeTelemetryRead,
