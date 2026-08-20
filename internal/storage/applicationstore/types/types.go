@@ -69,7 +69,23 @@ type ApplicationStore interface {
 	// kept the stale values forever. Returns an error if the agent row
 	// does not exist.
 	UpdateAgentRegistration(ctx context.Context, agent *Agent) error
+	// DeleteAgent SOFT-deletes (tombstones) an agent: the row is retained
+	// (deleted_at set) so audit events keyed by id still resolve and the
+	// CIP-007-6 R4.3 retention posture holds; GetAgent/ListAgents hide
+	// tombstoned rows. Because the row survives, CreateAgent is
+	// revive-aware (it un-tombstones a soft-deleted row on re-registration
+	// rather than colliding on the primary key), which is what lets a
+	// decommissioned agent that reconnects over OpAMP re-join the fleet.
 	DeleteAgent(ctx context.Context, id uuid.UUID) error
+	// RestoreAgent clears the tombstone on a soft-deleted agent, returning
+	// it to the operational view with the same id — the operator recovery
+	// path for a decommissioned agent that will not self-revive via an
+	// OpAMP reconnect. Errors if no tombstoned agent with that id exists.
+	RestoreAgent(ctx context.Context, id uuid.UUID) error
+	// PurgeAgent HARD-deletes an agent row (tombstoned or live),
+	// permanently removing it. Destroys the audit-retention row DeleteAgent
+	// keeps, so it is gated behind a stricter scope at the API.
+	PurgeAgent(ctx context.Context, id uuid.UUID) error
 
 	// Group management
 	CreateGroup(ctx context.Context, group *Group) error

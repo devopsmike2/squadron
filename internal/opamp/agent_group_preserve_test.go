@@ -94,6 +94,69 @@ func TestReconnect_NoReportedGroup_PreservesManualMembership(t *testing.T) {
 	}
 }
 
+// TestReconnect_AfterDecommission_RevivesAgent is the pilot P1 data-integrity
+// bug: an agent that is decommissioned (soft-deleted) and then reconnects over
+// OpAMP was STRANDED permanently. persistAgent's GetAgent hides the tombstoned
+// row, so it took the CreateAgent branch, whose plain INSERT collided with the
+// still-present primary-key row ("UNIQUE constraint failed: agents.id") on
+// EVERY re-register attempt (~30s cadence) — the agent could never re-join the
+// fleet and was unrecoverable via the API. This test drives the REAL
+// registration path (processAgentGrouping + persistAgent over a real
+// memory-backed AgentService, the same wiring the server runs) and asserts the
+// agent comes back as ONE agent with the SAME id. RED before the
+// revive-on-reconnect fix (the tombstoned row is never revived, GetAgent stays
+// nil — stranded), GREEN after.
+func TestReconnect_AfterDecommission_RevivesAgent(t *testing.T) {
+	ctx := context.Background()
+	server, svc := newGroupPreserveServer(t)
+
+	id := uuid.New()
+	createStoredAgent(t, svc, id, sptr("group-prod"), sptr("prod"))
+
+	// Decommission via the real service soft-delete — the DELETE /agents/:id path.
+	if err := svc.DeleteAgent(ctx, id); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+	// It must be hidden from the operational view now (tombstoned).
+	if got, _ := svc.GetAgent(ctx, id); got != nil {
+		t.Fatalf("agent should be hidden after decommission, got %+v", got)
+	}
+
+	// The supervisor reconnects: the exact server path OpAMP drives on a message.
+	agent := &Agent{InstanceId: id, InstanceIdStr: id.String()}
+	msg := descNoGroup()
+	server.processAgentGrouping(ctx, agent, msg)
+	server.persistAgent(ctx, agent, msg)
+
+	// The agent must be back in the fleet with the SAME id.
+	got, err := svc.GetAgent(ctx, id)
+	if err != nil {
+		t.Fatalf("GetAgent after reconnect: %v", err)
+	}
+	if got == nil {
+		t.Fatal("decommissioned agent was NOT revived on reconnect — still stranded " +
+			"(the UNIQUE-constraint collision on re-register was not fixed)")
+	}
+	if got.ID != id {
+		t.Fatalf("revived agent has a different id: got %s, want %s", got.ID, id)
+	}
+
+	// And exactly ONE row carries that id — a revive, not a duplicate.
+	all, err := svc.ListAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	count := 0
+	for _, a := range all {
+		if a.ID == id {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly ONE agent row with id %s after revive, got %d", id, count)
+	}
+}
+
 // TestReconnect_ReportedGroup_OverridesManualMembership: when the agent DOES
 // self-report a group, the agent-declared group wins on reconnect (existing
 // behavior) — even over a different manual assignment. The preserve guard only

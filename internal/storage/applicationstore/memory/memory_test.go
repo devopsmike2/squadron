@@ -105,6 +105,72 @@ func TestStoreCreateAgentDuplicate(t *testing.T) {
 	})
 }
 
+// TestStoreCreateAgentRevivesTombstoned proves the pilot P1 fix on the memory
+// backend (the one the opamp reconnect harness and CI unit tests use): a
+// DeleteAgent-tombstoned row is REVIVED by a subsequent CreateAgent with the
+// same id rather than rejected as a duplicate, so a decommissioned agent that
+// reconnects re-joins the fleet. A live duplicate is still rejected.
+func TestStoreCreateAgentRevivesTombstoned(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		agent := makeTestAgent()
+		require.NoError(t, store.CreateAgent(ctx, agent))
+		require.NoError(t, store.DeleteAgent(ctx, agent.ID))
+
+		// Tombstoned -> hidden.
+		got, err := store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.Nil(t, got)
+
+		// Re-register revives (does NOT error).
+		revived := makeTestAgent()
+		revived.Name = "revived"
+		require.NoError(t, store.CreateAgent(ctx, revived))
+
+		got, err = store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "revived", got.Name)
+
+		agents, err := store.ListAgents(ctx)
+		require.NoError(t, err)
+		assert.Len(t, agents, 1)
+
+		// Live duplicate still rejected.
+		err = store.CreateAgent(ctx, makeTestAgent())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+	})
+}
+
+// TestStoreRestoreAndPurgeAgent covers the memory store's operator-recovery
+// methods, keeping them consistent with the sqlite/postgres backends.
+func TestStoreRestoreAndPurgeAgent(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		agent := makeTestAgent()
+		require.NoError(t, store.CreateAgent(ctx, agent))
+
+		// Restore on a live agent errors.
+		require.Error(t, store.RestoreAgent(ctx, agent.ID))
+
+		// Decommission then restore.
+		require.NoError(t, store.DeleteAgent(ctx, agent.ID))
+		require.NoError(t, store.RestoreAgent(ctx, agent.ID))
+		got, err := store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+
+		// Purge hard-deletes.
+		require.NoError(t, store.PurgeAgent(ctx, agent.ID))
+		got, err = store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.Nil(t, got)
+		require.Error(t, store.RestoreAgent(ctx, agent.ID))
+		require.Error(t, store.PurgeAgent(ctx, uuid.New()))
+	})
+}
+
 func TestStoreGetAgentNotFound(t *testing.T) {
 	withMemoryStore(func(store *Store) {
 		retrieved, err := store.GetAgent(context.Background(), uuid.New())

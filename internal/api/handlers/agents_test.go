@@ -585,6 +585,63 @@ func patchGroup(t *testing.T, h *AgentHandlers, agentID, body string) *httptest.
 	return w
 }
 
+func callRestore(t *testing.T, h *AgentHandlers, agentID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	c.Request = httptest.NewRequest("POST", "/api/v1/agents/"+agentID+"/restore", nil)
+	h.HandleRestoreAgent(c)
+	return w
+}
+
+func callPurge(t *testing.T, h *AgentHandlers, agentID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	c.Request = httptest.NewRequest("DELETE", "/api/v1/agents/"+agentID+"/purge", nil)
+	h.HandlePurgeAgent(c)
+	return w
+}
+
+// TestHandleRestoreAgent: the operator recovery endpoint returns 200 for a
+// known (decommissioned) agent, 404 for an unknown id, and 400 on a bad id.
+func TestHandleRestoreAgent(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"}))
+
+	w := callRestore(t, handlers, agentID.String())
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	w = callRestore(t, handlers, uuid.New().String())
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	w = callRestore(t, handlers, "not-a-uuid")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestHandlePurgeAgent: purge hard-deletes a known agent (200, then gone) and
+// 404s an unknown id.
+func TestHandlePurgeAgent(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{ID: agentID, Name: "a1"}))
+
+	w := callPurge(t, handlers, agentID.String())
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	got, err := mock.GetAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	w = callPurge(t, handlers, agentID.String())
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 // TestHandleUpdateAgentGroup_Reassign: PATCH with a valid existing
 // group re-points the agent and the new GroupID/GroupName persist.
 func TestHandleUpdateAgentGroup_Reassign(t *testing.T) {
