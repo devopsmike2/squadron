@@ -116,8 +116,33 @@ func (agent *Agent) updateStatusField(newStatus *protobufs.AgentToServer) (agent
 	agentDescrChanged = agent.updateAgentDescription(newStatus) || agentDescrChanged
 	agent.updateHealth(newStatus)
 	agent.updateRemoteConfigStatus(newStatus)
+	agent.updateCapabilities(newStatus)
 
 	return agentDescrChanged
+}
+
+// updateCapabilities refreshes the agent's advertised OpAMP AgentCapabilities
+// bitmask from the latest status report, so the capability gates (remote-config
+// and — the reason this exists — AcceptsRestartCommand in RestartAgent) reflect
+// the CURRENT connection rather than a first-connect snapshot.
+//
+// Before this, updateAgentDescription only touched SequenceNum / AgentDescription
+// / RemoteConfigStatus, so agent.Status.Capabilities was captured once on the
+// first status report and never updated again — including across a reconnect that
+// reuses the same in-memory Agent. HasCapability therefore read a stale bitmask,
+// not what the connected agent (e.g. the collector's opampsupervisor) advertises
+// now. That is the "gate on the live capability" fix: whether Squadron dispatches
+// a restart must key on what THIS connection reports it accepts.
+//
+// Refresh only when the report carries a non-zero bitmask. Capabilities is a
+// proto3 scalar, so an omitted field is indistinguishable from an explicit 0;
+// treating 0 as "unchanged / not resent" and keeping the last-known set means a
+// capability-less heartbeat can never wipe a real capability. A genuine change
+// (the agent advertises a different non-zero set) is picked up immediately.
+func (agent *Agent) updateCapabilities(newStatus *protobufs.AgentToServer) {
+	if agent.Status != nil && newStatus.Capabilities != 0 {
+		agent.Status.Capabilities = newStatus.Capabilities
+	}
 }
 
 // processStatusUpdate processes the status update message

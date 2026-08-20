@@ -43,7 +43,7 @@ func TestAgentsRestart_HappyPath(t *testing.T) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"message":"Restart command sent to agent successfully"}`))
+		_, _ = w.Write([]byte(`{"success":true,"message":"Restart command dispatched to agent over OpAMP."}`))
 	}))
 	defer srv.Close()
 	withServer(t, srv)
@@ -52,7 +52,7 @@ func TestAgentsRestart_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPost, gotMethod)
 	assert.Equal(t, "/api/v1/agents/11111111-1111-1111-1111-111111111111/restart", gotPath)
-	assert.Contains(t, out, "Restart command sent to agent successfully")
+	assert.Contains(t, out, "Restart command dispatched to agent over OpAMP.")
 }
 
 func TestAgentsRestart_OutputJSON(t *testing.T) {

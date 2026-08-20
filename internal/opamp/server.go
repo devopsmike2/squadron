@@ -496,7 +496,10 @@ func (s *Server) RestartAgent(agentId uuid.UUID) error {
 	}
 
 	agent.SendRestartCommand()
-	s.logger.Info("Restart command sent to agent", zap.String("agentId", agentId.String()))
+	// Dispatched over OpAMP to an agent that advertises AcceptsRestartCommand;
+	// delivery, not confirmed actuation (see ConfigSender.RestartAgent).
+	s.logger.Info("Restart command dispatched to agent over OpAMP (delivery accepted; actuation not confirmed)",
+		zap.String("agentId", agentId.String()))
 	return nil
 }
 
