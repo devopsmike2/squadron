@@ -641,6 +641,11 @@ func (s *Store) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([]*
 	configs := make([]*types.Config, 0)
 	for _, config := range s.configs {
 		// Apply filters
+		// Soft-archived configs are hidden from the default listing; IncludeArchived
+		// opts back in.
+		if !filter.IncludeArchived && config.ArchivedAt != nil {
+			continue
+		}
 		if filter.AgentID != nil && (config.AgentID == nil || *config.AgentID != *filter.AgentID) {
 			continue
 		}
@@ -681,6 +686,27 @@ func (s *Store) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) er
 		if config.AgentID != nil && *config.AgentID == agentID {
 			delete(s.configs, id)
 		}
+	}
+	return nil
+}
+
+// SetConfigArchived soft-archives (archived=true) or restores (archived=false) a
+// single config by id. Stamps ArchivedAt=now (or clears it to nil) so the default
+// ListConfigs hides/shows the row; content/version are untouched (configs stay
+// immutable). Returns types.ErrConfigNotFound when the id is absent — the API
+// layer maps that to a 404.
+func (s *Store) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, exists := s.configs[id]
+	if !exists {
+		return types.ErrConfigNotFound
+	}
+	if archived {
+		now := time.Now()
+		config.ArchivedAt = &now
+	} else {
+		config.ArchivedAt = nil
 	}
 	return nil
 }

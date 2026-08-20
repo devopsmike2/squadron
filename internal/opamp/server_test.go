@@ -161,6 +161,12 @@ func (m *MockAgentService) DeleteConfigsForAgent(ctx context.Context, agentID uu
 	return nil
 }
 
+// SetConfigArchived satisfies services.AgentService. The opamp tests never
+// exercise it, so it's a plain no-op.
+func (m *MockAgentService) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	return nil
+}
+
 // Tests
 
 func TestSendConfigToAgent_AgentNotFound(t *testing.T) {

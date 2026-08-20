@@ -406,6 +406,53 @@ func TestStoreDeleteConfigsForAgent(t *testing.T) {
 	})
 }
 
+func TestStoreSetConfigArchived(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		agentID := testAgentID
+		c := makeTestConfig(&agentID, nil)
+		c.ID = "cfg-archive"
+		require.NoError(t, store.CreateConfig(ctx, c))
+
+		// Fresh config is active and shows in the default list.
+		got, err := store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Nil(t, got.ArchivedAt, "a freshly created config is not archived")
+
+		list, err := store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+
+		// Archive it → hidden from the default list, visible with IncludeArchived.
+		require.NoError(t, store.SetConfigArchived(ctx, c.ID, true))
+		got, err = store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got.ArchivedAt, "archived config carries an archived_at tombstone")
+
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Empty(t, list, "archived configs are hidden from the default listing")
+
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{IncludeArchived: true})
+		require.NoError(t, err)
+		assert.Len(t, list, 1, "IncludeArchived surfaces archived configs")
+
+		// Unarchive restores it to the default list.
+		require.NoError(t, store.SetConfigArchived(ctx, c.ID, false))
+		got, err = store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		assert.Nil(t, got.ArchivedAt, "unarchive clears the tombstone")
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+
+		// Missing id is a not-found error (NOT the idempotent-on-missing convention).
+		err = store.SetConfigArchived(ctx, "does-not-exist", true)
+		assert.ErrorIs(t, err, types.ErrConfigNotFound)
+	})
+}
+
 func TestStoreListConfigsWithFilter(t *testing.T) {
 	withMemoryStore(func(store *Store) {
 		agentID1 := testAgentID

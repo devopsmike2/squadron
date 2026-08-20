@@ -405,6 +405,51 @@ func TestSQLiteDeleteConfigsForAgent(t *testing.T) {
 	})
 }
 
+func TestSQLiteSetConfigArchived(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		ctx := context.Background()
+		c := makeTestConfig("cfg-archive", &agentID, nil)
+		require.NoError(t, store.CreateConfig(ctx, c))
+
+		// Fresh config is active and lists by default.
+		got, err := store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Nil(t, got.ArchivedAt)
+
+		list, err := store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+
+		// Archive → hidden by default, present with IncludeArchived, tombstone set.
+		require.NoError(t, store.SetConfigArchived(ctx, c.ID, true))
+		got, err = store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got.ArchivedAt)
+
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Empty(t, list, "archived configs are hidden from the default listing")
+
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{IncludeArchived: true})
+		require.NoError(t, err)
+		assert.Len(t, list, 1, "IncludeArchived surfaces archived configs")
+
+		// Unarchive restores it.
+		require.NoError(t, store.SetConfigArchived(ctx, c.ID, false))
+		got, err = store.GetConfig(ctx, c.ID)
+		require.NoError(t, err)
+		assert.Nil(t, got.ArchivedAt)
+		list, err = store.ListConfigs(ctx, types.ConfigFilter{})
+		require.NoError(t, err)
+		assert.Len(t, list, 1)
+
+		// Missing id → ErrConfigNotFound (not the idempotent-on-missing convention).
+		err = store.SetConfigArchived(ctx, "does-not-exist", true)
+		assert.ErrorIs(t, err, types.ErrConfigNotFound)
+	})
+}
+
 func TestSQLiteListConfigsWithFilter(t *testing.T) {
 	withSQLiteStore(t, func(store types.ApplicationStore) {
 		agentID1 := uuid.New()

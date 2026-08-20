@@ -135,11 +135,17 @@ CREATE TABLE IF NOT EXISTS configs (
     config_hash TEXT NOT NULL DEFAULT '',
     content     TEXT NOT NULL DEFAULT '',
     version     INTEGER NOT NULL DEFAULT 1,
-    created_at  TIMESTAMPTZ NOT NULL
+    created_at  TIMESTAMPTZ NOT NULL,
+    -- Soft-archive tombstone: configs are versioned and immutable (hard delete
+    -- stays a 501), so archiving hides a superseded/residue config from the
+    -- default listing without destroying the row. NULL = active. Added as an
+    -- idempotent ALTER below so Postgres DBs created before this upgrade in place.
+    archived_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_configs_agent_id ON configs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_configs_group_id ON configs(group_id);
 CREATE INDEX IF NOT EXISTS idx_configs_created_at ON configs(created_at DESC);
+ALTER TABLE configs ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS rollouts (
     id                    TEXT PRIMARY KEY,
@@ -1051,14 +1057,14 @@ func scanAgent(sc scanner) (*types.Agent, error) {
 // tenant scoping is intentionally omitted (types.Config carries no tenant).
 // ============================================================================
 
-const configColumns = `id, name, agent_id, group_id, config_hash, content, version, created_at`
+const configColumns = `id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at`
 
 func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO configs (`+configColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		config.ID, config.Name, config.AgentID, config.GroupID,
-		config.ConfigHash, config.Content, config.Version, config.CreatedAt)
+		config.ConfigHash, config.Content, config.Version, config.CreatedAt, config.ArchivedAt)
 	if err != nil {
 		return fmt.Errorf("create config: %w", err)
 	}
@@ -1104,6 +1110,11 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 	query := `SELECT ` + configColumns + ` FROM configs WHERE 1=1`
 	var args []any
 	n := 0
+	// Soft-archived configs are hidden from the default listing; IncludeArchived
+	// opts back in. No bind arg needed (static predicate).
+	if !filter.IncludeArchived {
+		query += " AND archived_at IS NULL"
+	}
 	if filter.AgentID != nil {
 		n++
 		query += fmt.Sprintf(" AND agent_id = $%d", n)
@@ -1160,13 +1171,14 @@ func (s *Storage) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) 
 
 func scanConfig(sc scanner) (*types.Config, error) {
 	var (
-		c       types.Config
-		name    sql.NullString
-		agentID sql.NullString
-		groupID sql.NullString
+		c          types.Config
+		name       sql.NullString
+		agentID    sql.NullString
+		groupID    sql.NullString
+		archivedAt sql.NullTime
 	)
 	if err := sc.Scan(&c.ID, &name, &agentID, &groupID,
-		&c.ConfigHash, &c.Content, &c.Version, &c.CreatedAt); err != nil {
+		&c.ConfigHash, &c.Content, &c.Version, &c.CreatedAt, &archivedAt); err != nil {
 		return nil, err
 	}
 	if name.Valid {
@@ -1183,7 +1195,36 @@ func scanConfig(sc scanner) (*types.Config, error) {
 		gid := groupID.String
 		c.GroupID = &gid
 	}
+	if archivedAt.Valid {
+		t := archivedAt.Time
+		c.ArchivedAt = &t
+	}
 	return &c, nil
+}
+
+// SetConfigArchived soft-archives (archived=true) or restores (archived=false) a
+// single config by id. Stamps archived_at=now (or clears it to NULL) so the
+// default ListConfigs hides/shows the row; content/version are untouched (configs
+// stay immutable). Returns types.ErrConfigNotFound when no row matches — the API
+// layer maps that to a 404. As with the other config methods, OSS tenant scoping
+// is intentionally omitted (configs carries no tenant column in Postgres).
+func (s *Storage) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	var archivedAt any
+	if archived {
+		archivedAt = time.Now()
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE configs SET archived_at = $2 WHERE id = $1`, id, archivedAt)
+	if err != nil {
+		return fmt.Errorf("set config archived: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set config archived: %w", err)
+	}
+	if n == 0 {
+		return types.ErrConfigNotFound
+	}
+	return nil
 }
 
 // ============================================================================

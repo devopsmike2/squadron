@@ -154,6 +154,12 @@ func (s *Storage) migrate() error {
 			-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
 			tenant_id TEXT NOT NULL DEFAULT 'default',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			-- Soft-archive tombstone: configs are versioned and immutable (hard
+			-- delete stays a 501), so archiving hides a superseded/residue config
+			-- from the default listing without destroying the row. NULL = active.
+			-- Also added via the migrations slice below so pre-archive databases
+			-- upgrade in place.
+			archived_at DATETIME,
 			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
 			FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
 		);
@@ -535,6 +541,13 @@ func (s *Storage) migrate() error {
 	migrations := []string{
 		// v0.1: configs gain a human-readable name.
 		`ALTER TABLE configs ADD COLUMN name TEXT`,
+		// Config soft-archive: configs gain an archived_at tombstone so an
+		// operator can hide a superseded/residue config from the default listing
+		// without a hard delete (configs are versioned and immutable — DELETE
+		// /configs/:id stays a 501). NULL is the back-compat default (active).
+		// Idempotent via the duplicate-column swallow below; fresh DBs already
+		// carry it from createTables.
+		`ALTER TABLE configs ADD COLUMN archived_at DATETIME`,
 		// v0.10: api_tokens gain a scopes column. Existing tokens
 		// upgrade with the default '[]' which the service interprets
 		// as legacy full-access (so existing operator + automation
@@ -2052,7 +2065,7 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at FROM configs WHERE id = ?`
+	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at FROM configs WHERE id = ?`
 	args := []any{id}
 	if apply {
 		query += ` AND tenant_id = ?`
@@ -2062,6 +2075,7 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 	var config types.Config
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
+	var archivedAt sql.NullTime
 
 	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
@@ -2072,6 +2086,7 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 		&config.Content,
 		&config.Version,
 		&config.CreatedAt,
+		&archivedAt,
 	)
 
 	if err != nil {
@@ -2091,6 +2106,10 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 	if groupIDStr.Valid {
 		config.GroupID = &groupIDStr.String
 	}
+	if archivedAt.Valid {
+		t := archivedAt.Time
+		config.ArchivedAt = &t
+	}
 
 	return &config, nil
 }
@@ -2101,7 +2120,7 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 		return nil, err
 	}
 	query := `
-		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at
+		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at
 		FROM configs
 		WHERE agent_id = ?`
 	args := []any{agentID.String()}
@@ -2117,6 +2136,7 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 	var config types.Config
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
+	var archivedAt sql.NullTime
 
 	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
@@ -2127,6 +2147,7 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 		&config.Content,
 		&config.Version,
 		&config.CreatedAt,
+		&archivedAt,
 	)
 
 	if err != nil {
@@ -2146,6 +2167,10 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 	if groupIDStr.Valid {
 		config.GroupID = &groupIDStr.String
 	}
+	if archivedAt.Valid {
+		t := archivedAt.Time
+		config.ArchivedAt = &t
+	}
 
 	return &config, nil
 }
@@ -2156,7 +2181,7 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 		return nil, err
 	}
 	query := `
-		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at
+		SELECT id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at
 		FROM configs
 		WHERE group_id = ?`
 	args := []any{groupID}
@@ -2172,6 +2197,7 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 	var config types.Config
 	var agentIDStr, groupIDStr sql.NullString
 	var nameStr sql.NullString
+	var archivedAt sql.NullTime
 
 	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&config.ID,
@@ -2182,6 +2208,7 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 		&config.Content,
 		&config.Version,
 		&config.CreatedAt,
+		&archivedAt,
 	)
 
 	if err != nil {
@@ -2201,6 +2228,10 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 	if groupIDStr.Valid {
 		config.GroupID = &groupIDStr.String
 	}
+	if archivedAt.Valid {
+		t := archivedAt.Time
+		config.ArchivedAt = &t
+	}
 
 	return &config, nil
 }
@@ -2210,11 +2241,17 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at FROM configs WHERE 1=1`
+	query := `SELECT id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at FROM configs WHERE 1=1`
 	args := []interface{}{}
 	if apply {
 		query += ` AND tenant_id = ?`
 		args = append(args, tenant)
+	}
+
+	// Soft-archived configs are hidden from the default listing so residue /
+	// superseded configs don't clutter it. IncludeArchived opts back in.
+	if !filter.IncludeArchived {
+		query += ` AND archived_at IS NULL`
 	}
 
 	if filter.AgentID != nil {
@@ -2245,6 +2282,7 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 		var config types.Config
 		var agentIDStr, groupIDStr sql.NullString
 		var nameStr sql.NullString
+		var archivedAt sql.NullTime
 
 		err := rows.Scan(
 			&config.ID,
@@ -2255,6 +2293,7 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 			&config.Content,
 			&config.Version,
 			&config.CreatedAt,
+			&archivedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan config: %w", err)
@@ -2269,6 +2308,10 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 		}
 		if groupIDStr.Valid {
 			config.GroupID = &groupIDStr.String
+		}
+		if archivedAt.Valid {
+			t := archivedAt.Time
+			config.ArchivedAt = &t
 		}
 
 		configs = append(configs, &config)
@@ -2315,6 +2358,41 @@ func (s *Storage) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) 
 	}
 	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to delete configs for agent: %w", err)
+	}
+	return nil
+}
+
+// SetConfigArchived soft-archives (archived=true) or restores (archived=false) a
+// single config by id. Stamps archived_at=now (or clears it to NULL) so the
+// default ListConfigs hides/shows the row; content/version are untouched
+// (configs stay immutable). Returns types.ErrConfigNotFound when no row matches
+// in the request's tenant scope — the API layer maps that to a 404. Tenant-scoped
+// like the other config methods.
+func (s *Storage) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	var archivedAt any
+	if archived {
+		archivedAt = time.Now()
+	}
+	query := `UPDATE configs SET archived_at = ? WHERE id = ?`
+	args := []any{archivedAt, id}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to set config archived: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to set config archived: %w", err)
+	}
+	if n == 0 {
+		return types.ErrConfigNotFound
 	}
 	return nil
 }

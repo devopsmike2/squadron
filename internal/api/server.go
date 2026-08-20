@@ -2920,6 +2920,12 @@ func (s *Server) registerRoutes() {
 			configs.GET("/:id", middleware.RequireScope(services.ScopeConfigsRead), configHandlers.HandleGetConfig)
 			configs.PUT("/:id", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleUpdateConfig)
 			configs.DELETE("/:id", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleDeleteConfig)
+			// Soft archive/unarchive — the supported alternative to a hard delete
+			// (which stays a 501 because configs are versioned and immutable).
+			// Archiving hides a superseded/residue config from the default listing
+			// without destroying the row; both require configs:write.
+			configs.POST("/:id/archive", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleArchiveConfig)
+			configs.POST("/:id/unarchive", middleware.RequireScope(services.ScopeConfigsWrite), configHandlers.HandleUnarchiveConfig)
 		}
 
 		// Telemetry routes are all read-shaped (POSTs are queries, not

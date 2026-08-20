@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 	"github.com/google/uuid"
 )
 
@@ -43,6 +44,7 @@ type MockAgentService struct {
 	ListConfigsErr                error
 	StoreConfigForAgentErr        error
 	DeleteConfigsForAgentErr      error
+	SetConfigArchivedErr          error
 }
 
 // NewMockAgentService creates a new mock agent service
@@ -414,6 +416,9 @@ func (m *MockAgentService) ListConfigs(ctx context.Context, filter services.Conf
 	configs := make([]*services.Config, 0)
 	for _, config := range m.configs {
 		// Apply filters
+		if !filter.IncludeArchived && config.ArchivedAt != nil {
+			continue
+		}
 		if filter.AgentID != nil && (config.AgentID == nil || *config.AgentID != *filter.AgentID) {
 			continue
 		}
@@ -447,6 +452,31 @@ func (m *MockAgentService) DeleteConfigsForAgent(ctx context.Context, agentID uu
 		if config.AgentID != nil && *config.AgentID == agentID {
 			delete(m.configs, id)
 		}
+	}
+	return nil
+}
+
+// SetConfigArchived implements services.AgentService. Soft-archives (archived=true)
+// or restores (archived=false) a config by id, stamping/clearing ArchivedAt.
+// Returns applicationstore.ErrConfigNotFound on a missing id, matching the real
+// stores.
+func (m *MockAgentService) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.SetConfigArchivedErr != nil {
+		return m.SetConfigArchivedErr
+	}
+
+	config, exists := m.configs[id]
+	if !exists {
+		return applicationstore.ErrConfigNotFound
+	}
+	if archived {
+		now := time.Now()
+		config.ArchivedAt = &now
+	} else {
+		config.ArchivedAt = nil
 	}
 	return nil
 }
