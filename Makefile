@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify fmt fmt-check install-hooks lint
+.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify fmt fmt-check install-hooks lint banned-words
 
 # Variables
 BINARY_NAME=squadron
@@ -174,6 +174,12 @@ install-hooks:
 # Lint code
 lint:
 	golangci-lint run
+
+# banned-words fails if a retired internal codename leaks into source (it once
+# reached customer-facing UI copy). Fast, language-agnostic grep guard; runs in
+# CI (see .github/workflows/pr-tests.yml) and is runnable locally before push.
+banned-words:
+	./scripts/check-banned-words.sh
 
 # Clean build artifacts
 clean:

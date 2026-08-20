@@ -220,6 +220,21 @@ jobs:
       with:
         sarif_file: 'trivy-results.sarif'
 
+  banned-words:
+    name: Banned Words
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    # Fails the build if a retired internal codename leaks into source. A legacy
+    # codename once reached customer-facing UI copy; this guard makes that class
+    # of regression un-mergeable. No toolchain needed — ripgrep ships on the
+    # ubuntu-latest runner; the script falls back to git grep otherwise.
+    - name: Check for banned codenames
+      run: make banned-words
+
   build-test:
     name: Build Test
     runs-on: ubuntu-latest
