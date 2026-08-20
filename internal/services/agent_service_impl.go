@@ -628,6 +628,7 @@ func (s *AgentServiceImpl) CreateConfig(ctx context.Context, config *Config) err
 		Content:    config.Content,
 		Version:    config.Version,
 		CreatedAt:  config.CreatedAt,
+		ArchivedAt: config.ArchivedAt,
 	}
 	return s.appStore.CreateConfig(ctx, storageConfig)
 }
@@ -652,6 +653,7 @@ func (s *AgentServiceImpl) GetConfig(ctx context.Context, id string) (*Config, e
 		Content:    config.Content,
 		Version:    config.Version,
 		CreatedAt:  config.CreatedAt,
+		ArchivedAt: config.ArchivedAt,
 	}, nil
 }
 
@@ -675,6 +677,7 @@ func (s *AgentServiceImpl) GetLatestConfigForAgent(ctx context.Context, agentID 
 		Content:    config.Content,
 		Version:    config.Version,
 		CreatedAt:  config.CreatedAt,
+		ArchivedAt: config.ArchivedAt,
 	}, nil
 }
 
@@ -698,15 +701,17 @@ func (s *AgentServiceImpl) GetLatestConfigForGroup(ctx context.Context, groupID 
 		Content:    config.Content,
 		Version:    config.Version,
 		CreatedAt:  config.CreatedAt,
+		ArchivedAt: config.ArchivedAt,
 	}, nil
 }
 
 // ListConfigs lists configurations with filters
 func (s *AgentServiceImpl) ListConfigs(ctx context.Context, filter ConfigFilter) ([]*Config, error) {
 	storageFilter := applicationstore.ConfigFilter{
-		AgentID: filter.AgentID,
-		GroupID: filter.GroupID,
-		Limit:   filter.Limit,
+		AgentID:         filter.AgentID,
+		GroupID:         filter.GroupID,
+		Limit:           filter.Limit,
+		IncludeArchived: filter.IncludeArchived,
 	}
 
 	configs, err := s.appStore.ListConfigs(ctx, storageFilter)
@@ -725,6 +730,7 @@ func (s *AgentServiceImpl) ListConfigs(ctx context.Context, filter ConfigFilter)
 			Content:    config.Content,
 			Version:    config.Version,
 			CreatedAt:  config.CreatedAt,
+			ArchivedAt: config.ArchivedAt,
 		}
 	}
 
@@ -735,6 +741,15 @@ func (s *AgentServiceImpl) ListConfigs(ctx context.Context, filter ConfigFilter)
 // resumes tracking group config. Delegates to the store; idempotent there.
 func (s *AgentServiceImpl) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
 	return s.appStore.DeleteConfigsForAgent(ctx, agentID)
+}
+
+// SetConfigArchived soft-archives or restores a config by id. Configs are
+// versioned and immutable, so this is the supported alternative to a hard delete:
+// it stamps/clears archived_at in the store so the default config listing hides
+// the row while preserving it for audit. Delegates to the store, which returns
+// applicationstore.ErrConfigNotFound on a missing id.
+func (s *AgentServiceImpl) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	return s.appStore.SetConfigArchived(ctx, id, archived)
 }
 
 // StoreConfigForAgent validates and stores configuration for an agent (storage only, no delivery)

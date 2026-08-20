@@ -121,3 +121,9 @@ const (
 // rollout engine, in particular) can match the conflict via errors.Is without
 // importing the types package directly.
 var ErrRolloutVersionConflict = types.ErrRolloutVersionConflict
+
+// ErrConfigNotFound re-exports the storage-layer sentinel returned by
+// SetConfigArchived on a missing config id, so callers that reference this
+// package's aliased config types (the API handlers, the mock service) can match
+// it via errors.Is without importing the types package directly.
+var ErrConfigNotFound = types.ErrConfigNotFound

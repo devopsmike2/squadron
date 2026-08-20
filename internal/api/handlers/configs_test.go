@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/devopsmike2/squadron/internal/testutils"
@@ -376,4 +377,135 @@ func TestHandleCreateConfig_GroupConfig_WithMultipleAgents(t *testing.T) {
 	call := mockCommander.sendConfigToAgentsInGroupCalls[0]
 	assert.Equal(t, groupID, call.groupID)
 	assert.Equal(t, configContent, call.configContent)
+}
+
+// --- Config soft-archive (POST /configs/:id/archive|unarchive) ---
+
+// archiveCtx builds a gin context carrying the :id path param, ready to hand to
+// the archive/unarchive handlers directly (RequireScope is a router-level
+// concern, not exercised here).
+func archiveCtx(w *httptest.ResponseRecorder, method, path, id string) *gin.Context {
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(method, path, nil)
+	c.Params = gin.Params{{Key: "id", Value: id}}
+	return c
+}
+
+// listConfigIDs runs HandleGetConfigs with the given raw query and returns the
+// set of config IDs the default (or include_archived) listing returns.
+func listConfigIDs(t *testing.T, h *ConfigHandlers, rawQuery string) map[string]bool {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/configs?"+rawQuery, nil)
+	h.HandleGetConfigs(c)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Configs []services.Config `json:"configs"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	ids := map[string]bool{}
+	for _, cfg := range resp.Configs {
+		ids[cfg.ID] = true
+	}
+	return ids
+}
+
+// TestHandleArchiveConfig_UnassignedConfig_LifecycleThroughList archives an
+// unassigned config, confirms it leaves the default list but shows with
+// include_archived, then unarchives it and confirms it returns.
+func TestHandleArchiveConfig_UnassignedConfig_LifecycleThroughList(t *testing.T) {
+	handlers, mockService, _ := setupConfigHandlersTest()
+
+	cfg := &services.Config{ID: "cfg-unassigned", Name: "leftover", ConfigHash: "h", Content: "c", Version: 1, CreatedAt: time.Now()}
+	require.NoError(t, mockService.CreateConfig(context.TODO(), cfg))
+
+	// Present in the default list before archiving.
+	assert.True(t, listConfigIDs(t, handlers, "")[cfg.ID], "config should be listed before archiving")
+
+	// Archive → 200.
+	w := httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-unassigned/archive", cfg.ID))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Gone from the default list, present with include_archived.
+	assert.False(t, listConfigIDs(t, handlers, "")[cfg.ID], "archived config must disappear from the default listing")
+	assert.True(t, listConfigIDs(t, handlers, "include_archived=true")[cfg.ID], "archived config must appear with include_archived=true")
+
+	// Archiving again is idempotent (200, still hidden).
+	w = httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-unassigned/archive", cfg.ID))
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Unarchive restores it to the default list.
+	w = httptest.NewRecorder()
+	handlers.HandleUnarchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-unassigned/unarchive", cfg.ID))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, listConfigIDs(t, handlers, "")[cfg.ID], "unarchived config must return to the default listing")
+}
+
+// TestHandleArchiveConfig_AssignedToAgent_Refused proves archiving the CURRENT
+// effective config of a live agent is refused with 409.
+func TestHandleArchiveConfig_AssignedToAgent_Refused(t *testing.T) {
+	handlers, mockService, _ := setupConfigHandlersTest()
+
+	agentID := uuid.New()
+	require.NoError(t, mockService.CreateAgent(context.TODO(), testutils.MakeTestAgentWithStatus(agentID, services.AgentStatusOnline)))
+	cfg := &services.Config{ID: "cfg-live", AgentID: &agentID, ConfigHash: "h", Content: "c", Version: 1, CreatedAt: time.Now()}
+	require.NoError(t, mockService.CreateConfig(context.TODO(), cfg))
+
+	w := httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-live/archive", cfg.ID))
+	require.Equal(t, http.StatusConflict, w.Code, "archiving a config assigned to a live agent must be refused")
+
+	// Still active + still listed (the refusal did not archive it).
+	assert.True(t, listConfigIDs(t, handlers, "")[cfg.ID])
+}
+
+// TestHandleArchiveConfig_SupersededVersion_Archivable proves an older version
+// (not the latest for the agent) is archivable while the latest is refused.
+func TestHandleArchiveConfig_SupersededVersion_Archivable(t *testing.T) {
+	handlers, mockService, _ := setupConfigHandlersTest()
+
+	agentID := uuid.New()
+	require.NoError(t, mockService.CreateAgent(context.TODO(), testutils.MakeTestAgentWithStatus(agentID, services.AgentStatusOnline)))
+	v1 := &services.Config{ID: "cfg-v1", AgentID: &agentID, ConfigHash: "h1", Content: "c1", Version: 1, CreatedAt: time.Now().Add(-time.Hour)}
+	v2 := &services.Config{ID: "cfg-v2", AgentID: &agentID, ConfigHash: "h2", Content: "c2", Version: 2, CreatedAt: time.Now()}
+	require.NoError(t, mockService.CreateConfig(context.TODO(), v1))
+	require.NoError(t, mockService.CreateConfig(context.TODO(), v2))
+
+	// Superseded v1 archives fine.
+	w := httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-v1/archive", v1.ID))
+	require.Equal(t, http.StatusOK, w.Code, "a superseded (non-latest) version must be archivable")
+
+	// Current v2 is refused.
+	w = httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-v2/archive", v2.ID))
+	assert.Equal(t, http.StatusConflict, w.Code, "the current latest version must be refused")
+}
+
+// TestHandleArchiveConfig_OrphanedAgentConfig_Archivable proves a config pinned
+// to an agent that no longer exists (decommissioned) is residue and archivable —
+// the exact acceptance-pass cleanup case for leftover "…-adopted" configs.
+func TestHandleArchiveConfig_OrphanedAgentConfig_Archivable(t *testing.T) {
+	handlers, mockService, _ := setupConfigHandlersTest()
+
+	// AgentID set, but no such agent exists in the store (GetAgent -> nil).
+	goneAgent := uuid.New()
+	cfg := &services.Config{ID: "cfg-adopted", Name: "host-adopted", AgentID: &goneAgent, ConfigHash: "h", Content: "c", Version: 1, CreatedAt: time.Now()}
+	require.NoError(t, mockService.CreateConfig(context.TODO(), cfg))
+
+	w := httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/cfg-adopted/archive", cfg.ID))
+	require.Equal(t, http.StatusOK, w.Code, "a config pinned to a decommissioned agent is residue and archivable")
+	assert.False(t, listConfigIDs(t, handlers, "")[cfg.ID])
+}
+
+// TestHandleArchiveConfig_NotFound returns 404 for an unknown id.
+func TestHandleArchiveConfig_NotFound(t *testing.T) {
+	handlers, _, _ := setupConfigHandlersTest()
+	w := httptest.NewRecorder()
+	handlers.HandleArchiveConfig(archiveCtx(w, "POST", "/api/v1/configs/nope/archive", "nope"))
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

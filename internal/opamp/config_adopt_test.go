@@ -79,6 +79,12 @@ func (f *statefulAgentService) CreateConfig(_ context.Context, cfg *services.Con
 	return nil
 }
 
+// SetConfigArchived satisfies services.AgentService. The adopt-on-supervise
+// tests never archive configs, so this is a no-op.
+func (f *statefulAgentService) SetConfigArchived(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+
 func (f *statefulAgentService) createdCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

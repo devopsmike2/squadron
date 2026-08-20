@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,8 +13,10 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
+	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/confignorm"
 	"github.com/devopsmike2/squadron/internal/services"
+	"github.com/devopsmike2/squadron/internal/storage/applicationstore"
 )
 
 // ConfigHandlers handles config-related API endpoints
@@ -68,6 +72,10 @@ func (h *ConfigHandlers) HandleGetConfigs(c *gin.Context) {
 	agentIDStr := c.Query("agent_id")
 	groupIDStr := c.Query("group_id")
 	limitStr := c.DefaultQuery("limit", "100")
+	// Soft-archived configs are hidden by default so residue/superseded configs
+	// don't clutter the list; ?include_archived=true surfaces them (e.g. to
+	// unarchive one). Accepts the usual truthy spellings.
+	includeArchived := isTruthy(c.Query("include_archived"))
 
 	// Parse limit
 	limit := 100
@@ -100,9 +108,10 @@ func (h *ConfigHandlers) HandleGetConfigs(c *gin.Context) {
 
 	// Build filter
 	filter := services.ConfigFilter{
-		AgentID: agentUUID,
-		GroupID: groupID,
-		Limit:   limit,
+		AgentID:         agentUUID,
+		GroupID:         groupID,
+		Limit:           limit,
+		IncludeArchived: includeArchived,
 	}
 
 	// Get configs from service
@@ -262,10 +271,205 @@ func (h *ConfigHandlers) HandleUpdateConfig(c *gin.Context) {
 }
 
 // handleDeleteConfig handles DELETE /api/v1/configs/:id
+//
+// Hard delete stays intentionally unimplemented: configs are versioned and
+// immutable (they back the tamper-evident change/audit trail), so destroying a
+// row would break that guarantee. The supported way to get a superseded or
+// residue config out of the operator's way is POST /api/v1/configs/:id/archive
+// — a reversible SOFT archive that hides the config from the default listing
+// without deleting it. The 501 body points operators there.
 func (h *ConfigHandlers) HandleDeleteConfig(c *gin.Context) {
-	// Note: In production, you may want to soft-delete or prevent deletion
-	// of configs that are in use
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Config deletion not implemented - configs are versioned and immutable"})
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Config deletion not implemented - configs are versioned and immutable; use POST /api/v1/configs/:id/archive to hide a config instead",
+	})
+}
+
+// HandleArchiveConfig handles POST /api/v1/configs/:id/archive. It soft-archives
+// a config so the default listing hides it, WITHOUT deleting the row (configs
+// stay immutable for audit). Archiving is REFUSED with 409 when the config is the
+// current effective config for a live agent or group — the operator must clear
+// or replace that assignment first, so we never hide a config an agent is
+// actually running. Idempotent: archiving an already-archived config is a 200.
+func (h *ConfigHandlers) HandleArchiveConfig(c *gin.Context) {
+	configID := c.Param("id")
+	if configID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Config ID is required"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	config, err := h.agentService.GetConfig(ctx, configID)
+	if err != nil {
+		h.logger.Error("Failed to get config", zap.String("config_id", configID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch config"})
+		return
+	}
+	if config == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Config not found"})
+		return
+	}
+	if config.ArchivedAt != nil {
+		// Already archived — nothing to do. Report success so the operation is
+		// idempotent (re-running cleanup must not 409/500).
+		c.JSON(http.StatusOK, gin.H{"status": "archived", "id": configID, "archived_at": config.ArchivedAt})
+		return
+	}
+
+	// Assigned-guard: refuse to hide a config that is the CURRENT effective
+	// config for a live agent or group. A superseded version (an older row for
+	// the same agent/group) or a config whose agent/group no longer exists is
+	// safe to archive.
+	if reason, assigned, gErr := h.configCurrentlyAssigned(ctx, config); gErr != nil {
+		h.logger.Error("Failed to evaluate config assignment", zap.String("config_id", configID), zap.Error(gErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to evaluate config assignment"})
+		return
+	} else if assigned {
+		c.JSON(http.StatusConflict, gin.H{"error": reason})
+		return
+	}
+
+	if err := h.agentService.SetConfigArchived(ctx, configID, true); err != nil {
+		if errors.Is(err, applicationstore.ErrConfigNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Config not found"})
+			return
+		}
+		h.logger.Error("Failed to archive config", zap.String("config_id", configID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to archive config"})
+		return
+	}
+
+	h.recordArchiveAudit(c, config, true)
+	c.JSON(http.StatusOK, gin.H{"status": "archived", "id": configID})
+}
+
+// HandleUnarchiveConfig handles POST /api/v1/configs/:id/unarchive. It clears the
+// archive tombstone so the config reappears in the default listing. Restoring
+// visibility is always safe, so there is no assignment guard. Idempotent:
+// unarchiving an active config is a 200.
+func (h *ConfigHandlers) HandleUnarchiveConfig(c *gin.Context) {
+	configID := c.Param("id")
+	if configID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Config ID is required"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	config, err := h.agentService.GetConfig(ctx, configID)
+	if err != nil {
+		h.logger.Error("Failed to get config", zap.String("config_id", configID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch config"})
+		return
+	}
+	if config == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Config not found"})
+		return
+	}
+	if config.ArchivedAt == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "active", "id": configID})
+		return
+	}
+
+	if err := h.agentService.SetConfigArchived(ctx, configID, false); err != nil {
+		if errors.Is(err, applicationstore.ErrConfigNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Config not found"})
+			return
+		}
+		h.logger.Error("Failed to unarchive config", zap.String("config_id", configID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to unarchive config"})
+		return
+	}
+
+	h.recordArchiveAudit(c, config, false)
+	c.JSON(http.StatusOK, gin.H{"status": "active", "id": configID})
+}
+
+// configCurrentlyAssigned reports whether config is the CURRENT effective config
+// for a live agent or group — i.e. archiving it would hide a config something is
+// actually running. It returns (reason, true, nil) when assigned, ("", false,
+// nil) when safe, and a non-nil error only on a store failure. A config is
+// considered assigned when it is BOTH the latest version for its agent/group AND
+// that agent/group still exists (a config pinned to a decommissioned agent or a
+// deleted group is orphaned residue and safe to archive).
+func (h *ConfigHandlers) configCurrentlyAssigned(ctx context.Context, config *services.Config) (string, bool, error) {
+	if config.AgentID != nil {
+		agent, err := h.agentService.GetAgent(ctx, *config.AgentID)
+		if err != nil {
+			return "", false, err
+		}
+		if agent != nil {
+			latest, err := h.agentService.GetLatestConfigForAgent(ctx, *config.AgentID)
+			if err != nil {
+				return "", false, err
+			}
+			if latest != nil && latest.ID == config.ID {
+				return fmt.Sprintf("config is currently assigned to agent %s; clear or replace the agent's config before archiving", config.AgentID.String()), true, nil
+			}
+		}
+	}
+	if config.GroupID != nil && *config.GroupID != "" {
+		group, err := h.agentService.GetGroup(ctx, *config.GroupID)
+		if err != nil {
+			return "", false, err
+		}
+		if group != nil {
+			latest, err := h.agentService.GetLatestConfigForGroup(ctx, *config.GroupID)
+			if err != nil {
+				return "", false, err
+			}
+			if latest != nil && latest.ID == config.ID {
+				return fmt.Sprintf("config is currently assigned to group %s; reassign the group before archiving", *config.GroupID), true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+// recordArchiveAudit emits a config.archived / config.unarchived audit event when
+// an audit service is wired. Archiving a config is a change-management action
+// (it alters what operators see as the live config inventory), so it belongs on
+// the same audit timeline as config.lint_evaluated and the agent mutations.
+func (h *ConfigHandlers) recordArchiveAudit(c *gin.Context, config *services.Config, archived bool) {
+	if h.audit == nil {
+		return
+	}
+	actor := middleware.ActorFromGin(c).String()
+	if actor == "" {
+		actor = services.AuditActorSystem
+	}
+	eventType, action := "config.unarchived", "unarchived"
+	if archived {
+		eventType, action = "config.archived", "archived"
+	}
+	_ = h.audit.Record(c.Request.Context(), services.AuditEntry{
+		Actor:      actor,
+		EventType:  eventType,
+		TargetType: services.AuditTargetConfig,
+		TargetID:   config.ID,
+		Action:     action,
+		Payload: map[string]any{
+			"name":     config.Name,
+			"version":  config.Version,
+			"agent_id": derefUUID(config.AgentID),
+			"group_id": derefOrEmpty(config.GroupID),
+		},
+	})
+}
+
+// isTruthy interprets the common truthy query-string spellings.
+func isTruthy(v string) bool {
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func derefUUID(u *uuid.UUID) string {
+	if u == nil {
+		return ""
+	}
+	return u.String()
 }
 
 // handleValidateConfig handles POST /api/v1/configs/validate
