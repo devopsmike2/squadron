@@ -74,6 +74,13 @@ type AgentService interface {
 	// left permanently pinned to a stale agent-scoped row. Idempotent (no-op when
 	// there are no matching rows).
 	DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error
+	// SetConfigArchived soft-archives (archived=true) or restores (archived=false)
+	// a config by id. Configs are versioned and immutable, so this is the
+	// supported alternative to a hard delete (DELETE /configs/:id stays 501): it
+	// stamps/clears archived_at so the default config listing hides the row while
+	// preserving it for audit. Returns applicationstore.ErrConfigNotFound on a
+	// missing id.
+	SetConfigArchived(ctx context.Context, id string, archived bool) error
 
 	// StoreConfigForAgent validates and stores configuration for an agent
 	// Returns the stored config or error if agent doesn't exist or doesn't support remote config
@@ -263,6 +270,10 @@ type Config struct {
 	Content    string     `json:"content"`
 	Version    int        `json:"version"`
 	CreatedAt  time.Time  `json:"created_at"`
+	// ArchivedAt is the soft-archive tombstone (NULL/nil = active). Configs are
+	// versioned and immutable, so archiving is the supported way to hide a
+	// superseded/residue config from the default listing without a hard delete.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // ConfigFilter represents filters for listing configs
@@ -270,4 +281,7 @@ type ConfigFilter struct {
 	AgentID *uuid.UUID
 	GroupID *string
 	Limit   int
+	// IncludeArchived, when true, keeps soft-archived configs in ListConfigs
+	// results. Default false hides them from the standard list.
+	IncludeArchived bool
 }

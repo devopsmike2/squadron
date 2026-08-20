@@ -34,6 +34,13 @@ type Execer interface {
 // to a blind last-write-wins so behavior is unchanged until they opt in.
 var ErrRolloutVersionConflict = errors.New("rollout version conflict: row modified since load")
 
+// ErrConfigNotFound is returned by SetConfigArchived when no config row matches
+// the given id (in the request's tenant scope). Configs are versioned and
+// immutable, so archive/unarchive must not silently succeed on a missing id the
+// way the idempotent cleanup primitives (DeleteConfig / DeleteConfigsForAgent)
+// do — the API layer maps this to a 404.
+var ErrConfigNotFound = errors.New("config not found")
+
 // ApplicationStore interface for managing application data
 type ApplicationStore interface {
 	// Ping is the lightweight liveness/readiness primitive: a cheap
@@ -121,6 +128,16 @@ type ApplicationStore interface {
 	// lifecycle gap). Idempotent: deleting when there are no matching rows is a
 	// no-op (returns nil). Never touches group-scoped rows.
 	DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error
+	// SetConfigArchived soft-archives (archived=true) or restores (archived=false)
+	// a single config by id. Archiving stamps archived_at=now so the default
+	// ListConfigs hides the row; unarchiving clears it back to NULL. Configs stay
+	// versioned and immutable — this is the supported alternative to a hard delete
+	// (which is intentionally unimplemented; DELETE /configs/:id returns 501).
+	// Returns ErrConfigNotFound when no row matches the id in the request's tenant
+	// scope (NOT idempotent-on-missing like DeleteConfig — the caller wants a 404).
+	// Never touches config content, hash, or version. Tenant-scoped consistently
+	// with the other config methods.
+	SetConfigArchived(ctx context.Context, id string, archived bool) error
 	ListSavedQueries(ctx context.Context) ([]*SavedQuery, error)
 	GetSavedQuery(ctx context.Context, id string) (*SavedQuery, error)
 	CreateSavedQuery(ctx context.Context, query *SavedQuery) error
@@ -1539,6 +1556,17 @@ type Config struct {
 	Content    string     `json:"content"`
 	Version    int        `json:"version"`
 	CreatedAt  time.Time  `json:"created_at"`
+	// ArchivedAt is a soft-archive tombstone. Configs are versioned and
+	// immutable (a hard delete is intentionally unsupported — DELETE
+	// /configs/:id returns 501), so archiving is how an operator hides a
+	// superseded or residue config from the default listing WITHOUT destroying
+	// the row and its audit history. NULL = active (the default). Set via
+	// SetConfigArchived; the default ListConfigs hides archived rows unless
+	// ConfigFilter.IncludeArchived is set. Deliberately NOT consulted by
+	// GetLatestConfigForAgent/Group (the config-resolution path): archiving is
+	// refused for a config that is the current latest for a live agent/group, so
+	// the latest is always non-archived and the resolver never needs to filter.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // ConfigFilter represents filters for listing configs
@@ -1546,6 +1574,11 @@ type ConfigFilter struct {
 	AgentID *uuid.UUID
 	GroupID *string
 	Limit   int
+	// IncludeArchived, when true, keeps soft-archived configs in ListConfigs
+	// results. Default false: archived configs are hidden from the standard
+	// list, so residue/superseded configs an operator has archived don't clutter
+	// the UI or API listing.
+	IncludeArchived bool
 }
 
 // SavedQuery represents a saved Squadron QL query
