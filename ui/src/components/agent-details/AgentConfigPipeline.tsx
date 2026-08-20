@@ -152,7 +152,7 @@ export function AgentConfigPipeline({
   const driftDescriptionText = (() => {
     switch (driftStatus) {
       case "synced":
-        return "The agent is running the exact config assigned by Cerebro.";
+        return "The agent is running the exact config assigned by Squadron.";
       case "drifted":
         return "The agent's reported config differs from the latest intent.";
       case "no_intent":
