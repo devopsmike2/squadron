@@ -133,6 +133,91 @@ func TestSQLiteListAgents(t *testing.T) {
 	})
 }
 
+// TestSQLiteCreateAgent_RevivesTombstonedRow is the store-layer proof of the
+// pilot P1 fix: DeleteAgent soft-deletes (tombstones) the row, and a subsequent
+// CreateAgent with the SAME id must REVIVE it (clear deleted_at) rather than
+// collide with "UNIQUE constraint failed: agents.id". A LIVE duplicate is still
+// rejected. Mirrors what opamp.persistAgent -> CreateAgent does on reconnect.
+func TestSQLiteCreateAgent_RevivesTombstonedRow(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		ctx := context.Background()
+		id := uuid.New()
+
+		require.NoError(t, store.CreateAgent(ctx, makeTestAgent(id)))
+		require.NoError(t, store.DeleteAgent(ctx, id))
+
+		// Tombstoned: hidden from the operational view.
+		got, err := store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.Nil(t, got)
+
+		// Re-register (the exact collision site on main) must now REVIVE, not error.
+		revived := makeTestAgent(id)
+		revived.Name = "revived-name"
+		require.NoError(t, store.CreateAgent(ctx, revived),
+			"re-registering a decommissioned agent must revive the tombstoned row, not fail on the PK")
+
+		got, err = store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, id, got.ID)
+		assert.Equal(t, "revived-name", got.Name)
+
+		// Exactly one row — a revive, not a duplicate.
+		agents, err := store.ListAgents(ctx)
+		require.NoError(t, err)
+		assert.Len(t, agents, 1)
+
+		// A LIVE duplicate is still rejected (guard preserved).
+		err = store.CreateAgent(ctx, makeTestAgent(id))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+	})
+}
+
+// TestSQLiteRestoreAndPurgeAgent covers the operator recovery endpoints'
+// store methods: RestoreAgent un-tombstones a decommissioned agent, and
+// PurgeAgent hard-deletes the row.
+func TestSQLiteRestoreAndPurgeAgent(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		ctx := context.Background()
+		id := uuid.New()
+
+		require.NoError(t, store.CreateAgent(ctx, makeTestAgent(id)))
+
+		// Restore on a live agent is a no-op error (nothing to restore).
+		err := store.RestoreAgent(ctx, id)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not decommissioned")
+
+		// Decommission then restore brings it back with the same id.
+		require.NoError(t, store.DeleteAgent(ctx, id))
+		got, _ := store.GetAgent(ctx, id)
+		require.Nil(t, got)
+		require.NoError(t, store.RestoreAgent(ctx, id))
+		got, err = store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, id, got.ID)
+
+		// Purge hard-deletes: the row is gone and cannot be restored.
+		require.NoError(t, store.PurgeAgent(ctx, id))
+		got, err = store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.Nil(t, got)
+		err = store.RestoreAgent(ctx, id)
+		require.Error(t, err)
+		agents, err := store.ListAgents(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, agents)
+
+		// Purge on a missing id errors.
+		err = store.PurgeAgent(ctx, uuid.New())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
 func TestSQLiteUpdateAgentStatus(t *testing.T) {
 	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
 		err := store.UpdateAgentStatus(context.Background(), agentID, types.AgentStatusOffline)

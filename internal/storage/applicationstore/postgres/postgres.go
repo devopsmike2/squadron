@@ -862,14 +862,38 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	if source == "" {
 		source = "opamp"
 	}
-	_, err = s.db.ExecContext(ctx, `
+	// Revive-on-reconnect — mirrors the sqlite store. DeleteAgent soft-deletes
+	// (tombstones) an agent, keeping the PRIMARY-KEY row for the CIP-007-6 R4.3
+	// audit trail; a plain INSERT then collided with that row on every OpAMP
+	// re-registration and stranded the agent. This upsert REVIVES a tombstoned
+	// row (clears deleted_at, refreshes mutable fields, keeps the same id) but
+	// leaves a LIVE row untouched (the ON CONFLICT ... WHERE guard skips it, so
+	// RowsAffected==0) and reports it as an already-exists error. created_at is
+	// left untouched on revive to retain the original registration time.
+	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (id) DO UPDATE SET
+			name = excluded.name,
+			labels = excluded.labels,
+			status = excluded.status,
+			last_seen = excluded.last_seen,
+			group_id = excluded.group_id,
+			group_name = excluded.group_name,
+			version = excluded.version,
+			capabilities = excluded.capabilities,
+			discovery_source = excluded.discovery_source,
+			updated_at = excluded.updated_at,
+			deleted_at = NULL
+		WHERE agents.deleted_at IS NOT NULL`,
 		agent.ID.String(), agent.Name, labels, string(agent.Status), agent.LastSeen,
 		agent.GroupID, agent.GroupName, agent.Version, capabilities, source,
 		agent.CreatedAt, agent.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create agent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("create agent: agent already exists: %s", agent.ID.String())
 	}
 	return nil
 }
@@ -999,6 +1023,37 @@ func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 		id.String(), now, now)
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("agent not found: %s", id.String())
+	}
+	return nil
+}
+
+// RestoreAgent clears the tombstone on a soft-deleted agent (mirrors the
+// sqlite store). Operator recovery path for a decommissioned agent that will
+// not self-revive on OpAMP reconnect. Errors if no tombstoned row exists.
+func (s *Storage) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE agents SET deleted_at=NULL, updated_at=$2 WHERE id=$1 AND deleted_at IS NOT NULL`,
+		id.String(), now)
+	if err != nil {
+		return fmt.Errorf("restore agent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("agent not found or not decommissioned: %s", id.String())
+	}
+	return nil
+}
+
+// PurgeAgent HARD-deletes an agent row (tombstoned or live). Destroys the
+// audit-retention row DeleteAgent keeps, so it is gated behind agents:admin at
+// the API. Mirrors the sqlite store.
+func (s *Storage) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE id=$1`, id.String())
+	if err != nil {
+		return fmt.Errorf("purge agent: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("agent not found: %s", id.String())

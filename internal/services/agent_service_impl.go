@@ -429,6 +429,54 @@ func (s *AgentServiceImpl) DeleteAgent(ctx context.Context, id uuid.UUID) error 
 	return nil
 }
 
+// RestoreAgent clears the tombstone on a decommissioned agent (operator
+// recovery), emitting an agent.restored audit event so the reversal is on the
+// same evidence path as the decommission. Errors if there is no decommissioned
+// agent with that id.
+func (s *AgentServiceImpl) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	if err := s.appStore.RestoreAgent(ctx, id); err != nil {
+		return err
+	}
+	if s.audit != nil {
+		_ = s.audit.Record(ctx, AuditEntry{
+			EventType:  "agent.restored",
+			TargetType: AuditTargetAgent,
+			TargetID:   id.String(),
+			Action:     "restored",
+			Payload: map[string]any{
+				"reason": "operator restore",
+			},
+		})
+	}
+	return nil
+}
+
+// PurgeAgent HARD-deletes an agent row (tombstoned or live). Snapshots the row
+// first (best-effort; a tombstoned row is hidden from GetAgent so pre may be
+// nil) and emits an agent.purged audit event before the row is gone.
+func (s *AgentServiceImpl) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	pre, _ := s.appStore.GetAgent(ctx, id)
+	if err := s.appStore.PurgeAgent(ctx, id); err != nil {
+		return err
+	}
+	if s.audit != nil {
+		payload := map[string]any{
+			"reason": "operator hard purge",
+		}
+		if pre != nil {
+			payload["name"] = pre.Name
+		}
+		_ = s.audit.Record(ctx, AuditEntry{
+			EventType:  "agent.purged",
+			TargetType: AuditTargetAgent,
+			TargetID:   id.String(),
+			Action:     "purged",
+			Payload:    payload,
+		})
+	}
+	return nil
+}
+
 // CreateGroup creates a group
 func (s *AgentServiceImpl) CreateGroup(ctx context.Context, group *Group) error {
 	// v0.49 — serialize change windows to JSON for storage. The

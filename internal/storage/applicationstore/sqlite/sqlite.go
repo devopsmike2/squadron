@@ -1368,12 +1368,40 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 		// system-context inserts.
 		tenant = identity.DefaultTenant
 	}
+	// Revive-on-reconnect. DeleteAgent SOFT-deletes (tombstones) an agent,
+	// leaving the PRIMARY-KEY row in place for the CIP-007-6 R4.3 audit trail.
+	// A plain INSERT here then collided with that tombstoned row ("UNIQUE
+	// constraint failed: agents.id") every time a decommissioned agent's
+	// supervisor reconnected over OpAMP (opamp.persistAgent -> CreateAgent when
+	// GetAgent hides the tombstone), stranding the agent permanently. This
+	// upsert instead REVIVES a tombstoned row — clears deleted_at and refreshes
+	// the mutable fields, keeping the same id — which is the naturally
+	// idempotent OpAMP re-registration. A LIVE row (deleted_at IS NULL) is NOT
+	// overwritten: the ON CONFLICT ... WHERE clause skips it, so RowsAffected==0
+	// and we return the same "already exists" error a plain INSERT would,
+	// preserving the invariant that CreateAgent never clobbers a live agent.
+	// created_at is intentionally left untouched on revive so the original
+	// registration time is retained.
 	query := `
 		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, tenant_id, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			labels = excluded.labels,
+			status = excluded.status,
+			last_seen = excluded.last_seen,
+			group_id = excluded.group_id,
+			group_name = excluded.group_name,
+			version = excluded.version,
+			capabilities = excluded.capabilities,
+			discovery_source = excluded.discovery_source,
+			tenant_id = excluded.tenant_id,
+			updated_at = excluded.updated_at,
+			deleted_at = NULL
+		WHERE agents.deleted_at IS NOT NULL
 	`
 
-	_, err = s.db.ExecContext(ctx, query,
+	result, err := s.db.ExecContext(ctx, query,
 		agent.ID.String(),
 		agent.Name,
 		string(labelsJSON),
@@ -1391,6 +1419,11 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 
 	if err != nil {
 		return fmt.Errorf("failed to create agent: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		// A LIVE row already owns this id — the ON CONFLICT WHERE guard skipped
+		// the revive. Report it the same way a plain duplicate INSERT did.
+		return fmt.Errorf("failed to create agent: agent already exists: %s", agent.ID.String())
 	}
 
 	s.logger.Debug("Created agent", zap.String("agent_id", agent.ID.String()))
@@ -1732,24 +1765,59 @@ func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// hardDeleteAgentLegacy kept around as a method that we are no longer
-// wiring through the public interface. If a future operator wants
-// real deletion for storage hygiene, expose this as a separate
-// purge call gated by an admin scope.
-func (s *Storage) hardDeleteAgentLegacy(ctx context.Context, id uuid.UUID) error {
-	query := `DELETE FROM agents WHERE id = ?`
-
-	result, err := s.db.ExecContext(ctx, query, id.String())
+// RestoreAgent clears the tombstone on a soft-deleted (decommissioned) agent,
+// returning the row to the operational view with the SAME id. The operator
+// recovery path for an agent that was decommissioned and cannot (or will not)
+// reconnect over OpAMP to self-revive via CreateAgent's revive-on-reconnect
+// upsert. Errors if there is no tombstoned agent with that id.
+func (s *Storage) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	tenant, apply, err := tenantScope(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to delete agent: %w", err)
+		return err
 	}
+	query := `UPDATE agents SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL`
+	now := time.Now().UTC()
+	args := []any{now, id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to restore agent: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("agent not found or not decommissioned: %s", id.String())
+	}
+	s.logger.Debug("Restored agent", zap.String("agent_id", id.String()))
+	return nil
+}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+// PurgeAgent HARD-deletes an agent row (tombstoned or live), permanently
+// removing it. Unlike DeleteAgent's soft delete this destroys the CIP-007-6
+// R4.3 audit-retention row, so it is gated behind the stricter agents:admin
+// scope at the API. The operator escape hatch for a stuck/orphaned row that
+// should not be retained — previously only reachable via a snapshot restore or
+// direct DB surgery.
+func (s *Storage) PurgeAgent(ctx context.Context, id uuid.UUID) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM agents WHERE id = ?`
+	args := []any{id.String()}
+	if apply {
+		query += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to purge agent: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
 		return fmt.Errorf("agent not found: %s", id.String())
 	}
-
-	s.logger.Debug("Deleted agent", zap.String("agent_id", id.String()))
+	s.logger.Debug("Purged agent", zap.String("agent_id", id.String()))
 	return nil
 }
 
