@@ -726,6 +726,49 @@ service:
       exporters: [otlp]
 `
 
+// adoptManagedTemplateConfig is a managed (delivered/intent) config as
+// Squadron STORES it: templated, carrying ${ENV} references and no redacted
+// secrets. This is the content adopt must prefer over the agent's reported
+// effective config when the agent resolves to a managed config.
+const adoptManagedTemplateConfig = `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:OTLP_ENDPOINT}
+exporters:
+  otlphttp:
+    endpoint: ${env:ENDPOINT_URL}
+    headers:
+      authorization: ${env:OTEL_CLIENT_SECRET}
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp]
+`
+
+// adoptResolvedEffectiveConfig is the SAME agent's reported effective config
+// under a supervisor: POST-resolution — ${ENV} references substituted to
+// literal values and the secret redacted to a [REDACTED] marker. Adopt must
+// NOT use this when a managed config exists; when it does fall back to it (an
+// unmanaged agent), it must flag that ${ENV} could not be preserved.
+const adoptResolvedEffectiveConfig = `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+exporters:
+  otlphttp:
+    endpoint: https://otel-cs.southernco.com
+    headers:
+      authorization: "[REDACTED]"
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp]
+`
+
 // adoptReq drives HandleAdoptConfig with the :id path param set and an
 // optional JSON body, returning the recorder.
 func adoptReq(t *testing.T, h *AgentHandlers, agentID, body string) *httptest.ResponseRecorder {
@@ -887,6 +930,113 @@ service:
 	configs, err := mock.ListConfigs(ctx, services.ConfigFilter{})
 	require.NoError(t, err)
 	assert.Len(t, configs, 1, "a redacted config is still adopted (operator decides)")
+}
+
+// TestHandleAdoptConfig_PrefersGroupManagedConfig: an agent that resolves to
+// a GROUP config is adopted FROM that group's stored, templated content —
+// ${ENV} references preserved, no [REDACTED] — NOT from its reported effective
+// config (which under a supervisor is resolved literals + redacted secrets).
+// This is the load-bearing fix for the pilot field finding.
+func TestHandleAdoptConfig_PrefersGroupManagedConfig(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	groupID := "southern-pilot"
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.GroupID = &groupID
+	// The supervisor-reported effective config is post-resolution + redacted;
+	// adopt must ignore it in favor of the templated group config.
+	agent.EffectiveConfig = adoptResolvedEffectiveConfig
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	gid := groupID
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID:      uuid.New().String(),
+		Name:    "southern-pilot-group",
+		GroupID: &gid,
+		Content: adoptManagedTemplateConfig,
+		Version: 1,
+	}))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Config)
+	assert.Equal(t, "group_config", resp.Source, "adopted from the managed group config")
+	// The load-bearing assertion: adopted CONTENT is the TEMPLATED group config.
+	assert.Equal(t, adoptManagedTemplateConfig, resp.Config.Content)
+	assert.Contains(t, resp.Config.Content, "${env:ENDPOINT_URL}", "env references preserved")
+	assert.NotContains(t, resp.Config.Content, "https://otel-cs.southernco.com", "no resolved literal from the effective config")
+	assert.NotContains(t, resp.Config.Content, "[REDACTED]", "no redacted secret marker")
+	assert.False(t, resp.Redacted)
+	// Created UNASSIGNED — a standalone copy of the group config.
+	assert.Nil(t, resp.Config.AgentID)
+	assert.Nil(t, resp.Config.GroupID)
+}
+
+// TestHandleAdoptConfig_PrefersAgentManagedConfig: an agent with an
+// agent-scoped intent is adopted FROM that intent's templated content —
+// ${ENV} preserved — not from its reported effective config.
+func TestHandleAdoptConfig_PrefersAgentManagedConfig(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = adoptResolvedEffectiveConfig
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	aid := agentID
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID:      uuid.New().String(),
+		Name:    "302vd-intent",
+		AgentID: &aid,
+		Content: adoptManagedTemplateConfig,
+		Version: 1,
+	}))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Config)
+	assert.Equal(t, "agent_config", resp.Source, "adopted from the agent-scoped managed config")
+	assert.Equal(t, adoptManagedTemplateConfig, resp.Config.Content)
+	assert.Contains(t, resp.Config.Content, "${env:OTLP_ENDPOINT}", "env references preserved")
+	assert.NotContains(t, resp.Config.Content, "[REDACTED]")
+	assert.False(t, resp.Redacted)
+	// The new adopted config is unassigned; the source intent is untouched.
+	assert.Nil(t, resp.Config.AgentID)
+	assert.Nil(t, resp.Config.GroupID)
+}
+
+// TestHandleAdoptConfig_UnmanagedFallsBackToEffective: a truly UNMANAGED agent
+// (no agent-scoped intent, no group config) falls back to adopting its reported
+// effective config — today's behavior — with the redaction flag set and a Note
+// stating plainly that ${ENV} could NOT be preserved.
+func TestHandleAdoptConfig_UnmanagedFallsBackToEffective(t *testing.T) {
+	handlers, mock := setupAgentHandlersTest()
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	agent := testutils.MakeTestAgent(agentID)
+	agent.EffectiveConfig = adoptResolvedEffectiveConfig
+	require.NoError(t, mock.CreateAgent(ctx, agent))
+
+	w := adoptReq(t, handlers, agentID.String(), "")
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp AdoptConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Config)
+	assert.Equal(t, "effective_config", resp.Source, "unmanaged agent falls back to effective config")
+	assert.Equal(t, adoptResolvedEffectiveConfig, resp.Config.Content, "adopted verbatim from the reported effective config")
+	assert.True(t, resp.Redacted, "the [REDACTED] marker sets the redacted flag")
+	assert.Contains(t, resp.Note, "could NOT be preserved", "fallback note states env refs are not preserved")
 }
 
 // TestHandleAdoptConfig_NotFound: 404 for an unknown agent.

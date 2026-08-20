@@ -916,14 +916,22 @@ type AdoptConfigRequest struct {
 }
 
 // AdoptConfigResponse is returned by HandleAdoptConfig. Config is the
-// newly created managed template. Redacted flags that the reported
-// effective config still contained literal redaction markers (OpAMP
-// redacts secret values); Note carries the operator-facing explanation
-// when that happens. Warnings surfaces the same non-fatal structural
-// hints (missing recommended sections, etc.) the /configs/validate
-// endpoint returns, so the operator sees them before assigning.
+// newly created managed template. Source records WHERE the adopted
+// content came from: "agent_config" or "group_config" when the agent
+// resolves to a managed (delivered/intent) config whose templated content
+// preserves ${ENV}, or "effective_config" when the agent is unmanaged and
+// we fall back to its reported effective config. Redacted flags that the
+// adopted content still contained literal redaction markers (OpAMP redacts
+// secret values in a supervisor's reported effective config); Note carries
+// the operator-facing explanation — including, on the effective-config
+// fallback, that ${ENV} references could NOT be preserved because the
+// reported effective config is post-resolution. Warnings surfaces the same
+// non-fatal structural hints (missing recommended sections, etc.) the
+// /configs/validate endpoint returns, so the operator sees them before
+// assigning.
 type AdoptConfigResponse struct {
 	Config   *services.Config `json:"config"`
+	Source   string           `json:"source,omitempty"`
 	Redacted bool             `json:"redacted"`
 	Note     string           `json:"note,omitempty"`
 	Warnings []string         `json:"warnings,omitempty"`
@@ -931,33 +939,44 @@ type AdoptConfigResponse struct {
 
 // HandleAdoptConfig handles POST /api/v1/agents/:id/adopt-config.
 //
-// "Adopt an agent's effective config as a managed template": a
-// brownfield agent that registers report-only already streams its
-// effective config to Squadron over OpAMP (agent.EffectiveConfig, shown
-// in the Config tab). This endpoint captures that reported config as a
-// standalone managed Config entity so an operator can then assign and
-// manage it going forward — the clean bridge from report-only to managed
-// without re-authoring the config by hand.
+// "Adopt an agent's config as a managed template": capture a brownfield
+// agent's config as a standalone managed Config entity so an operator can
+// assign and manage it going forward — the clean bridge from report-only /
+// supervised to managed without re-authoring the config by hand.
 //
-// Semantics (first slice — verbatim adopt):
-//   - The effective config is adopted VERBATIM. Any ${ENV} references it
-//     contains are preserved as-is (they round-trip through the config
-//     text untouched) so no redacted secret literal is ever baked in.
-//   - The config is VALIDATED structurally before creation (same YAML
-//     check the update/validate paths use); an unparseable config is
-//     rejected rather than stored, so Squadron never captures a template
-//     it could later push to brick an agent.
-//   - If the reported config still contains literal redaction markers
-//     (e.g. "<redacted>"), creation still succeeds but the response flags
-//     Redacted + a Note telling the operator to swap the marker for the
-//     appropriate ${ENV} reference before assigning.
-//   - The new Config is created UNASSIGNED (no agent_id, no group_id) and
-//     is NOT pushed anywhere. Assignment happens later via the normal
-//     flow. The source agent is not modified.
+// Source precedence (this is the load-bearing fix — see the field finding
+// in the adopt knowledge note): prefer the agent's DELIVERED/INTENT managed
+// config over its reported effective config.
+//   - If the agent resolves to a managed config — agent-scoped intent first,
+//     then its group's config (the same agent → group precedence the OpAMP
+//     resolver uses) — adopt FROM that config's STORED, TEMPLATED content.
+//     That content is what Squadron pushes, so it RETAINS ${ENV} references
+//     and carries no [REDACTED] secrets. Adopting a group-config agent thus
+//     produces a standalone, unassigned copy of the group's templated config.
+//   - Only when the agent is genuinely UNMANAGED (no agent-scoped intent and
+//     no group config) do we fall back to the reported effective config —
+//     today's behavior. Under a supervisor that reported config is
+//     POST-resolution: ${ENV} refs are already substituted to literals and
+//     secrets are redacted. So the fallback flags Redacted when markers are
+//     present AND its Note states plainly that ${ENV} could NOT be preserved
+//     (adopted from the resolved effective config).
 //
-// Per-host parameterization (filelog paths, service.instance.id,
-// hostnames) and apply-to-a-group are deliberately out of scope for this
-// slice — see the backlog follow-ups.
+// In all cases:
+//   - The content is VALIDATED structurally before creation (same YAML check
+//     the update/validate paths use); an unparseable config is rejected
+//     rather than stored, so Squadron never captures a template it could
+//     later push to brick an agent.
+//   - The new Config is created UNASSIGNED (no agent_id, no group_id) and is
+//     NOT pushed anywhere. Assignment happens later via the normal flow. The
+//     source agent and any existing managed config are not modified.
+//
+// This is the OPERATOR-INITIATED adopt endpoint. It is distinct from the
+// SUPERVISE-time auto-seed (ADR 0039, internal/opamp tryAdoptEffectiveConfig),
+// which seeds an unmanaged agent's FIRST config from its reported effective
+// config on connect. That path is untouched here.
+//
+// Per-host parameterization (filelog paths, service.instance.id, hostnames)
+// is deliberately out of scope for this slice — see the backlog follow-ups.
 func (h *AgentHandlers) HandleAdoptConfig(c *gin.Context) {
 	agentID := c.Param("id")
 	agentUUID, err := uuid.Parse(agentID)
@@ -989,21 +1008,50 @@ func (h *AgentHandlers) HandleAdoptConfig(c *gin.Context) {
 		return
 	}
 
-	content := agent.EffectiveConfig
+	// Prefer the DELIVERED/INTENT managed config over the reported effective
+	// config. A managed config's STORED content is the templated source
+	// Squadron pushes, so it RETAINS ${ENV} references and is not redacted;
+	// a supervisor's reported effective config is post-resolution (env refs
+	// substituted, secrets redacted). Resolve agent-scoped intent first, then
+	// the group config — the same agent → group precedence the OpAMP resolver
+	// (internal/opamp/config_resolver.go) applies.
+	var (
+		content       string
+		source        string
+		fromEffective bool
+	)
+	if managed, err := h.agentService.GetLatestConfigForAgent(c.Request.Context(), agentUUID); err == nil && managed != nil {
+		content = managed.Content
+		source = "agent_config"
+	} else if agent.GroupID != nil && strings.TrimSpace(*agent.GroupID) != "" {
+		if groupCfg, err := h.agentService.GetLatestConfigForGroup(c.Request.Context(), *agent.GroupID); err == nil && groupCfg != nil {
+			content = groupCfg.Content
+			source = "group_config"
+		}
+	}
+
+	// Fall back to the reported effective config only when the agent is
+	// genuinely UNMANAGED (no agent-scoped intent, no group config).
+	if strings.TrimSpace(content) == "" {
+		content = agent.EffectiveConfig
+		source = "effective_config"
+		fromEffective = true
+	}
+
 	if strings.TrimSpace(content) == "" {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error": "Agent has not reported an effective config yet. Ensure the agent is registered report-only over OpAMP (reports_effective_config) and has checked in, then try again.",
+			"error": "Agent has no managed config assigned and has not reported an effective config yet. Assign a config, or register the agent report-only over OpAMP (reports_effective_config) and let it check in, then try again.",
 		})
 		return
 	}
 
 	// Validate structurally before we store anything. Reuse the same YAML
 	// check the config update/validate endpoints use so an unparseable
-	// effective config is rejected here rather than captured as a template
-	// that could later be pushed to an agent.
+	// config is rejected here rather than captured as a template that could
+	// later be pushed to an agent.
 	if err := validateYAMLConfig(content); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Reported effective config is not valid YAML and cannot be adopted",
+			"error":   "Adopted config is not valid YAML and cannot be adopted",
 			"details": err.Error(),
 		})
 		return
@@ -1043,17 +1091,31 @@ func (h *AgentHandlers) HandleAdoptConfig(c *gin.Context) {
 
 	resp := AdoptConfigResponse{
 		Config:   config,
+		Source:   source,
 		Warnings: warnings,
 	}
-	if configLooksRedacted(content) {
-		resp.Redacted = true
-		resp.Note = "The reported effective config appears to contain redacted secret values. It was adopted verbatim and any ${ENV} references were preserved, but replace any literal redaction markers with the appropriate ${ENV} reference before assigning this config to an agent."
+	if fromEffective {
+		// Fallback path: adopted from the agent's reported effective config
+		// because it has no managed (delivered/intent) config. Under a
+		// supervisor that reported config is post-resolution — ${ENV} refs are
+		// already substituted to literals and secrets are redacted — so state
+		// plainly that env references could NOT be preserved.
+		resp.Note = "Adopted from the agent's reported effective config because it has no managed (assigned or group) config. If this agent runs under a supervisor, the reported effective config is already resolved: ${ENV} references are substituted to literal values and cannot be preserved, and any secrets are redacted. Review the config and re-introduce ${ENV} references before assigning."
+		if configLooksRedacted(content) {
+			resp.Redacted = true
+			resp.Note = "The reported effective config appears to contain redacted secret values, and it was adopted from the resolved effective config (this agent has no managed config), so ${ENV} references could NOT be preserved — they are already substituted to literal values. Replace any literal redaction markers and re-introduce the appropriate ${ENV} references before assigning this config to an agent."
+		}
+	} else {
+		// Adopted from a managed (delivered/intent) config: its stored,
+		// templated content preserves ${ENV} references and is not redacted.
+		resp.Note = "Adopted from the agent's managed " + source + "; its templated content preserves ${ENV} references."
 	}
 
-	h.logger.Info("Adopted agent effective config as managed template",
+	h.logger.Info("Adopted agent config as managed template",
 		zap.String("agent_id", agentID),
 		zap.String("config_id", config.ID),
 		zap.String("config_name", name),
+		zap.String("source", source),
 		zap.Bool("redacted", resp.Redacted))
 
 	c.JSON(http.StatusCreated, resp)
