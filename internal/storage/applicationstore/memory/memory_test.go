@@ -143,6 +143,59 @@ func TestStoreCreateAgentRevivesTombstoned(t *testing.T) {
 	})
 }
 
+// TestStoreCreateAgentRevive_PreservesNameOnEmpty: a decommission → revive whose
+// reconnect carries NO name (empty Name, the description-less reconnect the
+// opampsupervisor sends before its next fresh identify) must keep the tombstoned
+// row's last-known name, not blank the fleet card. RED before the preserve-on-
+// empty guard (name came back ""), GREEN after.
+func TestStoreCreateAgentRevive_PreservesNameOnEmpty(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		agent := makeTestAgent() // Name "test-agent"
+		require.NoError(t, store.CreateAgent(ctx, agent))
+		require.NoError(t, store.DeleteAgent(ctx, agent.ID))
+
+		// Revive with an EMPTY name.
+		revived := makeTestAgent()
+		revived.Name = ""
+		require.NoError(t, store.CreateAgent(ctx, revived))
+
+		got, err := store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "test-agent", got.Name,
+			"a name-less revive must preserve the last-known name, not blank it")
+	})
+}
+
+// TestStoreUpdateAgentRegistration_PreservesNameOnEmpty: a live agent's name must
+// not be blanked by a description-less reconnect that flows through
+// UpdateAgentRegistration with an empty name (defense-in-depth mirror of the
+// capabilities preserve).
+func TestStoreUpdateAgentRegistration_PreservesNameOnEmpty(t *testing.T) {
+	withMemoryStore(func(store *Store) {
+		ctx := context.Background()
+		agent := makeTestAgent() // Name "test-agent"
+		require.NoError(t, store.CreateAgent(ctx, agent))
+
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agent.ID, Name: ""}))
+
+		got, err := store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "test-agent", got.Name,
+			"an empty-name registration must preserve the stored name")
+
+		// A real name still updates.
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agent.ID, Name: "renamed"}))
+		got, err = store.GetAgent(ctx, agent.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "renamed", got.Name)
+	})
+}
+
 // TestStoreRestoreAndPurgeAgent covers the memory store's operator-recovery
 // methods, keeping them consistent with the sqlite/postgres backends.
 func TestStoreRestoreAndPurgeAgent(t *testing.T) {

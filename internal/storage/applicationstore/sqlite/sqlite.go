@@ -1394,12 +1394,18 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	// and we return the same "already exists" error a plain INSERT would,
 	// preserving the invariant that CreateAgent never clobbers a live agent.
 	// created_at is intentionally left untouched on revive so the original
-	// registration time is retained.
+	// registration time is retained. The name is PRESERVED on empty: a
+	// description-less reconnect (the opampsupervisor re-sends its full
+	// AgentDescription only on a fresh identify) carries no name, so overwriting
+	// would blank the fleet card to "unknown" until the next re-identify. The
+	// CASE keeps the stored last-known name when the incoming name is empty and
+	// still updates it when a real name arrives — the same preserve-on-empty
+	// contract UpdateAgentRegistration applies to capabilities.
 	query := `
 		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, tenant_id, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name,
+			name = CASE WHEN excluded.name = '' THEN agents.name ELSE excluded.name END,
 			labels = excluded.labels,
 			status = excluded.status,
 			last_seen = excluded.last_seen,
@@ -1724,13 +1730,19 @@ func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agen
 	if err != nil {
 		return err
 	}
+	// Preserve name on empty, mirroring the capabilities CASE below: a
+	// description-less (re)connect carries no name, and blanking a live agent's
+	// display name to "" is never intended (the operator group PATCH always
+	// re-supplies the loaded name). A real incoming name still updates.
 	query := `UPDATE agents
-		SET name = ?, labels = ?, version = ?, group_id = ?, group_name = ?,
+		SET name = CASE WHEN ? = '' THEN name ELSE ? END,
+		    labels = ?, version = ?, group_id = ?, group_name = ?,
 		    capabilities = CASE WHEN ? = '[]' THEN capabilities ELSE ? END,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND deleted_at IS NULL`
 	args := []any{
-		agent.Name, string(labelsJSON), agent.Version,
+		agent.Name, agent.Name,
+		string(labelsJSON), agent.Version,
 		agent.GroupID, agent.GroupName,
 		string(capsJSON), string(capsJSON),
 		agent.ID.String(),
