@@ -266,10 +266,18 @@ func (s *Store) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	}
 
 	// Reviving a tombstoned row: clear the tombstone and retain the original
-	// registration time.
+	// registration time. The name is preserve-on-empty (mirrors the
+	// sqlite/postgres revive upserts): a description-less reconnect revives with
+	// an empty name, so keep the tombstoned row's last-known name rather than
+	// blanking the fleet card to "unknown" until the next re-identify.
 	agentCopy.DeletedAt = nil
-	if exists && !existing.CreatedAt.IsZero() {
-		agentCopy.CreatedAt = existing.CreatedAt
+	if exists {
+		if !existing.CreatedAt.IsZero() {
+			agentCopy.CreatedAt = existing.CreatedAt
+		}
+		if agentCopy.Name == "" {
+			agentCopy.Name = existing.Name
+		}
 	}
 
 	s.agents[agent.ID] = &agentCopy
@@ -413,7 +421,12 @@ func (s *Store) UpdateAgentRegistration(ctx context.Context, agent *types.Agent)
 	if !exists || existing.DeletedAt != nil {
 		return fmt.Errorf("agent not found: %s", agent.ID)
 	}
-	existing.Name = agent.Name
+	// Name is preserve-on-empty (mirrors the sqlite/postgres stores): a
+	// description-less (re)connect carries no name and must not blank a live
+	// agent's display name. A real incoming name still updates it.
+	if agent.Name != "" {
+		existing.Name = agent.Name
+	}
 	if agent.Labels != nil {
 		existing.Labels = make(map[string]string, len(agent.Labels))
 		for k, v := range agent.Labels {

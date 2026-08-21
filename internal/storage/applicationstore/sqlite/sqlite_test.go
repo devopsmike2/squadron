@@ -175,6 +175,66 @@ func TestSQLiteCreateAgent_RevivesTombstonedRow(t *testing.T) {
 	})
 }
 
+// TestSQLiteCreateAgent_RevivePreservesNameOnEmpty: a decommission → revive whose
+// reconnect carries NO name (empty Name — the description-less reconnect before
+// the opampsupervisor's next fresh identify) must keep the tombstoned row's
+// last-known name, not blank the fleet card. A revive that DOES carry a real name
+// still updates it. RED before the preserve-on-empty CASE, GREEN after.
+func TestSQLiteCreateAgent_RevivePreservesNameOnEmpty(t *testing.T) {
+	withSQLiteStore(t, func(store types.ApplicationStore) {
+		ctx := context.Background()
+		id := uuid.New()
+
+		require.NoError(t, store.CreateAgent(ctx, makeTestAgent(id))) // Name "test-agent"
+		require.NoError(t, store.DeleteAgent(ctx, id))
+
+		// Revive with an EMPTY name → preserve the stored last-known name.
+		nameless := makeTestAgent(id)
+		nameless.Name = ""
+		require.NoError(t, store.CreateAgent(ctx, nameless))
+
+		got, err := store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "test-agent", got.Name,
+			"a name-less revive must preserve the last-known name, not blank it to \"\"")
+
+		// A subsequent revive carrying a real name still updates it.
+		require.NoError(t, store.DeleteAgent(ctx, id))
+		renamed := makeTestAgent(id)
+		renamed.Name = "web-01-renamed"
+		require.NoError(t, store.CreateAgent(ctx, renamed))
+		got, err = store.GetAgent(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "web-01-renamed", got.Name)
+	})
+}
+
+// TestSQLiteUpdateAgentRegistration_PreservesNameOnEmpty: a live agent's name
+// must not be blanked by a description-less reconnect flowing through
+// UpdateAgentRegistration with an empty name (defense-in-depth mirror of the
+// capabilities preserve).
+func TestSQLiteUpdateAgentRegistration_PreservesNameOnEmpty(t *testing.T) {
+	withPopulatedSQLiteStore(t, func(store types.ApplicationStore, agentID uuid.UUID) {
+		ctx := context.Background()
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agentID, Name: ""}))
+
+		got, err := store.GetAgent(ctx, agentID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, "test-agent", got.Name,
+			"an empty-name registration must preserve the stored name")
+
+		require.NoError(t, store.UpdateAgentRegistration(ctx, &types.Agent{
+			ID: agentID, Name: "renamed"}))
+		got, err = store.GetAgent(ctx, agentID)
+		require.NoError(t, err)
+		assert.Equal(t, "renamed", got.Name)
+	})
+}
+
 // TestSQLiteRestoreAndPurgeAgent covers the operator recovery endpoints'
 // store methods: RestoreAgent un-tombstones a decommissioned agent, and
 // PurgeAgent hard-deletes the row.
