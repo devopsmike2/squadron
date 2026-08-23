@@ -1,9 +1,15 @@
 Squadron
 Copyright 2026 Squadron Contributors
+Squadron — Copyright 2025–2026 PeptidePal LLC.
 
 This product is a fork of and derivative work based on Lawrence OSS
 (https://github.com/getlawrence/lawrence-oss), Copyright 2025 Lawrence
 Agent Contributors, licensed under the Apache License, Version 2.0.
+
+Modifications and additions to the original Lawrence OSS work are
+© 2025–2026 PeptidePal LLC and are licensed under the Apache License,
+Version 2.0. Files changed by PeptidePal LLC relative to the upstream work
+carry those modifications (Apache License 2.0, Section 4(b)).
 
 The original Lawrence OSS upstream attribution is preserved below.
 
