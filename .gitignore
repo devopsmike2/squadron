@@ -62,6 +62,9 @@ temp/
 # stray go build artifacts at repo root
 /squadron-proposer-bench
 
+# Go build cache (should never be tracked)
+.cache/
+
 # MkDocs documentation site
 .docs-venv/
 site/
