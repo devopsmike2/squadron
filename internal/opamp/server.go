@@ -659,6 +659,23 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 	capabilities := s.extractAgentCapabilities(msg.Capabilities)
 	status := s.determineAgentStatus(msg)
 
+	// Preserve the last-known display name across a description-less (re)connect.
+	// The opampsupervisor only re-sends its full AgentDescription on a fresh
+	// identify, not on every reconnect; a plain reconnect — in particular the
+	// FIRST reconnect after a decommission, which revives the tombstoned row via
+	// CreateAgent's revive-on-reconnect upsert — carries no description, so
+	// extractAgentName returns the "unknown" sentinel. Persisting that blanks the
+	// fleet card's name to "unknown" until the agent next re-identifies. Pass an
+	// EMPTY name on the no-description path so the store PRESERVES the stored
+	// last-known name instead of overwriting it — the same proto3 empty/omitted →
+	// keep-last-known contract #36 applied to group_id and #35/#48 to capabilities.
+	// A description that carries a real (or an explicitly nameless → "unknown")
+	// identity still updates the name.
+	persistName := name
+	if msg.AgentDescription == nil {
+		persistName = ""
+	}
+
 	if existingAgent == nil {
 		// Resolve (and auto-create) the agent's group, setting
 		// agent.GroupID in memory.
@@ -667,7 +684,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 		// Create new agent
 		serviceAgent := &services.Agent{
 			ID:           agent.storeID(),
-			Name:         name,
+			Name:         persistName,
 			Labels:       labels,
 			Status:       services.AgentStatus(status),
 			LastSeen:     now,
@@ -686,7 +703,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 		} else {
 			s.logger.Info("Agent persisted to storage",
 				zap.String("agentId", agent.InstanceIdStr),
-				zap.String("name", name))
+				zap.String("name", persistName))
 		}
 	} else {
 		// Update existing agent
@@ -749,7 +766,7 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 
 			registration := &services.Agent{
 				ID:        agent.storeID(),
-				Name:      name,
+				Name:      persistName,
 				Labels:    labels,
 				Version:   version,
 				GroupID:   groupID,

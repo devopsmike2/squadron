@@ -875,12 +875,15 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	// row (clears deleted_at, refreshes mutable fields, keeps the same id) but
 	// leaves a LIVE row untouched (the ON CONFLICT ... WHERE guard skips it, so
 	// RowsAffected==0) and reports it as an already-exists error. created_at is
-	// left untouched on revive to retain the original registration time.
+	// left untouched on revive to retain the original registration time. The name
+	// is PRESERVED on empty (the CASE below): a description-less reconnect carries
+	// no name, so overwriting would blank the fleet card to "unknown" until the
+	// next re-identify — keep the stored last-known name unless a real one arrives.
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (id) DO UPDATE SET
-			name = excluded.name,
+			name = CASE WHEN excluded.name = '' THEN agents.name ELSE excluded.name END,
 			labels = excluded.labels,
 			status = excluded.status,
 			last_seen = excluded.last_seen,
@@ -1002,8 +1005,11 @@ func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agen
 	if len(agent.Capabilities) == 0 {
 		capabilities = []byte("[]")
 	}
+	// Preserve name on empty, mirroring the capabilities CASE: a description-less
+	// (re)connect carries no name and must not blank a live agent's display name.
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE agents SET name=$2, labels=$3, version=$4, group_id=$5, group_name=$6,
+		UPDATE agents SET name = CASE WHEN $2 = '' THEN name ELSE $2 END,
+			labels=$3, version=$4, group_id=$5, group_name=$6,
 			capabilities = CASE WHEN $7::jsonb = '[]'::jsonb THEN capabilities ELSE $7::jsonb END,
 			updated_at=now()
 		WHERE id=$1 AND deleted_at IS NULL`,
