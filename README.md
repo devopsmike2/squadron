@@ -521,4 +521,9 @@ More help routing in [SUPPORT.md](SUPPORT.md).
 
 ## License
 
-Apache 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Squadron is © 2025–2026 PeptidePal LLC and licensed under the Apache
+License 2.0. It is a fork of and derivative work based on
+[Lawrence OSS](https://github.com/getlawrence/lawrence-oss)
+(Apache 2.0); all upstream attribution is retained. See
+[`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) for the full terms and
+attribution.
