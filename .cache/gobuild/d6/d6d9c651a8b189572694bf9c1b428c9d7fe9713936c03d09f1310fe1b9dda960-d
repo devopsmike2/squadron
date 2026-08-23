@@ -1,5 +1,0 @@
-./azure.go
-./gcp.go
-./oci.go
-./recommendations.go
-./seed.go

@@ -1,4 +1,0 @@
-./bridge.go
-./publisher.go
-./publisher_jira.go
-./publisher_linear.go

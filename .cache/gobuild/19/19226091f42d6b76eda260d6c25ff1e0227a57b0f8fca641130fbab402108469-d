@@ -1,5 +1,0 @@
-./attrs.go
-./grpc_handlers.go
-./grpc_server.go
-./http_server.go
-./writer.go

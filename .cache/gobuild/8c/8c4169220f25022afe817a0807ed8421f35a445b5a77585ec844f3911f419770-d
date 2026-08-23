@@ -1,5 +1,0 @@
-./actions.go
-./factory.go
-./incidents.go
-./memory.go
-./trace_resource_seen.go

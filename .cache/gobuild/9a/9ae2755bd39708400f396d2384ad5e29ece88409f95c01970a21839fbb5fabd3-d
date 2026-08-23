@@ -1,9 +1,0 @@
-./ansibletower.go
-./azuredevops.go
-./github.go
-./inventory.go
-./metrics.go
-./multi_provider.go
-./provider.go
-./secrets.go
-./service.go

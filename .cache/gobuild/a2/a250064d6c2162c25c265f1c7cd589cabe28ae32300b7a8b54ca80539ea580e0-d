@@ -1,9 +1,0 @@
-./compression.go
-./endian_swap.go
-./file_reader.go
-./file_writer.go
-./ipc.go
-./message.go
-./metadata.go
-./reader.go
-./writer.go
