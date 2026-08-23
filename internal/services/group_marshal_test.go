@@ -7,14 +7,14 @@ import (
 )
 
 // TestGroupMarshalJSON_NilLabelsSerializesToEmptyObject pins the
-// defense-in-depth serializer fix for the Southern-pilot blank-page
+// defense-in-depth serializer fix for the Enterprise-pilot blank-page
 // bug: GET /api/v1/groups returned `labels: null` for a group that
 // never had labels, and the UI's unguarded Object.entries(null) crashed
 // the whole route. The API must emit `"labels":{}` for such a group so
 // the wire shape is internally consistent (other groups already
 // serialize `{}`) and no client can be handed a null map.
 func TestGroupMarshalJSON_NilLabelsSerializesToEmptyObject(t *testing.T) {
-	g := Group{ID: "southern-pilot", Name: "Southern Pilot"} // Labels left nil
+	g := Group{ID: "enterprise-pilot", Name: "Enterprise Pilot"} // Labels left nil
 
 	raw, err := json.Marshal(g)
 	if err != nil {

@@ -1,7 +1,7 @@
 # Squadron Route — exposes the UI + API on standard HTTPS.
 #
 # The overlay sets spec.host to a real cluster apps domain, e.g.
-# squadron.apps.osxgpch504np.example.com. The base leaves host
+# squadron.apps.ocp01.example.com. The base leaves host
 # empty so OpenShift auto-assigns the wildcard hostname.
 #
 # Edge TLS termination is the safest default: the router does

@@ -35,7 +35,7 @@ service:
 // injected local opamp extension present. The meaningful surface
 // (service.pipelines/receivers/exporters) is identical to compactIntent, but the
 // content — and therefore the content hash — differs, so it never hash-matches
-// the compact intent. This is the Southern 300vd false-positive shape.
+// the compact intent. This is the Enterprise linuxhost01 false-positive shape.
 const expandedEffective = `receivers:
   otlp:
     protocols:
@@ -58,7 +58,7 @@ service:
       exporters: [otlphttp]`
 
 // TestSupervisedAgentDeliveredHashSynced is the core regression this fixes (the
-// Southern 300vd case). A supervised agent has applied exactly the config
+// Enterprise linuxhost01 case). A supervised agent has applied exactly the config
 // Squadron assigned, but its reported effective config is env-/default-expanded
 // and carries the supervisor-injected opamp extension, so it does NOT hash-match
 // the compact stored intent. Before the fix the agent showed permanent drift;
@@ -71,7 +71,7 @@ func TestSupervisedAgentDeliveredHashSynced(t *testing.T) {
 	agentID := uuid.New()
 	now := time.Now()
 	require.NoError(t, service.CreateAgent(ctx, &Agent{
-		ID: agentID, Name: "supervised-300vd", Status: AgentStatusOnline,
+		ID: agentID, Name: "supervised-linuxhost01", Status: AgentStatusOnline,
 		Capabilities: []string{"accepts_remote_config"},
 		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
 	}))
@@ -139,11 +139,11 @@ func TestSupervisedAgentGenuineDivergenceDrifted(t *testing.T) {
 // always empty and drift is governed purely by content: exact match => synced,
 // differ => drifted, DeliveredHash never surfaced.
 //
-// (Pre-302vd this test also asserted that MANUALLY stamping delivered==intent on
+// (Pre-linuxhost03 this test also asserted that MANUALLY stamping delivered==intent on
 // a report-only agent still read drifted, because the delivered Synced path was
 // gated on the persisted supervised capability. That gate was the bug: it
 // conflated "no persisted accepts_remote_config" with "report-only", so a
-// wire-supervised agent whose persisted capability had been lost — the 302vd
+// wire-supervised agent whose persisted capability had been lost — the linuxhost03
 // fleet — was wrongly treated as report-only and read permanent drift. The
 // delivered path now keys on delivered PRESENCE, which report-only agents never
 // have, so this test exercises the realistic report-only state: empty delivered.)
@@ -185,7 +185,7 @@ func TestReportOnlyAgentDriftUnchanged(t *testing.T) {
 }
 
 // TestSupervisedAppliedButPersistedCapabilityLostSynced reproduces the EXACT
-// 302vd production shape that #28 and #32 both missed, against the real surfaced-
+// linuxhost03 production shape that #28 and #32 both missed, against the real surfaced-
 // drift producer (GetAgent -> populateAgentConfigState -> computeConfigDrift).
 //
 // The agent is a wire-supervised collector that has applied exactly the config
@@ -209,9 +209,9 @@ func TestSupervisedAppliedButPersistedCapabilityLostSynced(t *testing.T) {
 
 	agentID := uuid.New()
 	now := time.Now()
-	// Persisted capabilities lack accepts_remote_config — the 302vd row shape.
+	// Persisted capabilities lack accepts_remote_config — the linuxhost03 row shape.
 	require.NoError(t, service.CreateAgent(ctx, &Agent{
-		ID: agentID, Name: "supervised-302vd", Status: AgentStatusOnline,
+		ID: agentID, Name: "supervised-linuxhost03", Status: AgentStatusOnline,
 		Capabilities: []string{"reports_effective_config"}, // NO accepts_remote_config persisted
 		LastSeen:     now, CreatedAt: now, UpdatedAt: now,
 	}))

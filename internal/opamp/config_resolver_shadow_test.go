@@ -15,13 +15,13 @@ import (
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
-// southernPilotGroupConfig is the REAL-pipeline config assigned to the
-// southern-pilot group: host logs via filelog and host metrics via hostmetrics,
+// enterprisePilotGroupConfig is the REAL-pipeline config assigned to the
+// enterprise-pilot group: host logs via filelog and host metrics via hostmetrics,
 // both exported to otel-cs over otlphttp — the wired config a group-config-only
 // pilot host actually runs. It is deliberately NOT a bare otlp->otlp skeleton, so
 // an agent that reverts to a skeleton (or the DefaultOTelConfig) is trivially
 // distinguishable from one correctly resolving to the group config.
-const southernPilotGroupConfig = `receivers:
+const enterprisePilotGroupConfig = `receivers:
   filelog:
     include: [/var/log/app/*.log]
   hostmetrics:
@@ -64,7 +64,7 @@ func supervisedNoGroupReconnect(id uuid.UUID) *Agent {
 }
 
 // TestReconnect_GroupConfigOnlyAgent_NoAdoptShadow reproduces the EXACT
-// Southern-pilot 302vd regression (v0.89.471). A supervised, already-known agent
+// Enterprise-pilot linuxhost03 regression (v0.89.471). A supervised, already-known agent
 // that is a member of a group carrying a real-pipeline config, with NO
 // agent-scoped config, reconnects reporting no group. The reconnect must NOT mint
 // an agent-scoped skeleton intent (adopt-on-supervise) that shadows the group
@@ -85,13 +85,13 @@ func TestReconnect_GroupConfigOnlyAgent_NoAdoptShadow(t *testing.T) {
 	server, svc := newGroupPreserveServer(t)
 
 	id := uuid.New()
-	// 302vd: persisted, member of southern-pilot, NO agent-scoped config.
-	createStoredAgent(t, svc, id, sptr("group-southern-pilot"), sptr("southern-pilot"))
+	// linuxhost03: persisted, member of enterprise-pilot, NO agent-scoped config.
+	createStoredAgent(t, svc, id, sptr("group-enterprise-pilot"), sptr("enterprise-pilot"))
 	// The group carries a REAL-pipeline config (filelog/hostmetrics -> otel-cs).
 	require.NoError(t, svc.CreateConfig(ctx, &services.Config{
 		ID:        uuid.New().String(),
-		GroupID:   sptr("group-southern-pilot"),
-		Content:   southernPilotGroupConfig,
+		GroupID:   sptr("group-enterprise-pilot"),
+		Content:   enterprisePilotGroupConfig,
 		Version:   1,
 		CreatedAt: time.Now(),
 	}))
@@ -105,12 +105,12 @@ func TestReconnect_GroupConfigOnlyAgent_NoAdoptShadow(t *testing.T) {
 	agentCfg, err := svc.GetLatestConfigForAgent(ctx, id)
 	require.NoError(t, err)
 	require.Nil(t, agentCfg,
-		"reconnect minted an agent-scoped intent that shadows the group config (302vd regression)")
+		"reconnect minted an agent-scoped intent that shadows the group config (linuxhost03 regression)")
 
 	// (2) The agent still resolves to the REAL-pipeline group config — not a
 	// skeleton, not the DefaultOTelConfig.
 	resolved := server.getConfigForAgent(ctx, agent)
-	require.Equal(t, southernPilotGroupConfig, resolved,
+	require.Equal(t, enterprisePilotGroupConfig, resolved,
 		"group-config-only agent must resolve to its real-pipeline group config on reconnect")
 	require.NotEqual(t, DefaultOTelConfig, resolved)
 }

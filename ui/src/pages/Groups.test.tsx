@@ -1,7 +1,7 @@
-// Vitest coverage for the Groups page labels cell — the Southern-pilot
+// Vitest coverage for the Groups page labels cell — the Enterprise-pilot
 // blank-page field bug (v0.89.472).
 //
-// GET /api/v1/groups returned `labels: null` for the `southern-pilot`
+// GET /api/v1/groups returned `labels: null` for the `enterprise-pilot`
 // group. The Groups table row cell called `Object.entries(group.labels)`
 // with no null guard, so `Object.entries(null)` threw
 // `TypeError: Cannot convert undefined or null to object`, which — with
@@ -93,10 +93,10 @@ describe("GroupsPage labels cell", () => {
   });
 
   it("renders without crashing when a group's labels are null and shows 'No labels'", async () => {
-    // The southern-pilot repro: labels arrived as null on the wire.
+    // The enterprise-pilot repro: labels arrived as null on the wire.
     const nullLabelsGroup = makeGroup({
-      id: "southern-pilot",
-      name: "Southern Pilot",
+      id: "enterprise-pilot",
+      name: "Enterprise Pilot",
       labels: null as unknown as Record<string, string>,
     });
     const emptyLabelsGroup = makeGroup({
@@ -120,7 +120,7 @@ describe("GroupsPage labels cell", () => {
     // The table renders all three rows without throwing. On unfixed
     // source the null-labels row's Object.entries(null) throws here.
     await waitFor(() => {
-      expect(screen.getByText("Southern Pilot")).toBeInTheDocument();
+      expect(screen.getByText("Enterprise Pilot")).toBeInTheDocument();
     });
     expect(screen.getByText("Empty Labels")).toBeInTheDocument();
     expect(screen.getByText("Web Prod")).toBeInTheDocument();

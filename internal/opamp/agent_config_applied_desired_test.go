@@ -36,7 +36,7 @@ service:
 // driftExpandedEffective is what the same supervised agent reports as effective:
 // ${ENV} resolved, collector defaults enumerated, supervisor opamp extension
 // present. Meaningful surface identical to driftCompactIntent, but it never
-// hash-matches the compact intent — the Southern 300vd false-positive shape.
+// hash-matches the compact intent — the Enterprise linuxhost01 false-positive shape.
 const driftExpandedEffective = `receivers:
   otlp:
     protocols:

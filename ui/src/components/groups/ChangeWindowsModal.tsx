@@ -7,7 +7,7 @@
  *   - Name (human label for the badge: "summer peak", "Q4 freeze")
  *   - Days of the week (checkbox row, empty = every day)
  *   - Local start + end times in HH:MM
- *   - IANA timezone (default America/Chicago — Southern Company's grid)
+ *   - IANA timezone (default America/Chicago — ExampleCorp's grid)
  *   - Optional effective-from / -to range for one-off blackouts
  *
  * On save: PUT /api/v1/groups/:id with the full windows list.
@@ -42,7 +42,7 @@ interface ChangeWindowsModalProps {
   onSaved: () => void;
 }
 
-// Default for new windows. America/Chicago because Southern Company's
+// Default for new windows. America/Chicago because ExampleCorp's
 // grid is on Central time — easy to change per row but a sensible
 // starting point reduces clicks for the common case.
 const NEW_WINDOW: ChangeWindow = {

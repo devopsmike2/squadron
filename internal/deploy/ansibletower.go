@@ -246,7 +246,7 @@ func (p *AnsibleTowerProvider) LatestRunSince(ctx context.Context, target *appty
 // For v0.42 we keep it simple and call /api/v2/projects/{id}/inventories/
 // for inventory file enumeration, plus a passthrough to the project
 // content endpoint for non-inventory files. The common case at
-// Southern Co is "inventory.ini" pinned via the project's SCM_PATH.
+// ExampleCorp is "inventory.ini" pinned via the project's SCM_PATH.
 func (p *AnsibleTowerProvider) FetchFile(ctx context.Context, target *apptypes.DeployTarget, pat string, path string) ([]byte, error) {
 	// Tower doesn't have a stable single endpoint for "fetch this
 	// file from the project" — operators typically stage files via

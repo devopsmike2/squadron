@@ -816,7 +816,7 @@ const adoptResolvedEffectiveConfig = `receivers:
         endpoint: 0.0.0.0:4317
 exporters:
   otlphttp:
-    endpoint: https://otel-cs.southernco.com
+    endpoint: https://otel-cs.example.com
     headers:
       authorization: "[REDACTED]"
 service:
@@ -900,12 +900,12 @@ func TestHandleAdoptConfig_CustomName(t *testing.T) {
 	agent.EffectiveConfig = adoptSampleConfig
 	require.NoError(t, mock.CreateAgent(ctx, agent))
 
-	w := adoptReq(t, handlers, agentID.String(), `{"name":"southern-baseline"}`)
+	w := adoptReq(t, handlers, agentID.String(), `{"name":"enterprise-baseline"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 
 	var resp AdoptConfigResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "southern-baseline", resp.Config.Name)
+	assert.Equal(t, "enterprise-baseline", resp.Config.Name)
 }
 
 // TestHandleAdoptConfig_NoEffectiveConfig: an agent that has not reported
@@ -998,7 +998,7 @@ func TestHandleAdoptConfig_PrefersGroupManagedConfig(t *testing.T) {
 	handlers, mock := setupAgentHandlersTest()
 	ctx := context.Background()
 
-	groupID := "southern-pilot"
+	groupID := "enterprise-pilot"
 	agentID := uuid.New()
 	agent := testutils.MakeTestAgent(agentID)
 	agent.GroupID = &groupID
@@ -1010,7 +1010,7 @@ func TestHandleAdoptConfig_PrefersGroupManagedConfig(t *testing.T) {
 	gid := groupID
 	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
 		ID:      uuid.New().String(),
-		Name:    "southern-pilot-group",
+		Name:    "enterprise-pilot-group",
 		GroupID: &gid,
 		Content: adoptManagedTemplateConfig,
 		Version: 1,
@@ -1026,7 +1026,7 @@ func TestHandleAdoptConfig_PrefersGroupManagedConfig(t *testing.T) {
 	// The load-bearing assertion: adopted CONTENT is the TEMPLATED group config.
 	assert.Equal(t, adoptManagedTemplateConfig, resp.Config.Content)
 	assert.Contains(t, resp.Config.Content, "${env:ENDPOINT_URL}", "env references preserved")
-	assert.NotContains(t, resp.Config.Content, "https://otel-cs.southernco.com", "no resolved literal from the effective config")
+	assert.NotContains(t, resp.Config.Content, "https://otel-cs.example.com", "no resolved literal from the effective config")
 	assert.NotContains(t, resp.Config.Content, "[REDACTED]", "no redacted secret marker")
 	assert.False(t, resp.Redacted)
 	// Created UNASSIGNED — a standalone copy of the group config.
@@ -1049,7 +1049,7 @@ func TestHandleAdoptConfig_PrefersAgentManagedConfig(t *testing.T) {
 	aid := agentID
 	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
 		ID:      uuid.New().String(),
-		Name:    "302vd-intent",
+		Name:    "linuxhost03-intent",
 		AgentID: &aid,
 		Content: adoptManagedTemplateConfig,
 		Version: 1,

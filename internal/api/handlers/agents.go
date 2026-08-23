@@ -890,7 +890,7 @@ func (h *AgentHandlers) HandlePurgeAgent(c *gin.Context) {
 
 // HandleDismissDuplicate is POST /api/v1/agents/:id/dismiss-duplicate.
 //
-// Backlog #5 (Southern log-fan-out incident). When Squadron flags a
+// Backlog #5 (Enterprise log-fan-out incident). When Squadron flags a
 // telemetry-only agent as a suspected duplicate of an OpAMP-managed agent on
 // the same host, the operator has two outs: Decommission (the phantom is real
 // junk — reuse DELETE /agents/:id) or Dismiss (this is a legitimate separate

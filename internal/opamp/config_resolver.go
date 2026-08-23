@@ -55,10 +55,10 @@ func resolveStoredConfig(ctx context.Context, svc services.AgentService, agent *
 // back to the group_id persisted for the agent in the store.
 //
 // The store fallback closes a connect-path ordering window that unwires a
-// group-config-only agent on reconnect (the Southern-pilot 302vd regression,
+// group-config-only agent on reconnect (the Enterprise-pilot linuxhost03 regression,
 // v0.89.471). processAgentGrouping (server.go) applies config INSIDE the message
 // handler, and it first clobbers the in-memory agent.GroupID to the just-reported
-// value — EMPTY for an agent whose southern-pilot membership lives only in the
+// value — EMPTY for an agent whose enterprise-pilot membership lives only in the
 // store (no group.* attribute on the wire). The persisted membership is only
 // restored later, in persistAgent (#36's preserve step / ensureAgentGroup
 // name->id resolution), which runs AFTER config has already been resolved. Without

@@ -19,7 +19,7 @@ import (
 //	host02.example.com
 //	10.10.40.7        ;  (also OK)
 //	# this is a comment
-//	GAXGPAP158UA ansible_user=foo      ; inline vars — first token is the host
+//	WINHOST01 ansible_user=foo      ; inline vars — first token is the host
 //
 //	[windows:vars]
 //	ansible_user=...                  ; var-only line, skipped

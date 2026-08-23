@@ -754,7 +754,7 @@ func TestPostgres_AutomationCRUD(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	gid := "southern-pilot"
+	gid := "enterprise-pilot"
 	a1 := &types.Automation{
 		ID:              "au1",
 		Name:            "restart unhealthy pilot collectors",

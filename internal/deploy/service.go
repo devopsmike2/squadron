@@ -199,7 +199,7 @@ func (s *Service) Trigger(ctx context.Context, req TriggerRequest) (*apptypes.De
 
 	// Step 2.5 (v0.34.1): when the target has an inventory path, fetch
 	// the file from GitHub and use the parsed hosts as the deploy's
-	// expected-host list. This matches the SouthernCo-style workflow
+	// expected-host list. This matches the ExampleCorp-style workflow
 	// where inventory.ini is checked in and the workflow's ansible
 	// step reads it via -i. The caller's req.ExpectedHosts is
 	// IGNORED in this mode — the checked-in file is the source of
@@ -911,8 +911,8 @@ const SilentThresholdForInventory = 10 * time.Minute
 // HostsWithLiveStatus pairs the parsed inventory hostnames with
 // their current OpAMP status. Hostname normalization mirrors the
 // v0.32 inventory reconciliation hostKey (lowercase + strip FQDN
-// suffix) so a checked-in `GAXGPAP158UA` matches an OpAMP agent
-// reporting as `gaxgpap158ua.example.com`.
+// suffix) so a checked-in `WINHOST01` matches an OpAMP agent
+// reporting as `winhost01.example.com`.
 func (s *Service) HostsWithLiveStatus(ctx context.Context, targetID string) (string, []HostLiveStatus, error) {
 	path, hosts, err := s.FetchInventory(ctx, targetID)
 	if err != nil {

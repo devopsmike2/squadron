@@ -17,7 +17,7 @@ func TestSQLiteAutomationCRUD(t *testing.T) {
 	withSQLiteStore(t, func(store types.ApplicationStore) {
 		ctx := context.Background()
 		now := time.Now().UTC().Truncate(time.Second)
-		gid := "southern-pilot"
+		gid := "enterprise-pilot"
 
 		a := &types.Automation{
 			ID:              "au1",

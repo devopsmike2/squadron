@@ -51,7 +51,7 @@ func TestHandleGetGroup_ReportsAgentCount(t *testing.T) {
 	groupID := "grp_members"
 	require.NoError(t, mockService.CreateGroup(ctx, &services.Group{
 		ID:   groupID,
-		Name: "southern-pilot",
+		Name: "enterprise-pilot",
 	}))
 	// A second group whose members must NOT be counted toward groupID.
 	otherGroupID := "grp_other"

@@ -290,7 +290,7 @@ func TestService_Trigger_UsesInventoryPathWhenSet(t *testing.T) {
 	}
 	provider := &fakeProvider{
 		fetched: map[string][]byte{
-			"winOtel/ansible/inventory.ini": []byte("[windows]\n#10.10.40.7\nGAXGPAP158UA\n"),
+			"winOtel/ansible/inventory.ini": []byte("[windows]\n#10.10.40.7\nWINHOST01\n"),
 		},
 	}
 	svc := NewService(store, provider, crypter, zap.NewNop())
@@ -304,7 +304,7 @@ func TestService_Trigger_UsesInventoryPathWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trigger: %v", err)
 	}
-	if len(run.ExpectedHosts) != 1 || run.ExpectedHosts[0] != "GAXGPAP158UA" {
+	if len(run.ExpectedHosts) != 1 || run.ExpectedHosts[0] != "WINHOST01" {
 		t.Fatalf("expected hosts from inventory.ini, got %v", run.ExpectedHosts)
 	}
 }
@@ -321,7 +321,7 @@ func TestService_FetchInventory(t *testing.T) {
 	}
 	provider := &fakeProvider{
 		fetched: map[string][]byte{
-			"winOtel/ansible/inventory.ini": []byte("[windows]\nGAXGPAP158UA\nhost02\n"),
+			"winOtel/ansible/inventory.ini": []byte("[windows]\nWINHOST01\nhost02\n"),
 		},
 	}
 	svc := NewService(store, provider, crypter, zap.NewNop())

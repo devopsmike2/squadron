@@ -121,7 +121,7 @@ type Agent struct {
 	// SuspectedDuplicateOf is computed on read (never persisted): set when this
 	// agent is a telemetry-only passive-OTLP registration that shares a host.name
 	// with an OpAMP-managed agent — the duplicate-identity resilience surface
-	// (backlog #5, Southern log-fan-out incident). nil for every agent that is
+	// (backlog #5, Enterprise log-fan-out incident). nil for every agent that is
 	// not a suspected duplicate, so the field is omitted from the wire in the
 	// common case. See detectDuplicates.
 	SuspectedDuplicateOf *SuspectedDuplicate `json:"suspected_duplicate_of,omitempty"`
@@ -243,7 +243,7 @@ type Group struct {
 // carries a nil map, and Go marshals a nil map as `null` — which the
 // UI's `labels: Record<string,string>` type does not expect. One
 // unguarded `Object.entries(null)` on the Groups page was enough to
-// crash the route and blank the app shell (the Southern-pilot field
+// crash the route and blank the app shell (the Enterprise-pilot field
 // bug). The frontend now guards its own access AND the route sits
 // behind an error boundary, but the wire shape should be internally
 // consistent regardless: some groups already serialize `{}` here, so

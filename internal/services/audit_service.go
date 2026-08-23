@@ -138,7 +138,7 @@ const (
 	// agent_id, config_hash, note.
 	AuditEventAgentConfigAdopted = "agent.config_adopted_on_supervise"
 
-	// Backlog #5 (Southern log-fan-out incident) — operator dismisses the
+	// Backlog #5 (Enterprise log-fan-out incident) — operator dismisses the
 	// suspected-duplicate flag on a telemetry-only agent, confirming it is a
 	// legitimate separate agent and not a phantom of an OpAMP-managed host.
 	// Emitted by POST /api/v1/agents/:id/dismiss-duplicate. Payload: agent_id,

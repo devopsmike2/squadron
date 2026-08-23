@@ -17,7 +17,7 @@ func TestMemoryAutomationCRUD(t *testing.T) {
 	store := NewStore()
 	ctx := context.Background()
 	now := time.Now().UTC()
-	gid := "southern-pilot"
+	gid := "enterprise-pilot"
 
 	a := &types.Automation{
 		ID:              "au1",

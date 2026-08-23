@@ -1,5 +1,5 @@
 # Example overlay tuned for the 46830-otel-nfs-ua project on
-# the southernco.com OpenShift cluster. Copy this directory,
+# the example.com OpenShift cluster. Copy this directory,
 # rename to overlays/<env>, and edit the patches for your
 # environment.
 
@@ -47,7 +47,7 @@ patches:
     patch: |
       - op: add
         path: /spec/host
-        value: squadron-46830-otel-nfs-ua.apps.osxgpch504np.southernco.com
+        value: squadron-46830-otel-nfs-ua.apps.ocp01.example.com
 
   # Tell the UI bundle which host the API is on, so the browser
   # makes API calls to the right address. Must match the Route
@@ -58,4 +58,4 @@ patches:
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/env/2/value
-        value: https://squadron-46830-otel-nfs-ua.apps.osxgpch504np.southernco.com
+        value: https://squadron-46830-otel-nfs-ua.apps.ocp01.example.com

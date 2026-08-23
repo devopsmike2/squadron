@@ -108,7 +108,7 @@ clear error.
 
 ### Pattern A: Hosts live in `inventory.ini` (Ansible)
 
-This is the Southern Company-style pattern. The host list is a
+This is the ExampleCorp-style pattern. The host list is a
 checked-in file; the workflow's only input is whatever knobs the
 operator twiddles per run (e.g. `filelog: yes/no`). Squadron reads
 the inventory at trigger time and uses the parsed host list to
@@ -123,7 +123,7 @@ on:
   workflow_dispatch:
     inputs:
       filelog:
-        description: "Collect Filelog [SouthernCo and IIS] data? (yes or no)"
+        description: "Collect Filelog [ExampleCorp and IIS] data? (yes or no)"
         required: true
         default: "no"
 
@@ -175,7 +175,7 @@ reconciliation surface.
 host01
 host02.example.com
 # 10.10.40.7  (commented entries are ignored)
-GAXGPAP158UA
+WINHOST01
 
 [windows:vars]
 ansible_user=svc-deploy  ; vars sections are ignored for host parsing
@@ -256,7 +256,7 @@ Squadron, your PagerDuty receiver gets paged.
   "requested_by": "miheanacho",
   "github_run_id": 4209876543,
   "github_run_url": "https://github.com/.../runs/4209876543",
-  "expected_hosts": ["GAXGPAP158UA"],
+  "expected_hosts": ["WINHOST01"],
   "started_at": "2026-06-13T22:14:33Z",
   "completed_at": "2026-06-13T22:16:07Z",
   "at": "2026-06-13T22:16:07Z"

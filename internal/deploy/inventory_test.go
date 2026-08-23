@@ -16,8 +16,8 @@ func TestParseInventoryHosts(t *testing.T) {
 	}{
 		{
 			name: "user provided shape",
-			in:   "[windows]\n#10.10.40.7\nGAXGPAP158UA\n",
-			want: []string{"GAXGPAP158UA"},
+			in:   "[windows]\n#10.10.40.7\nWINHOST01\n",
+			want: []string{"WINHOST01"},
 		},
 		{
 			name: "multiple groups, vars section ignored",

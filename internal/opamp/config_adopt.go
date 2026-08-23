@@ -26,7 +26,7 @@ import (
 // (otlp -> batch -> otlp(localhost:4317)) deep-merges over the agent's local base
 // config in the supervisor and REPLACES its wired service.pipelines, so a
 // brownfield collector's filelog/hostmetrics/otlphttp pipelines regress to
-// defined-but-unreferenced — the Southern-pilot regression documented in
+// defined-but-unreferenced — the Enterprise-pilot regression documented in
 // knowledge/2026-08-12-supervisor-initial-config-skeleton-clobber.md. Flip to
 // false via SetAdoptOnSupervise to restore the pre-0039 skeleton-always default.
 var adoptOnSuperviseEnabled = true

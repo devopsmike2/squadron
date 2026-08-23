@@ -112,7 +112,7 @@ func TestGHAWalker_RegistersHostsFromHistoricalRuns(t *testing.T) {
 		},
 		contentsByRef: map[string]map[string][]byte{
 			"sha-95": {
-				"winOtel/ansible/inventory.ini": []byte("[windows]\nGAXGPAP158UA\nhost02\n"),
+				"winOtel/ansible/inventory.ini": []byte("[windows]\nWINHOST01\nhost02\n"),
 			},
 			"sha-94": {
 				"winOtel/ansible/inventory.ini": []byte("[windows]\nhost-retired\n"),
@@ -126,13 +126,13 @@ func TestGHAWalker_RegistersHostsFromHistoricalRuns(t *testing.T) {
 		t.Fatalf("walk: %v", err)
 	}
 
-	// We expect GAXGPAP158UA + host02 (from sha-95) and host-retired
+	// We expect WINHOST01 + host02 (from sha-95) and host-retired
 	// (from sha-94). sha-94 should only be fetched once because of
 	// the dedup, even though two runs reference it.
 	if len(store.expected) != 3 {
 		t.Fatalf("expected 3 hosts upserted, got %d: %+v", len(store.expected), store.expected)
 	}
-	for _, host := range []string{"GAXGPAP158UA", "host02", "host-retired"} {
+	for _, host := range []string{"WINHOST01", "host02", "host-retired"} {
 		e, ok := store.expected[host]
 		if !ok {
 			t.Errorf("host %q not registered", host)

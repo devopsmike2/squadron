@@ -922,8 +922,8 @@ func buildConfigIntent(cfg *applicationstore.Config, source ConfigIntentSource, 
 // extension (ws://127.0.0.1:<port>, ppid) that is intentionally NOT in the
 // stored intent. That effective config therefore NEVER hash-matches the compact
 // stored intent even when the agent is running exactly what Squadron assigned,
-// which made every supervised agent show permanent benign "drift" (the Southern
-// 300vd / 302vd pilot finding). Instead of a full-content effective-vs-intent
+// which made every supervised agent show permanent benign "drift" (the Enterprise
+// linuxhost01 / linuxhost03 pilot finding). Instead of a full-content effective-vs-intent
 // compare, we ask "did the agent apply what Squadron sent?": if the hash of the
 // config the agent has confirmed applied (deliveredHash — stamped by the OpAMP
 // server when the agent echoes back the staged remote-config hash) equals the
@@ -932,7 +932,7 @@ func buildConfigIntent(cfg *applicationstore.Config, source ConfigIntentSource, 
 // This mirrors the HA reconciler's delivered-hash model
 // (internal/opamp/reconciler.go), reusing a signal Squadron already tracks.
 //
-// IMPORTANT (302vd — the miss #28/#32 left): the delivered Synced path is keyed
+// IMPORTANT (linuxhost03 — the miss #28/#32 left): the delivered Synced path is keyed
 // on the PRESENCE of the delivered hash, NOT on the persisted `supervised`
 // (accepts_remote_config) capability. delivered_config_hash is only ever stamped
 // for agents that advertised accepts_remote_config on the WIRE (opamp
@@ -942,7 +942,7 @@ func buildConfigIntent(cfg *applicationstore.Config, source ConfigIntentSource, 
 // column, by contrast, is written only by CreateAgent and never re-written by
 // UpdateAgentRegistration, so it is stale/absent for an already-applied
 // supervised agent whose row first registered via telemetry discovery — exactly
-// the 302vd fleet. #28 added this branch and #32 stamped the delivered hash, but
+// the linuxhost03 fleet. #28 added this branch and #32 stamped the delivered hash, but
 // both left this condition gated on that stale persisted flag, so the branch was
 // dead on the read path and the agent read permanent benign "drifted". Report-
 // only agents never get a delivered hash stamped, so keying on delivered presence
@@ -993,7 +993,7 @@ func computeConfigDrift(intent *ConfigIntent, effectiveConfig, deliveredHash str
 	// confirmed applying exactly the assigned config (delivered hash == intent
 	// hash), it is reconciled — the effective-vs-intent expansion diff is expected
 	// and must NOT read as drift. Deliberately NOT gated on the persisted
-	// `supervised` capability (see the 302vd note in the doc comment above): the
+	// `supervised` capability (see the linuxhost03 note in the doc comment above): the
 	// delivered hash is only ever stamped for wire-supervised agents, so trusting
 	// its presence fixes the already-applied supervised fleet whose persisted
 	// capability was lost, while leaving report-only agents (empty delivered)

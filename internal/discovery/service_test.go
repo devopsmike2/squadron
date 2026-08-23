@@ -62,7 +62,7 @@ func TestRegisterIfUnknown_CreatesNewAgent(t *testing.T) {
 
 	svc.RegisterIfUnknown(context.Background(), Observation{
 		AgentID:     agentID,
-		Hostname:    "GAXGPAP158UA",
+		Hostname:    "WINHOST01",
 		ServiceName: "otelcol-contrib",
 		Version:     "v0.105.0",
 	})
@@ -75,7 +75,7 @@ func TestRegisterIfUnknown_CreatesNewAgent(t *testing.T) {
 	if got == nil {
 		t.Fatal("agent was not stored")
 	}
-	if got.Name != "GAXGPAP158UA" {
+	if got.Name != "WINHOST01" {
 		t.Errorf("name = %q, want hostname", got.Name)
 	}
 	if got.DiscoverySource != "otlp" {
@@ -87,8 +87,8 @@ func TestRegisterIfUnknown_CreatesNewAgent(t *testing.T) {
 	// host.name is stamped as an explicit label so the duplicate-identity
 	// detector (backlog #5) has an authoritative host identity for this
 	// telemetry-only agent.
-	if got.Labels["host.name"] != "GAXGPAP158UA" {
-		t.Errorf("Labels[host.name] = %q, want GAXGPAP158UA", got.Labels["host.name"])
+	if got.Labels["host.name"] != "WINHOST01" {
+		t.Errorf("Labels[host.name] = %q, want WINHOST01", got.Labels["host.name"])
 	}
 }
 

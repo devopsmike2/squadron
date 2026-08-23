@@ -104,7 +104,7 @@ func TestAutomationService_UpdateAndEnable(t *testing.T) {
 	created, err := svc.CreateAutomation(ctx, AutomationInput{
 		Name:            "restart pilot group",
 		Enabled:         true,
-		GroupID:         strp("southern-pilot"),
+		GroupID:         strp("enterprise-pilot"),
 		Trigger:         AutomationTriggerAgentSilent,
 		Action:          AutomationActionSupervisorRestart,
 		CooldownSeconds: 120,
@@ -117,7 +117,7 @@ func TestAutomationService_UpdateAndEnable(t *testing.T) {
 	updated, err := svc.UpdateAutomation(ctx, created.ID, AutomationInput{
 		Name:            "restart pilot group v2",
 		Enabled:         true,
-		GroupID:         strp("southern-pilot"),
+		GroupID:         strp("enterprise-pilot"),
 		Trigger:         AutomationTriggerAgentUnhealthy,
 		Action:          AutomationActionSupervisorRestart,
 		CooldownSeconds: 200,
