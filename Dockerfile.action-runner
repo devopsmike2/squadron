@@ -12,7 +12,7 @@
 # =============================================================================
 # Stage 1: build the static runner binary (no cgo — no sqlite/duckdb).
 # =============================================================================
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -22,12 +22,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -o /out/squadron-action-runner ./cmd/sq
 # =============================================================================
 # Stage 2: minimal runtime with kubectl bundled.
 # =============================================================================
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# Pinned by digest for reproducible runner builds (tag kept for readability).
+# ubi9/ubi-minimal:9.8-1787647261 as resolved 2026-08-25.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1787647261@sha256:580752f96d36c4132bffd30f9c34865bf4bd87f6aa161c969d117f21732e50f7
 
+# kubectl is pinned AND checksum-verified: this binary execs against customer
+# clusters, so a poisoned/truncated download must fail the build. The SHA-256 is
+# the published dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256.
 ARG KUBECTL_VERSION=v1.30.5
+ARG KUBECTL_SHA256=b8aa921a580c3d8ba473236815de5ce5173d6fbfa2ccff453fa5eef46cc5ee7a
 RUN microdnf install -y ca-certificates tar gzip >/dev/null \
     && microdnf clean all \
     && curl -sSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && echo "${KUBECTL_SHA256}  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl
 
 COPY --from=build /out/squadron-action-runner /usr/local/bin/squadron-action-runner

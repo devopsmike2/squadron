@@ -50,7 +50,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26.7'
         cache: true
         
     # NOTE: intentionally NO manual actions/cache step here. `actions/setup-go`
@@ -148,7 +148,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26.7'
         cache: true
         
     # NOTE: intentionally NO manual actions/cache step here. `actions/setup-go`
@@ -247,7 +247,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25'
+        go-version: '1.26.7'
         cache: true
         
     - name: Set up Node.js
