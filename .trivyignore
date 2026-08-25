@@ -1,0 +1,21 @@
+# Trivy ignore file — Squadron OSS dependency-scan gate.
+#
+# The Trivy fs vuln job (.github/workflows/security.yml) gates on HIGH,CRITICAL
+# for Go module dependencies (it skips ui/, whose production deps are gated by
+# `npm audit --omit=dev --audit-level=high` against package-lock.json — CI's
+# actual install path). Frontend dev/build-tooling advisories are surfaced
+# non-gating in the Trivy SARIF upload to the Security tab.
+#
+# Every entry below is an ACCEPTED finding: reachability-cleared and fix-tracked.
+# A NEW HIGH/CRITICAL Go CVE that is not listed here turns the gate RED.
+# Do NOT add an entry without a justification + TODO.
+#
+# ---------------------------------------------------------------------------
+# golang.org/x/mod — two HIGH advisories, fixed in v0.40.0.
+#   govulncheck (the reachability gate) confirms x/mod is imported transitively
+#   but NOT call-graph-reachable from Squadron code, so these are not exploitable
+#   here. Accepted; bump opportunistically.
+#   TODO(security): `go get golang.org/x/mod@v0.40.0` then remove these two lines.
+#   Ref: docs/security-gates.md (trivy section).
+CVE-2026-56864
+CVE-2026-56865
