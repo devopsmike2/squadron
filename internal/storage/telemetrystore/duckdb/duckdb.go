@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/otlp"
@@ -14,6 +16,15 @@ import (
 	duckdb "github.com/marcboeker/go-duckdb"
 	"go.uber.org/zap"
 )
+
+// duckdbMemoryLimitRe constrains the operator-supplied DuckDB memory_limit to
+// the shapes DuckDB accepts — a byte count, a human-readable size (e.g. "4GB",
+// "512MiB"), or a percentage (e.g. "75%") — with no quotes, semicolons, or
+// whitespace that could break out of the SET string. Defense-in-depth: the
+// value already comes only from operator config (a flag or the
+// SQUADRON_DUCKDB_MEMORY_LIMIT env var), never from request/agent input, but we
+// validate before interpolating it into SET since DuckDB's SET has no bind form.
+var duckdbMemoryLimitRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?\s*([KMGTP]i?B|%)?$`)
 
 // Storage implements the TelemetryStorage interface using DuckDB
 type Storage struct {
@@ -73,8 +84,14 @@ func NewStorage(dbPath, memoryLimit string, logger *zap.Logger) (*Storage, error
 		limit = env
 	}
 	if limit != "" {
-		// DuckDB accepts a quoted human-readable size or percentage via SET.
-		if _, err := db.Exec(fmt.Sprintf("SET memory_limit='%s'", limit)); err != nil {
+		// Reject anything that isn't a plain size/percentage before it reaches SET.
+		if !duckdbMemoryLimitRe.MatchString(strings.TrimSpace(limit)) {
+			return nil, fmt.Errorf("invalid DuckDB memory_limit %q: expected a byte count, size (e.g. 4GB), or percentage (e.g. 75%%)", limit)
+		}
+		// DuckDB's SET has no parameter-bind form, so the (now-validated,
+		// operator-controlled) value is interpolated. Not attacker-reachable.
+		// #nosec G701 -- limit is operator config, regex-validated above; DuckDB SET has no bind form.
+		if _, err := db.Exec(fmt.Sprintf("SET memory_limit='%s'", strings.TrimSpace(limit))); err != nil {
 			return nil, fmt.Errorf("failed to set DuckDB memory_limit=%q: %w", limit, err)
 		}
 		logger.Info("DuckDB memory_limit set", zap.String("memory_limit", limit))

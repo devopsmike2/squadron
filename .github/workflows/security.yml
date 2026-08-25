@@ -1,0 +1,159 @@
+# Security gates for Squadron (OSS).
+#
+# Baselined so `main` is GREEN today while any NEW high/critical finding turns
+# a gate RED. What each gate covers and every allowlist/baseline entry is
+# documented in docs/security-gates.md and inline in the config files:
+#   - govulncheck  -> .govulncheck-allow.txt   (reachable Go vulns; GO-2026-5158 deferred)
+#   - gosec        -> #nosec annotations        (high/high SAST; see duckdb.go G701)
+#   - gitleaks     -> .gitleaks.toml            (secret scan; test-fixture allowlist)
+#   - trivy (Go)   -> .trivyignore              (Go dep HIGH/CRITICAL; x/mod unreachable)
+#   - npm audit    -> (none; prod tree is clean)(JS prod deps, --omit=dev high+)
+#   - syft SBOM    -> artifact (non-gating)
+#
+# Runs on PRs and pushes to main.
+name: Security
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (reachable Go vulns)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.7'
+          cache: true
+      - name: Install govulncheck (pinned)
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: Run govulncheck gate
+        # Fails on any REACHABLE vuln not listed in .govulncheck-allow.txt.
+        run: bash scripts/govulncheck-gate.sh .govulncheck-allow.txt
+
+  gosec:
+    name: gosec (SAST, high severity + high confidence)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.7'
+          cache: true
+      - name: Install gosec (pinned)
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+      - name: Run gosec gate
+        # Low-noise: only High-severity AND High-confidence findings fail the
+        # build. Non-test code only (gosec skips *_test.go by default), so the
+        # synthetic-secret fixtures never trip it. Baseline: one justified
+        # #nosec G701 in internal/storage/telemetrystore/duckdb/duckdb.go.
+        run: gosec -severity high -confidence high -fmt sarif -out gosec.sarif ./...
+      - name: Upload gosec SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -C /usr/local/bin -xzf /tmp/gitleaks.tgz gitleaks
+          gitleaks version
+      - name: Run gitleaks gate
+        # Scans the checked-out tree; .gitleaks.toml extends the default ruleset
+        # and allowlists only known non-secret fixtures/labels/UI examples.
+        run: gitleaks dir . --config .gitleaks.toml --redact --exit-code 1 --no-banner --verbose
+
+  trivy-deps:
+    name: Trivy (Go dependency vulns, HIGH/CRITICAL)
+    runs-on: ubuntu-latest
+    env:
+      # Let Trivy authenticate its GitHub-hosted DB/metadata pulls to avoid
+      # unauthenticated rate limits (the flaky part of the setup action).
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Trivy (pinned)
+        # Direct release-tarball download (the install.sh / trivy-action setup
+        # both failed resolving a non-existent version). v0.73.0 matches the CLI
+        # invocation validated locally.
+        run: |
+          TRIVY_VERSION=0.73.0
+          curl -sSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          sudo tar -C /usr/local/bin -xzf /tmp/trivy.tgz trivy
+          trivy --version
+      - name: Trivy fs vuln gate (Go deps)
+        # Gates on HIGH,CRITICAL for the Go module graph. ui/ is skipped here —
+        # its production deps are gated by the npm-audit job (CI installs with
+        # `npm ci` from package-lock.json). Accepted Go CVEs live in .trivyignore.
+        run: |
+          trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+            --ignore-unfixed=false --skip-dirs ui --ignorefile .trivyignore \
+            --no-progress .
+      - name: Trivy fs full SARIF (non-gating, all severities)
+        # Informational: surfaces the full picture (incl. frontend dev/build
+        # tooling) in the Security tab without failing the build.
+        if: always()
+        run: |
+          trivy fs --scanners vuln --format sarif --output trivy-results.sarif \
+            --no-progress . || true
+      - name: Upload Trivy SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: trivy-fs
+
+  npm-audit:
+    name: npm audit (UI production deps, high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Audit UI production dependencies
+        # Reads ui/package-lock.json (CI's install source). Fails on HIGH or
+        # CRITICAL advisories in the PRODUCTION dep tree. Dev/build-tooling
+        # advisories are excluded (surfaced non-gating in the Trivy SARIF).
+        working-directory: ui
+        run: npm audit --omit=dev --audit-level=high
+
+  sbom:
+    name: SBOM (syft, non-gating artifact)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.17.9
+        with:
+          path: '.'
+          format: spdx-json
+          output-file: squadron-sbom.spdx.json
+          upload-artifact: false
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: squadron-sbom-spdx
+          path: squadron-sbom.spdx.json
+          if-no-files-found: error

@@ -1,0 +1,19 @@
+# govulncheck reachable-vulnerability allowlist (Squadron OSS)
+#
+# The govulncheck CI gate (scripts/govulncheck-gate.sh) FAILS on any REACHABLE
+# (call-graph-reachable) Go vulnerability whose OSV ID is NOT listed here.
+# Add an entry ONLY for a vuln that is reachable today and consciously deferred,
+# always with a TODO to remove it once fixed. NEW reachable vulns are RED by design.
+#
+# Format: one OSV ID per line. `#` starts a comment. Blank lines ignored.
+#
+# ---------------------------------------------------------------------------
+# GO-2026-5158 — go.opentelemetry.io/otel baggage: DoS via malformed baggage.
+#   Reachable via the OTLP receive/telemetry path (otel@1.43.0). DEFERRED
+#   pending a COORDINATED bump of the whole otel module set (otel core + the
+#   otlp trace/metric gRPC exporters, which must move in lockstep to a release
+#   that carries the fix). Tracked for the next otel bump.
+#   TODO(security): after `go get go.opentelemetry.io/otel@<fixed>` (+ exporters)
+#   and `govulncheck ./...` shows 0 reachable, DELETE this line.
+#   Ref: docs/security-gates.md (govulncheck section).
+GO-2026-5158
