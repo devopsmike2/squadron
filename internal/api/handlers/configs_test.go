@@ -27,6 +27,24 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+// validGroupConfigYAML is a minimal, well-formed otelcol config used by the
+// group-create tests. Group configs are DELIVERED to every agent in the group,
+// so HandleCreateConfig now validates them before creating a version (WA4.2);
+// these tests therefore need real YAML, not the placeholder scalar the
+// non-delivering (agent-scoped / empty-group) create tests still use.
+const validGroupConfigYAML = `receivers:
+  otlp:
+    protocols:
+      grpc:
+exporters:
+  otlp:
+    endpoint: localhost:4317
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]`
+
 // mockCommander is a mock implementation of AgentCommander that tracks calls
 type mockCommander struct {
 	sendConfigToAgentCalls         []sendConfigToAgentCall
@@ -285,7 +303,7 @@ func TestHandleCreateConfig_GroupConfig_ServiceError(t *testing.T) {
 	mockService.CreateConfigErr = fmt.Errorf("database error")
 
 	groupID := "test-group-1"
-	configContent := "test-config-content"
+	configContent := validGroupConfigYAML
 	configHash := fmt.Sprintf("%x", []byte(configContent))
 	req := CreateConfigRequest{
 		Name:       "test-config",
@@ -346,7 +364,7 @@ func TestHandleCreateConfig_GroupConfig_WithMultipleAgents(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create config request for the group
-	configContent := "test-config-content"
+	configContent := validGroupConfigYAML
 	configHash := fmt.Sprintf("%x", []byte(configContent))
 	req := CreateConfigRequest{
 		Name:       "test-config",

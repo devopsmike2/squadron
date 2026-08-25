@@ -349,6 +349,15 @@ func (h *GroupHandlers) HandleAssignConfig(c *gin.Context) {
 		return
 	}
 
+	// Validate the config content BEFORE creating a group config version or
+	// delivering it to every agent in the group. Squadron must never push a
+	// config it hasn't validated (WA4.2). Reuses the /configs/validate logic and
+	// mirrors its error shape.
+	if errs := validateConfigForDelivery(config.Content); len(errs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "errors": errs})
+		return
+	}
+
 	// Update config to be assigned to this group
 	newConfig := &services.Config{
 		ID:         uuid.New().String(),

@@ -136,6 +136,18 @@ func (h *ConfigHandlers) HandleCreateConfig(c *gin.Context) {
 		return
 	}
 
+	// A group config created here is DELIVERED to every agent in the group below
+	// (SendConfigToAgentsInGroup), so validate it first — Squadron must never
+	// create a version or deliver malformed content (WA4.2). Agent-scoped /
+	// ungrouped configs created here are not delivered by this handler; they are
+	// validated at their delivery path (HandleSendConfigToAgent / group assign).
+	if req.GroupID != nil && *req.GroupID != "" {
+		if errs := validateConfigForDelivery(req.Content); len(errs) > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"valid": false, "errors": errs})
+			return
+		}
+	}
+
 	// Generate UUID for the config
 	configID := uuid.New().String()
 
@@ -554,6 +566,30 @@ func (h *ConfigHandlers) HandleGetConfigVersions(c *gin.Context) {
 // Validation helper functions
 
 // validateYAMLConfig validates YAML syntax
+// validateConfigForDelivery runs the same hard validation the
+// POST /api/v1/configs/validate endpoint applies (YAML syntax, then otelcol
+// config parse) and returns the resulting error messages; a nil/empty slice
+// means the config is valid. Warnings (validateOTelConfig's recommended-section
+// notes) are non-blocking and intentionally NOT returned here.
+//
+// This is the single validation funnel the config-assign/push paths reuse
+// (HandleSendConfigToAgent, GroupHandlers.HandleAssignConfig, and the
+// group-delivering branch of HandleCreateConfig) so Squadron never creates a
+// config version or delivers a config it has not validated. It closes the WA4.2
+// field gap: those paths returned HTTP 200 and delivered malformed YAML to agents
+// because only the dedicated /configs/validate endpoint ran this logic. Callers
+// reject with 400 and the returned errors, mirroring /validate's error shape
+// ({"valid": false, "errors": [...]}).
+func validateConfigForDelivery(content string) []string {
+	if err := validateYAMLConfig(content); err != nil {
+		return []string{err.Error()}
+	}
+	if _, err := validateOTelConfig(content); err != nil {
+		return []string{err.Error()}
+	}
+	return nil
+}
+
 func validateYAMLConfig(content string) error {
 	var config map[string]interface{}
 	if err := yaml.Unmarshal([]byte(content), &config); err != nil {
