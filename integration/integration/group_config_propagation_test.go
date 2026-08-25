@@ -166,8 +166,21 @@ func TestGroupConfigPropagation_ViaAssignEndpoint(t *testing.T) {
 	groupID, ok := createdGroup["id"].(string)
 	require.True(t, ok)
 
-	// Step 2: Create a config (not assigned to group yet)
-	configContent := "test-config-content"
+	// Step 2: Create a config (not assigned to group yet).
+	// Must be well-formed otelcol YAML: group assign now validates config content
+	// server-side before delivering it (WA4.2 validate-before-push).
+	configContent := `receivers:
+  otlp:
+    protocols:
+      grpc:
+exporters:
+  otlp:
+    endpoint: localhost:4317
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]`
 	configHash := "test-hash"
 	configData := map[string]interface{}{
 		"name":        "Unassigned Config",
