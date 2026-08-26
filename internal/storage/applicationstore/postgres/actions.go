@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -50,12 +51,19 @@ func (s *Storage) CreateActionRunnerRegistration(ctx context.Context, r *types.A
 	if r.LastSeenAt.IsZero() {
 		r.LastSeenAt = r.RegisteredAt
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO action_runner_registrations
-		  (runner_id, hostname, public_key_pem, capabilities_json, registered_at, last_seen_at, revoked_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		  (runner_id, hostname, public_key_pem, capabilities_json, registered_at, last_seen_at, revoked_at, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		r.RunnerID, r.Hostname, r.PublicKeyPEM, r.CapabilitiesJSON,
-		r.RegisteredAt, r.LastSeenAt, r.RevokedAt)
+		r.RegisteredAt, r.LastSeenAt, r.RevokedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create action runner registration: %w", err)
 	}
@@ -63,11 +71,20 @@ func (s *Storage) CreateActionRunnerRegistration(ctx context.Context, r *types.A
 }
 
 func (s *Storage) UpdateActionRunnerRegistration(ctx context.Context, r *types.ActionRunnerRegistration) error {
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE action_runner_registrations
 		   SET hostname = $2, public_key_pem = $3, capabilities_json = $4, last_seen_at = $5, revoked_at = $6
-		 WHERE runner_id = $1`,
-		r.RunnerID, r.Hostname, r.PublicKeyPEM, r.CapabilitiesJSON, r.LastSeenAt, r.RevokedAt)
+		 WHERE runner_id = $1`
+	args := []any{r.RunnerID, r.Hostname, r.PublicKeyPEM, r.CapabilitiesJSON, r.LastSeenAt, r.RevokedAt}
+	if apply {
+		query += ` AND tenant_id = $7`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update action runner registration: %w", err)
 	}
@@ -78,9 +95,19 @@ func (s *Storage) UpdateActionRunnerRegistration(ctx context.Context, r *types.A
 }
 
 func (s *Storage) GetActionRunnerRegistration(ctx context.Context, runnerID string) (*types.ActionRunnerRegistration, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT runner_id, hostname, public_key_pem, capabilities_json, registered_at, last_seen_at, revoked_at
-		  FROM action_runner_registrations WHERE runner_id = $1`, runnerID)
+		  FROM action_runner_registrations WHERE runner_id = $1`
+	args := []any{runnerID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanActionRunnerRegistration(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -89,9 +116,20 @@ func (s *Storage) GetActionRunnerRegistration(ctx context.Context, runnerID stri
 }
 
 func (s *Storage) ListActionRunnerRegistrations(ctx context.Context) ([]*types.ActionRunnerRegistration, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT runner_id, hostname, public_key_pem, capabilities_json, registered_at, last_seen_at, revoked_at
-		  FROM action_runner_registrations ORDER BY registered_at DESC`)
+		  FROM action_runner_registrations`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY registered_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list action runner registrations: %w", err)
 	}
@@ -108,8 +146,17 @@ func (s *Storage) ListActionRunnerRegistrations(ctx context.Context) ([]*types.A
 }
 
 func (s *Storage) RevokeActionRunnerRegistration(ctx context.Context, runnerID string, at time.Time) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE action_runner_registrations SET revoked_at = $2 WHERE runner_id = $1`, runnerID, at)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE action_runner_registrations SET revoked_at = $2 WHERE runner_id = $1`
+	args := []any{runnerID, at}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("revoke action runner registration: %w", err)
 	}
@@ -145,13 +192,20 @@ func (s *Storage) CreateActionRequest(ctx context.Context, r *types.ActionReques
 	if r.Status == "" {
 		r.Status = "pending"
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO action_requests (`+actionRequestColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO action_requests (`+actionRequestColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		r.ID, nullString(r.ProposalID), r.RunnerID, r.ActionType, r.ParametersJSON,
 		r.Signature, r.Phase, r.Status, nullString(r.DeniedFor),
 		nullString(r.DryRunOutputJSON), nullString(r.ExecutionOutputJSON),
-		r.IssuedAt, r.ExpiresAt, r.StartedAt, r.CompletedAt)
+		r.IssuedAt, r.ExpiresAt, r.StartedAt, r.CompletedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create action request: %w", err)
 	}
@@ -162,15 +216,26 @@ func (s *Storage) CreateActionRequest(ctx context.Context, r *types.ActionReques
 // immutable fields (id, signature, parameters, phase, issued_at, expires_at) are
 // left as written at create time, mirroring the sqlite backend.
 func (s *Storage) UpdateActionRequest(ctx context.Context, r *types.ActionRequest) error {
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE action_requests
 		   SET status = $2, denied_for = $3,
 		       dry_run_output_json = $4, execution_output_json = $5,
 		       started_at = $6, completed_at = $7
-		 WHERE id = $1`,
+		 WHERE id = $1`
+	args := []any{
 		r.ID, r.Status, nullString(r.DeniedFor),
 		nullString(r.DryRunOutputJSON), nullString(r.ExecutionOutputJSON),
-		r.StartedAt, r.CompletedAt)
+		r.StartedAt, r.CompletedAt,
+	}
+	if apply {
+		query += ` AND tenant_id = $8`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update action request: %w", err)
 	}
@@ -181,7 +246,17 @@ func (s *Storage) UpdateActionRequest(ctx context.Context, r *types.ActionReques
 }
 
 func (s *Storage) GetActionRequest(ctx context.Context, id string) (*types.ActionRequest, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+actionRequestColumns+` FROM action_requests WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + actionRequestColumns + ` FROM action_requests WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanActionRequest(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -190,9 +265,18 @@ func (s *Storage) GetActionRequest(ctx context.Context, id string) (*types.Actio
 }
 
 func (s *Storage) ListActionRequests(ctx context.Context, filter types.ActionRequestFilter) ([]*types.ActionRequest, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + actionRequestColumns + ` FROM action_requests WHERE 1=1`
 	var args []any
 	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	if filter.ProposalID != "" {
 		n++
 		query += fmt.Sprintf(" AND proposal_id = $%d", n)

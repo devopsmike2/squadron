@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -661,6 +662,83 @@ CREATE TABLE IF NOT EXISTS connection_registry (
     last_heartbeat_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_connection_registry_heartbeat ON connection_registry(last_heartbeat_at);
+
+-- ============================================================================
+-- ADR 0043 — Postgres store tenant isolation. Bring the Postgres app store to
+-- parity with the known-good SQLite backend: every per-tenant table gains a
+-- tenant_id column and the query layer (see the per-entity Go files) threads a
+-- 'AND tenant_id = $n' predicate onto every read/update/delete keyed by id/name
+-- and stamps tenant_id on every insert — a line-for-line mirror of sqlite.
+--
+-- RESOLVED DECISION (ADR 0043): tenant_id is added NULLABLE with NO DEFAULT so
+-- the commingling AUDIT (AuditTenantCommingling) reads legacy rows as a NULL
+-- tenant_id — there is NO blind backfill. NEW writes stamp the resolved tenant
+-- (identity.DefaultTenant when the context is unstamped, mirroring sqlite). An
+-- operator runs the audit, confirms no commingling, then arms strict scoping.
+--
+-- Every statement is idempotent (ADD COLUMN IF NOT EXISTS / DROP CONSTRAINT IF
+-- EXISTS / CREATE [UNIQUE] INDEX IF NOT EXISTS) so a fresh database and a
+-- migrated pilot PVC converge to the identical shape.
+-- ============================================================================
+ALTER TABLE agents                       ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE configs                      ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE rollouts                     ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE saved_queries                ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE alert_rules                  ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE automations                  ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE recommendation_outcomes      ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE cost_spike_events            ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE deploy_runs                  ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE siem_destinations            ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE action_requests              ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE incident_drafts              ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE discovery_scans              ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE recommendation_dismissals    ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE expected_agents              ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE action_runner_registrations  ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE iac_recommendation_verdicts  ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE trace_resource_seen          ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+
+-- Indexed tenant predicate for the id-keyed tables (mirrors sqlite's per-tenant
+-- indexes; keeps the added 'AND tenant_id = $n' cheap).
+CREATE INDEX IF NOT EXISTS idx_agents_tenant              ON agents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_configs_tenant             ON configs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_rollouts_tenant            ON rollouts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_saved_queries_tenant       ON saved_queries(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_automations_tenant         ON automations(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_rec_outcomes_tenant        ON recommendation_outcomes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cost_spikes_tenant         ON cost_spike_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_deploy_runs_tenant         ON deploy_runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_siem_destinations_tenant   ON siem_destinations(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_action_requests_tenant     ON action_requests(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_incident_drafts_tenant     ON incident_drafts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_discovery_scans_tenant     ON discovery_scans(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_deploy_targets_tenant      ON deploy_targets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_tenant          ON api_tokens(tenant_id);
+
+-- Natural-key tables: rebuild uniqueness to (tenant_id, <natural key>) so two
+-- tenants can each own a row with the same natural key — the same isolation the
+-- SQLite composite PRIMARY KEY (tenant_id, <key>) provides. tenant_id is NULLABLE
+-- (see above) so it cannot sit in a Postgres PRIMARY KEY (PK columns are implicitly
+-- NOT NULL); a composite UNIQUE INDEX gives identical per-tenant uniqueness and is
+-- the ON CONFLICT arbiter the upserts target. NEW writes always stamp a non-null
+-- tenant_id so the arbiter dedupes correctly; the pre-existing single-column PK
+-- guaranteed ≤1 legacy (NULL-tenant) row per natural key, which the audit surfaces.
+ALTER TABLE expected_agents             DROP CONSTRAINT IF EXISTS expected_agents_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_expected_agents_tenant_host   ON expected_agents(tenant_id, hostname);
+ALTER TABLE recommendation_dismissals   DROP CONSTRAINT IF EXISTS recommendation_dismissals_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_rec_dismissals_tenant_rec     ON recommendation_dismissals(tenant_id, recommendation_id);
+ALTER TABLE action_runner_registrations DROP CONSTRAINT IF EXISTS action_runner_registrations_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_action_runner_reg_tenant      ON action_runner_registrations(tenant_id, runner_id);
+ALTER TABLE iac_recommendation_verdicts DROP CONSTRAINT IF EXISTS iac_recommendation_verdicts_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_iac_rec_verdicts_tenant_rec   ON iac_recommendation_verdicts(tenant_id, recommendation_id);
+ALTER TABLE trace_resource_seen         DROP CONSTRAINT IF EXISTS trace_resource_seen_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_trace_resource_seen_tenant    ON trace_resource_seen(tenant_id, resource_key);
+
+-- alert_rules: per-tenant unique name (was UNIQUE(name)); mirrors sqlite's
+-- UNIQUE(tenant_id, name) so two tenants can each own a rule of the same name.
+ALTER TABLE alert_rules DROP CONSTRAINT IF EXISTS alert_rules_name_key;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_alert_rules_tenant_name ON alert_rules(tenant_id, name);
 `
 
 // schemaInitLockKey is the fixed 64-bit key for the Postgres transaction-scoped
@@ -722,11 +800,18 @@ func (s *Storage) CreateGroup(ctx context.Context, g *types.Group) error {
 	if err != nil {
 		return fmt.Errorf("marshal labels: %w", err)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO groups (`+groupColumns+`)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		g.ID, g.Name, labels, g.RequireApproval, g.RequireApprovalForRollback,
-		g.ChangeWindowsJSON, g.LearnFromVerdicts, g.TenantID, g.CreatedAt, g.UpdatedAt)
+		g.ChangeWindowsJSON, g.LearnFromVerdicts, tenant, g.CreatedAt, g.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create group: %w", err)
 	}
@@ -734,7 +819,17 @@ func (s *Storage) CreateGroup(ctx context.Context, g *types.Group) error {
 }
 
 func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+groupColumns+` FROM groups WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + groupColumns + ` FROM groups WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	g, err := scanGroup(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -743,7 +838,18 @@ func (s *Storage) GetGroup(ctx context.Context, id string) (*types.Group, error)
 }
 
 func (s *Storage) ListGroups(ctx context.Context) ([]*types.Group, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+groupColumns+` FROM groups ORDER BY created_at`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + groupColumns + ` FROM groups`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
@@ -764,13 +870,22 @@ func (s *Storage) UpdateGroup(ctx context.Context, g *types.Group) error {
 	if err != nil {
 		return fmt.Errorf("marshal labels: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE groups SET name=$2, labels=$3, require_approval=$4,
 			require_approval_for_rollback=$5, change_windows=$6,
 			learn_from_verdicts=$7, updated_at=$8
-		WHERE id=$1`,
-		g.ID, g.Name, labels, g.RequireApproval, g.RequireApprovalForRollback,
-		g.ChangeWindowsJSON, g.LearnFromVerdicts, g.UpdatedAt)
+		WHERE id=$1`
+	args := []any{g.ID, g.Name, labels, g.RequireApproval, g.RequireApprovalForRollback,
+		g.ChangeWindowsJSON, g.LearnFromVerdicts, g.UpdatedAt}
+	if apply {
+		query += ` AND tenant_id = $9`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update group: %w", err)
 	}
@@ -788,20 +903,42 @@ func (s *Storage) UpdateGroup(ctx context.Context, g *types.Group) error {
 // pilot PVC (adding one in place is unsafe; see the schema note), so the cleanup
 // is done here to be correct on existing and fresh deployments alike.
 func (s *Storage) DeleteGroup(ctx context.Context, id string) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin delete group tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE agents SET group_id=NULL, group_name=NULL, updated_at=now() WHERE group_id=$1`, id); err != nil {
+	nullQ := `UPDATE agents SET group_id=NULL, group_name=NULL, updated_at=now() WHERE group_id=$1`
+	nullArgs := []any{id}
+	if apply {
+		nullQ += ` AND tenant_id = $2`
+		nullArgs = append(nullArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, nullQ, nullArgs...); err != nil {
 		return fmt.Errorf("clear agent group membership: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM configs WHERE group_id=$1`, id); err != nil {
+	cfgQ := `DELETE FROM configs WHERE group_id=$1`
+	cfgArgs := []any{id}
+	if apply {
+		cfgQ += ` AND tenant_id = $2`
+		cfgArgs = append(cfgArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, cfgQ, cfgArgs...); err != nil {
 		return fmt.Errorf("delete group configs: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM groups WHERE id=$1`, id)
+	delQ := `DELETE FROM groups WHERE id=$1`
+	delArgs := []any{id}
+	if apply {
+		delQ += ` AND tenant_id = $2`
+		delArgs = append(delArgs, tenant)
+	}
+	res, err := tx.ExecContext(ctx, delQ, delArgs...)
 	if err != nil {
 		return fmt.Errorf("delete group: %w", err)
 	}
@@ -868,6 +1005,13 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	if source == "" {
 		source = "opamp"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	// Revive-on-reconnect — mirrors the sqlite store. DeleteAgent soft-deletes
 	// (tombstones) an agent, keeping the PRIMARY-KEY row for the CIP-007-6 R4.3
 	// audit trail; a plain INSERT then collided with that row on every OpAMP
@@ -880,8 +1024,8 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 	// no name, so overwriting would blank the fleet card to "unknown" until the
 	// next re-identify — keep the stored last-known name unless a real one arrives.
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		INSERT INTO agents (id, name, labels, status, last_seen, group_id, group_name, version, capabilities, discovery_source, tenant_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (id) DO UPDATE SET
 			name = CASE WHEN excluded.name = '' THEN agents.name ELSE excluded.name END,
 			labels = excluded.labels,
@@ -892,12 +1036,13 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 			version = excluded.version,
 			capabilities = excluded.capabilities,
 			discovery_source = excluded.discovery_source,
+			tenant_id = excluded.tenant_id,
 			updated_at = excluded.updated_at,
 			deleted_at = NULL
 		WHERE agents.deleted_at IS NOT NULL`,
 		agent.ID.String(), agent.Name, labels, string(agent.Status), agent.LastSeen,
 		agent.GroupID, agent.GroupName, agent.Version, capabilities, source,
-		agent.CreatedAt, agent.UpdatedAt)
+		tenant, agent.CreatedAt, agent.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create agent: %w", err)
 	}
@@ -908,8 +1053,17 @@ func (s *Storage) CreateAgent(ctx context.Context, agent *types.Agent) error {
 }
 
 func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+agentColumns+` FROM agents WHERE id = $1 AND deleted_at IS NULL`, id.String())
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + agentColumns + ` FROM agents WHERE id = $1 AND deleted_at IS NULL`
+	args := []any{id.String()}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	a, err := scanAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -918,8 +1072,18 @@ func (s *Storage) GetAgent(ctx context.Context, id uuid.UUID) (*types.Agent, err
 }
 
 func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+agentColumns+` FROM agents WHERE deleted_at IS NULL ORDER BY created_at DESC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + agentColumns + ` FROM agents WHERE deleted_at IS NULL`
+	var args []any
+	if apply {
+		query += ` AND tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
@@ -936,8 +1100,17 @@ func (s *Storage) ListAgents(ctx context.Context) ([]*types.Agent, error) {
 }
 
 func (s *Storage) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status types.AgentStatus) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET status=$2, updated_at=now() WHERE id=$1`, id.String(), string(status))
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE agents SET status=$2, updated_at=now() WHERE id=$1`
+	args := []any{id.String(), string(status)}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update agent status: %w", err)
 	}
@@ -948,8 +1121,17 @@ func (s *Storage) UpdateAgentStatus(ctx context.Context, id uuid.UUID, status ty
 }
 
 func (s *Storage) UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSeen time.Time) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET last_seen=$2, updated_at=now() WHERE id=$1`, id.String(), lastSeen)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE agents SET last_seen=$2, updated_at=now() WHERE id=$1`
+	args := []any{id.String(), lastSeen}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update agent last seen: %w", err)
 	}
@@ -960,8 +1142,17 @@ func (s *Storage) UpdateAgentLastSeen(ctx context.Context, id uuid.UUID, lastSee
 }
 
 func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, effectiveConfig string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET effective_config=$2, updated_at=now() WHERE id=$1`, id.String(), effectiveConfig)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE agents SET effective_config=$2, updated_at=now() WHERE id=$1`
+	args := []any{id.String(), effectiveConfig}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update agent effective config: %w", err)
 	}
@@ -975,8 +1166,17 @@ func (s *Storage) UpdateAgentEffectiveConfig(ctx context.Context, id uuid.UUID, 
 // agent has confirmed applied (the DELIVERED/APPLIED signal, ADR 0040). Mirrors
 // UpdateAgentEffectiveConfig's not-found semantics.
 func (s *Storage) UpdateAgentDeliveredConfigHash(ctx context.Context, id uuid.UUID, hash string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET delivered_config_hash=$2, updated_at=now() WHERE id=$1`, id.String(), hash)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE agents SET delivered_config_hash=$2, updated_at=now() WHERE id=$1`
+	args := []any{id.String(), hash}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update agent delivered config hash: %w", err)
 	}
@@ -1005,16 +1205,25 @@ func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agen
 	if len(agent.Capabilities) == 0 {
 		capabilities = []byte("[]")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	// Preserve name on empty, mirroring the capabilities CASE: a description-less
 	// (re)connect carries no name and must not blank a live agent's display name.
-	res, err := s.db.ExecContext(ctx, `
+	query := `
 		UPDATE agents SET name = CASE WHEN $2 = '' THEN name ELSE $2 END,
 			labels=$3, version=$4, group_id=$5, group_name=$6,
 			capabilities = CASE WHEN $7::jsonb = '[]'::jsonb THEN capabilities ELSE $7::jsonb END,
 			updated_at=now()
-		WHERE id=$1 AND deleted_at IS NULL`,
-		agent.ID.String(), agent.Name, labels, agent.Version, agent.GroupID, agent.GroupName,
-		string(capabilities))
+		WHERE id=$1 AND deleted_at IS NULL`
+	args := []any{agent.ID.String(), agent.Name, labels, agent.Version, agent.GroupID, agent.GroupName,
+		string(capabilities)}
+	if apply {
+		query += ` AND tenant_id = $8`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update agent registration: %w", err)
 	}
@@ -1029,10 +1238,18 @@ func (s *Storage) UpdateAgentRegistration(ctx context.Context, agent *types.Agen
 // including the "agent not found" error when the row is missing or already
 // tombstoned.
 func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET deleted_at=$2, updated_at=$3 WHERE id=$1 AND deleted_at IS NULL`,
-		id.String(), now, now)
+	query := `UPDATE agents SET deleted_at=$2, updated_at=$3 WHERE id=$1 AND deleted_at IS NULL`
+	args := []any{id.String(), now, now}
+	if apply {
+		query += ` AND tenant_id = $4`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}
@@ -1046,10 +1263,18 @@ func (s *Storage) DeleteAgent(ctx context.Context, id uuid.UUID) error {
 // sqlite store). Operator recovery path for a decommissioned agent that will
 // not self-revive on OpAMP reconnect. Errors if no tombstoned row exists.
 func (s *Storage) RestoreAgent(ctx context.Context, id uuid.UUID) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE agents SET deleted_at=NULL, updated_at=$2 WHERE id=$1 AND deleted_at IS NOT NULL`,
-		id.String(), now)
+	query := `UPDATE agents SET deleted_at=NULL, updated_at=$2 WHERE id=$1 AND deleted_at IS NOT NULL`
+	args := []any{id.String(), now}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("restore agent: %w", err)
 	}
@@ -1063,7 +1288,17 @@ func (s *Storage) RestoreAgent(ctx context.Context, id uuid.UUID) error {
 // audit-retention row DeleteAgent keeps, so it is gated behind agents:admin at
 // the API. Mirrors the sqlite store.
 func (s *Storage) PurgeAgent(ctx context.Context, id uuid.UUID) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE id=$1`, id.String())
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM agents WHERE id=$1`
+	args := []any{id.String()}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("purge agent: %w", err)
 	}
@@ -1121,11 +1356,18 @@ func scanAgent(sc scanner) (*types.Agent, error) {
 const configColumns = `id, name, agent_id, group_id, config_hash, content, version, created_at, archived_at`
 
 func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO configs (`+configColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO configs (`+configColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		config.ID, config.Name, config.AgentID, config.GroupID,
-		config.ConfigHash, config.Content, config.Version, config.CreatedAt, config.ArchivedAt)
+		config.ConfigHash, config.Content, config.Version, config.CreatedAt, config.ArchivedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create config: %w", err)
 	}
@@ -1133,7 +1375,17 @@ func (s *Storage) CreateConfig(ctx context.Context, config *types.Config) error 
 }
 
 func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+configColumns+` FROM configs WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + configColumns + ` FROM configs WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	c, err := scanConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1142,11 +1394,22 @@ func (s *Storage) GetConfig(ctx context.Context, id string) (*types.Config, erro
 }
 
 func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID) (*types.Config, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT `+configColumns+` FROM configs
-		WHERE agent_id = $1
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
+		SELECT ` + configColumns + ` FROM configs
+		WHERE agent_id = $1`
+	args := []any{agentID.String()}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	query += `
 		ORDER BY version DESC, created_at DESC
-		LIMIT 1`, agentID.String())
+		LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	c, err := scanConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1155,11 +1418,22 @@ func (s *Storage) GetLatestConfigForAgent(ctx context.Context, agentID uuid.UUID
 }
 
 func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (*types.Config, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT `+configColumns+` FROM configs
-		WHERE group_id = $1
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
+		SELECT ` + configColumns + ` FROM configs
+		WHERE group_id = $1`
+	args := []any{groupID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	query += `
 		ORDER BY version DESC, created_at DESC
-		LIMIT 1`, groupID)
+		LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	c, err := scanConfig(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1168,9 +1442,18 @@ func (s *Storage) GetLatestConfigForGroup(ctx context.Context, groupID string) (
 }
 
 func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([]*types.Config, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + configColumns + ` FROM configs WHERE 1=1`
 	var args []any
 	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	// Soft-archived configs are hidden from the default listing; IncludeArchived
 	// opts back in. No bind arg needed (static predicate).
 	if !filter.IncludeArchived {
@@ -1214,7 +1497,17 @@ func (s *Storage) ListConfigs(ctx context.Context, filter types.ConfigFilter) ([
 // with the other config methods, OSS tenant scoping is omitted (configs carries
 // no tenant column).
 func (s *Storage) DeleteConfig(ctx context.Context, id string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE id = $1`, id); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM configs WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("delete config: %w", err)
 	}
 	return nil
@@ -1224,7 +1517,17 @@ func (s *Storage) DeleteConfig(ctx context.Context, id string) error {
 // agent resumes tracking group config (HA S3d rollout cleanup). Idempotent — a
 // zero-row delete is a no-op.
 func (s *Storage) DeleteConfigsForAgent(ctx context.Context, agentID uuid.UUID) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE agent_id = $1`, agentID.String()); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM configs WHERE agent_id = $1`
+	args := []any{agentID.String()}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("delete configs for agent: %w", err)
 	}
 	return nil
@@ -1270,11 +1573,21 @@ func scanConfig(sc scanner) (*types.Config, error) {
 // layer maps that to a 404. As with the other config methods, OSS tenant scoping
 // is intentionally omitted (configs carries no tenant column in Postgres).
 func (s *Storage) SetConfigArchived(ctx context.Context, id string, archived bool) error {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	var archivedAt any
 	if archived {
 		archivedAt = time.Now()
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE configs SET archived_at = $2 WHERE id = $1`, id, archivedAt)
+	query := `UPDATE configs SET archived_at = $2 WHERE id = $1`
+	args := []any{id, archivedAt}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("set config archived: %w", err)
 	}
@@ -1382,6 +1695,13 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 			return fmt.Errorf("marshal rollout evidence refs: %w", err)
 		}
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	// version and pushed_agent_ids are omitted here — they take the column
 	// default (version=1) / NULL, matching the sqlite CreateRollout INSERT.
 	_, err = s.db.ExecContext(ctx, `
@@ -1393,9 +1713,9 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 			rejected_at, approval_notes, required_approvals, last_blackout_reason,
 			last_blackout_at, proposed_by, proposal_reasoning, evidence_refs,
 			rolled_back_from_id, plan_id, plan_step_index, step_kind,
-			action_request_id, exclude_from_learning)
+			action_request_id, exclude_from_learning, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-			$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
+			$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)`,
 		r.ID, r.Name, r.GroupID, r.TargetConfigID, nullString(r.PreviousConfigID),
 		stagesJSON, criteriaJSON, nullString(r.NotificationURL), string(r.State), r.CurrentStage,
 		r.StageStartedAt, nullString(r.AbortReason), r.CreatedAt, r.UpdatedAt, r.CompletedAt,
@@ -1403,7 +1723,7 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 		r.RejectedAt, nullString(r.ApprovalNotes), floorRequiredApprovals(r.RequiredApprovals), nullString(r.LastBlackoutReason),
 		r.LastBlackoutAt, proposedBy, nullString(r.ProposalReasoning), jsonbOrNull(evidenceJSON),
 		nullString(r.RolledBackFromID), nullString(r.PlanID), r.PlanStepIndex, nullString(r.StepKind),
-		nullString(r.ActionRequestID), r.ExcludeFromLearning)
+		nullString(r.ActionRequestID), r.ExcludeFromLearning, tenant)
 	if err != nil {
 		return fmt.Errorf("create rollout: %w", err)
 	}
@@ -1411,7 +1731,17 @@ func (s *Storage) CreateRollout(ctx context.Context, r *types.Rollout) error {
 }
 
 func (s *Storage) GetRollout(ctx context.Context, id string) (*types.Rollout, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+rolloutColumns+` FROM rollouts WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + rolloutColumns + ` FROM rollouts WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanRollout(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1427,9 +1757,18 @@ func (s *Storage) ListRollouts(ctx context.Context, filter types.RolloutFilter) 
 	if limit > 1000 {
 		limit = 1000
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + rolloutColumns + ` FROM rollouts WHERE 1=1`
 	var args []any
 	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	if filter.GroupID != "" {
 		n++
 		query += fmt.Sprintf(" AND group_id = $%d", n)
@@ -1523,18 +1862,37 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 	// ErrRolloutVersionConflict rather than silently clobbering the other writer.
 	// Legacy callers that leave Version==0 take the blind last-write-wins path
 	// (still advancing the column). Behavior mirrors the sqlite backend.
+	// ADR 0043 — add the tenant predicate to BOTH the CAS and the legacy WHERE so
+	// a tenant can't mutate (or version-race) another tenant's rollout row. The
+	// predicate is empty in the system/inert path.
+	tenant, apply, tErr := tenantScope(ctx)
+	if tErr != nil {
+		return tErr
+	}
+
 	if r.Version > 0 {
 		newVersion := r.Version + 1
 		stmt := rolloutSetClause + `, version=$34 WHERE id=$35 AND version=$36`
 		args := append(append([]any{}, setArgs...), newVersion, r.ID, r.Version)
+		if apply {
+			stmt += ` AND tenant_id = $37`
+			args = append(args, tenant)
+		}
 		res, err := s.db.ExecContext(ctx, stmt, args...)
 		if err != nil {
 			return fmt.Errorf("update rollout: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			// Disambiguate a gone id from a version race.
+			// Disambiguate a gone id from a version race. The existence probe is
+			// tenant-scoped too so a cross-tenant id reads as not-found.
+			existsStmt := `SELECT 1 FROM rollouts WHERE id = $1`
+			existsArgs := []any{r.ID}
+			if apply {
+				existsStmt += ` AND tenant_id = $2`
+				existsArgs = append(existsArgs, tenant)
+			}
 			var one int
-			switch qerr := s.db.QueryRowContext(ctx, `SELECT 1 FROM rollouts WHERE id = $1`, r.ID).Scan(&one); {
+			switch qerr := s.db.QueryRowContext(ctx, existsStmt, existsArgs...).Scan(&one); {
 			case errors.Is(qerr, sql.ErrNoRows):
 				return fmt.Errorf("rollout not found: %s", r.ID)
 			case qerr == nil:
@@ -1549,6 +1907,10 @@ func (s *Storage) UpdateRollout(ctx context.Context, r *types.Rollout) error {
 
 	stmt := rolloutSetClause + `, version = version + 1 WHERE id=$34`
 	args := append(append([]any{}, setArgs...), r.ID)
+	if apply {
+		stmt += ` AND tenant_id = $35`
+		args = append(args, tenant)
+	}
 	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update rollout: %w", err)

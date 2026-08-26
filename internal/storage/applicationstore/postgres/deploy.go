@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -69,11 +70,12 @@ func (s *Storage) CreateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	if err != nil {
 		return fmt.Errorf("marshal deploy target inputs: %w", err)
 	}
-	// OSS single-tenant: an empty TenantID persists as "default", mirroring the
-	// sqlite system-context insert (identity.DefaultTenant).
-	tenant := t.TenantID
-	if tenant == "" {
-		tenant = "default"
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO deploy_targets (
@@ -99,33 +101,49 @@ func (s *Storage) UpdateDeployTarget(ctx context.Context, t *types.DeployTarget)
 	if err != nil {
 		return fmt.Errorf("marshal deploy target inputs: %w", err)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	// Only re-write the credential when it's been re-supplied; leaving it alone
 	// lets the UI render edit forms without round-tripping the secret. Mirrors
 	// sqlite, including the absence of a missing-row error.
 	if len(t.EncryptedCredential) > 0 {
-		_, err = s.db.ExecContext(ctx, `
+		query := `
 			UPDATE deploy_targets SET
 				name = $2, provider = $3, github_owner = $4, github_repo = $5, github_workflow = $6,
 				github_branch = $7, encrypted_credential = $8, default_inputs = $9,
 				config_id = $10, inventory_path = $11, updated_at = $12
-			WHERE id = $1`,
+			WHERE id = $1`
+		args := []any{
 			t.ID, t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
 			t.GitHubBranch, t.EncryptedCredential, inputsJSON,
-			t.ConfigID, t.InventoryPath, t.UpdatedAt.UTC())
-		if err != nil {
+			t.ConfigID, t.InventoryPath, t.UpdatedAt.UTC(),
+		}
+		if apply {
+			query += ` AND tenant_id = $13`
+			args = append(args, tenant)
+		}
+		if _, err = s.db.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf("update deploy target (with credential): %w", err)
 		}
 		return nil
 	}
-	_, err = s.db.ExecContext(ctx, `
+	query := `
 		UPDATE deploy_targets SET
 			name = $2, provider = $3, github_owner = $4, github_repo = $5, github_workflow = $6,
 			github_branch = $7, default_inputs = $8,
 			config_id = $9, inventory_path = $10, updated_at = $11
-		WHERE id = $1`,
+		WHERE id = $1`
+	args := []any{
 		t.ID, t.Name, t.Provider, t.GitHubOwner, t.GitHubRepo, t.GitHubWorkflow,
-		t.GitHubBranch, inputsJSON, t.ConfigID, t.InventoryPath, t.UpdatedAt.UTC())
-	if err != nil {
+		t.GitHubBranch, inputsJSON, t.ConfigID, t.InventoryPath, t.UpdatedAt.UTC(),
+	}
+	if apply {
+		query += ` AND tenant_id = $12`
+		args = append(args, tenant)
+	}
+	if _, err = s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update deploy target: %w", err)
 	}
 	return nil
@@ -139,7 +157,17 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 	if id == "" {
 		return nil, fmt.Errorf("id required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+deployTargetColumns+` FROM deploy_targets WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + deployTargetColumns + ` FROM deploy_targets WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	t, err := scanDeployTarget(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -148,7 +176,18 @@ func (s *Storage) GetDeployTarget(ctx context.Context, id string) (*types.Deploy
 }
 
 func (s *Storage) ListDeployTargets(ctx context.Context) ([]*types.DeployTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+deployTargetColumns+` FROM deploy_targets ORDER BY name`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + deployTargetColumns + ` FROM deploy_targets`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list deploy targets: %w", err)
 	}
@@ -170,8 +209,18 @@ func (s *Storage) DeleteDeployTarget(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	// Mirrors sqlite: a missing row is not reported as an error.
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM deploy_targets WHERE id = $1`, id); err != nil {
+	query := `DELETE FROM deploy_targets WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("delete deploy target: %w", err)
 	}
 	return nil
@@ -235,12 +284,19 @@ func (s *Storage) CreateDeployRun(ctx context.Context, r *types.DeployRun) error
 	if err != nil {
 		return fmt.Errorf("marshal deploy run expected hosts: %w", err)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO deploy_runs (`+deployRunColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		INSERT INTO deploy_runs (`+deployRunColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		r.ID, r.TargetID, r.RequestedBy, r.RequestedAt.UTC(), inputsJSON,
 		r.GitHubRunID, r.GitHubRunURL, r.Status, r.Conclusion, nullTime(r.CompletedAt),
-		hostsJSON, r.VerificationState, nullTime(r.VerifiedAt), r.Notes)
+		hostsJSON, r.VerificationState, nullTime(r.VerifiedAt), r.Notes, tenant)
 	if err != nil {
 		return fmt.Errorf("create deploy run: %w", err)
 	}
@@ -268,16 +324,26 @@ func (s *Storage) UpdateDeployRun(ctx context.Context, r *types.DeployRun) error
 	if err != nil {
 		return fmt.Errorf("marshal deploy run expected hosts: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE deploy_runs SET
 			inputs = $2, github_run_id = $3, github_run_url = $4, status = $5,
 			conclusion = $6, completed_at = $7, expected_hosts = $8,
 			verification_state = $9, verified_at = $10, notes = $11
-		WHERE id = $1`,
+		WHERE id = $1`
+	args := []any{
 		r.ID, inputsJSON, r.GitHubRunID, r.GitHubRunURL, r.Status,
 		r.Conclusion, nullTime(r.CompletedAt), hostsJSON,
-		r.VerificationState, nullTime(r.VerifiedAt), r.Notes)
-	if err != nil {
+		r.VerificationState, nullTime(r.VerifiedAt), r.Notes,
+	}
+	if apply {
+		query += ` AND tenant_id = $12`
+		args = append(args, tenant)
+	}
+	if _, err = s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update deploy run: %w", err)
 	}
 	return nil
@@ -287,7 +353,17 @@ func (s *Storage) GetDeployRun(ctx context.Context, id string) (*types.DeployRun
 	if id == "" {
 		return nil, fmt.Errorf("id required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+deployRunColumns+` FROM deploy_runs WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + deployRunColumns + ` FROM deploy_runs WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanDeployRun(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -296,9 +372,18 @@ func (s *Storage) GetDeployRun(ctx context.Context, id string) (*types.DeployRun
 }
 
 func (s *Storage) ListDeployRuns(ctx context.Context, filter types.DeployRunFilter) ([]*types.DeployRun, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + deployRunColumns + ` FROM deploy_runs WHERE 1=1`
 	var args []any
 	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	if filter.TargetID != "" {
 		n++
 		query += fmt.Sprintf(" AND target_id = $%d", n)
@@ -394,18 +479,27 @@ func (s *Storage) UpsertExpectedAgent(ctx context.Context, e *types.ExpectedAgen
 	if err != nil {
 		return fmt.Errorf("marshal expected agent labels: %w", err)
 	}
-	// Upsert on the hostname key: an existing row's labels/source/updated_at/notes
-	// are overwritten (expected_since is preserved by the DO UPDATE list omitting
-	// it, matching the sqlite ON CONFLICT set).
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	// Upsert on the composite (tenant_id, hostname) key: an existing row's
+	// labels/source/updated_at/notes are overwritten (expected_since is
+	// preserved by the DO UPDATE list omitting it, matching the sqlite ON
+	// CONFLICT set).
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO expected_agents (`+expectedAgentColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6)
-		ON CONFLICT (hostname) DO UPDATE SET
+		INSERT INTO expected_agents (`+expectedAgentColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (tenant_id, hostname) DO UPDATE SET
 			labels = excluded.labels,
 			source = excluded.source,
 			updated_at = excluded.updated_at,
-			notes = excluded.notes`,
-		e.Hostname, labelsJSON, e.Source, e.ExpectedSince.UTC(), e.UpdatedAt.UTC(), e.Notes)
+			notes = excluded.notes,
+			tenant_id = excluded.tenant_id`,
+		e.Hostname, labelsJSON, e.Source, e.ExpectedSince.UTC(), e.UpdatedAt.UTC(), e.Notes, tenant)
 	if err != nil {
 		return fmt.Errorf("upsert expected agent: %w", err)
 	}
@@ -416,18 +510,39 @@ func (s *Storage) DeleteExpectedAgent(ctx context.Context, hostname string) erro
 	if hostname == "" {
 		return fmt.Errorf("hostname required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	// Mirrors sqlite: a missing hostname is not reported as an error.
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM expected_agents WHERE hostname = $1`, hostname); err != nil {
+	query := `DELETE FROM expected_agents WHERE hostname = $1`
+	args := []any{hostname}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("delete expected agent: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) ListExpectedAgents(ctx context.Context, source string) ([]*types.ExpectedAgent, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + expectedAgentColumns + ` FROM expected_agents WHERE 1=1`
 	var args []any
+	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	if source != "" {
-		query += " AND source = $1"
+		n++
+		query += fmt.Sprintf(" AND source = $%d", n)
 		args = append(args, source)
 	}
 	query += " ORDER BY hostname"
@@ -454,13 +569,30 @@ func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source str
 	if source == "" {
 		return fmt.Errorf("source required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := tenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM expected_agents WHERE source = $1`, source); err != nil {
+	// Delete only THIS tenant's rows for the source (when scoped) so the
+	// bulk-rotate can't wipe another tenant's inventory for the same
+	// pipeline name.
+	delQuery := `DELETE FROM expected_agents WHERE source = $1`
+	delArgs := []any{source}
+	if apply {
+		delQuery += ` AND tenant_id = $2`
+		delArgs = append(delArgs, tenant)
+	}
+	if _, err := tx.ExecContext(ctx, delQuery, delArgs...); err != nil {
 		return fmt.Errorf("delete by source: %w", err)
 	}
 
@@ -480,15 +612,16 @@ func (s *Storage) ReplaceExpectedAgentsForSource(ctx context.Context, source str
 		// INSERT ... ON CONFLICT DO UPDATE mirrors sqlite's INSERT OR REPLACE:
 		// a hostname that survived under a different source is overwritten by PK.
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO expected_agents (`+expectedAgentColumns+`)
-			VALUES ($1,$2,$3,$4,$5,$6)
-			ON CONFLICT (hostname) DO UPDATE SET
+			INSERT INTO expected_agents (`+expectedAgentColumns+`, tenant_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT (tenant_id, hostname) DO UPDATE SET
 				labels = excluded.labels,
 				source = excluded.source,
 				expected_since = excluded.expected_since,
 				updated_at = excluded.updated_at,
-				notes = excluded.notes`,
-			e.Hostname, labelsJSON, source, expected.UTC(), now, e.Notes); err != nil {
+				notes = excluded.notes,
+				tenant_id = excluded.tenant_id`,
+			e.Hostname, labelsJSON, source, expected.UTC(), now, e.Notes, rowTenant); err != nil {
 			return fmt.Errorf("insert %s: %w", e.Hostname, err)
 		}
 	}

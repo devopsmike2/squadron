@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -44,11 +45,18 @@ func (s *Storage) CreateSiemDestination(ctx context.Context, d *types.SiemDestin
 	if prefixes == "" {
 		prefixes = "[]"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO siem_destinations
-			(id, name, type, url, secret, enabled, event_type_prefixes_json, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		d.ID, d.Name, d.Type, d.URL, d.Secret, d.Enabled, prefixes, d.CreatedAt, d.UpdatedAt)
+			(id, name, type, url, secret, enabled, event_type_prefixes_json, tenant_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		d.ID, d.Name, d.Type, d.URL, d.Secret, d.Enabled, prefixes, tenant, d.CreatedAt, d.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create siem destination: %w", err)
 	}
@@ -56,7 +64,17 @@ func (s *Storage) CreateSiemDestination(ctx context.Context, d *types.SiemDestin
 }
 
 func (s *Storage) GetSiemDestination(ctx context.Context, id string) (*types.SiemDestination, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+siemColumns+` FROM siem_destinations WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + siemColumns + ` FROM siem_destinations WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	d, err := scanSiemDestination(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -65,7 +83,18 @@ func (s *Storage) GetSiemDestination(ctx context.Context, id string) (*types.Sie
 }
 
 func (s *Storage) ListSiemDestinations(ctx context.Context) ([]*types.SiemDestination, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+siemColumns+` FROM siem_destinations ORDER BY name`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + siemColumns + ` FROM siem_destinations`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list siem destinations: %w", err)
 	}
@@ -87,12 +116,21 @@ func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestin
 	if prefixes == "" {
 		prefixes = "[]"
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE siem_destinations SET
 			name = $2, type = $3, url = $4, secret = $5, enabled = $6,
 			event_type_prefixes_json = $7, updated_at = $8
-		WHERE id = $1`,
-		d.ID, d.Name, d.Type, d.URL, d.Secret, d.Enabled, prefixes, d.UpdatedAt)
+		WHERE id = $1`
+	args := []any{d.ID, d.Name, d.Type, d.URL, d.Secret, d.Enabled, prefixes, d.UpdatedAt}
+	if apply {
+		query += ` AND tenant_id = $9`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update siem destination: %w", err)
 	}
@@ -103,7 +141,17 @@ func (s *Storage) UpdateSiemDestination(ctx context.Context, d *types.SiemDestin
 }
 
 func (s *Storage) DeleteSiemDestination(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM siem_destinations WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `DELETE FROM siem_destinations WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("delete siem destination: %w", err)
 	}
@@ -117,12 +165,20 @@ func (s *Storage) DeleteSiemDestination(ctx context.Context, id string) error {
 // columns so its writes don't race an operator editing the URL / secret. No
 // missing-row error, matching the sqlite backend.
 func (s *Storage) UpdateSiemDestinationStatus(ctx context.Context, id string, sentAt *time.Time, errMsg string, errAt *time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE siem_destinations
 		SET last_event_sent_at = $2, last_error = $3, last_error_at = $4
-		WHERE id = $1`,
-		id, nullTime(sentAt), nullString(errMsg), nullTime(errAt))
-	if err != nil {
+		WHERE id = $1`
+	args := []any{id, nullTime(sentAt), nullString(errMsg), nullTime(errAt)}
+	if apply {
+		query += ` AND tenant_id = $5`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update siem destination status: %w", err)
 	}
 	return nil

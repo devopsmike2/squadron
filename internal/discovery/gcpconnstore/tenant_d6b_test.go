@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // tenant_d6b_test.go — ADR 0013 §D6-b: the GCP connection carries a
@@ -24,16 +26,18 @@ func TestGCP_D6b_OwnerTenantRoundTrip(t *testing.T) {
 		backend := backend
 		t.Run(backend.name, func(t *testing.T) {
 			store := backend.factory(t)
+			// ADR 0043: ownership is stamped from the tenant-scoped context,
+			// not the caller's struct, and reads are confined to that tenant.
+			ctx := identity.WithTenant(context.Background(), "acme")
 			conn := sampleConnection("acme-project")
-			conn.TenantID = "acme"
-			require.NoError(t, store.Create(context.Background(), conn))
-			require.Equal(t, "acme", conn.TenantID, "Create should preserve the owner tenant")
+			require.NoError(t, store.Create(ctx, conn))
+			require.Equal(t, "acme", conn.TenantID, "Create stamps the context's owner tenant")
 
-			got, err := store.Get(context.Background(), conn.ID)
+			got, err := store.Get(ctx, conn.ID)
 			require.NoError(t, err)
 			require.Equal(t, "acme", got.TenantID, "Get should surface the owner tenant")
 
-			list, err := store.List(context.Background())
+			list, err := store.List(ctx)
 			require.NoError(t, err)
 			require.Len(t, list, 1)
 			require.Equal(t, "acme", list[0].TenantID, "List should surface the owner tenant")

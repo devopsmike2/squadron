@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -46,14 +47,22 @@ func (s *Storage) DismissRecommendation(ctx context.Context, d *types.Recommenda
 	if by == "" {
 		by = "system"
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason)
-		VALUES ($1,$2,$3,$4)
-		ON CONFLICT (recommendation_id) DO UPDATE SET
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO recommendation_dismissals (recommendation_id, dismissed_at, dismissed_by, reason, tenant_id)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (tenant_id, recommendation_id) DO UPDATE SET
 			dismissed_at = excluded.dismissed_at,
 			dismissed_by = excluded.dismissed_by,
-			reason       = excluded.reason`,
-		d.RecommendationID, when, by, d.Reason)
+			reason       = excluded.reason,
+			tenant_id    = excluded.tenant_id`,
+		d.RecommendationID, when, by, d.Reason, tenant)
 	if err != nil {
 		return fmt.Errorf("dismiss recommendation: %w", err)
 	}
@@ -64,9 +73,18 @@ func (s *Storage) RestoreRecommendation(ctx context.Context, recommendationID st
 	if recommendationID == "" {
 		return fmt.Errorf("recommendation_id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	// Idempotent: restoring an already-restored / never-dismissed id is a no-op.
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM recommendation_dismissals WHERE recommendation_id = $1`, recommendationID); err != nil {
+	query := `DELETE FROM recommendation_dismissals WHERE recommendation_id = $1`
+	args := []any{recommendationID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("restore recommendation: %w", err)
 	}
 	return nil
@@ -76,18 +94,37 @@ func (s *Storage) IsRecommendationDismissed(ctx context.Context, recommendationI
 	if recommendationID == "" {
 		return false, nil
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return false, err
+	}
+	query := `SELECT COUNT(*) FROM recommendation_dismissals WHERE recommendation_id = $1`
+	args := []any{recommendationID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
 	var n int
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM recommendation_dismissals WHERE recommendation_id = $1`, recommendationID).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return false, fmt.Errorf("check dismissal: %w", err)
 	}
 	return n > 0, nil
 }
 
 func (s *Storage) ListRecommendationDismissals(ctx context.Context) ([]*types.RecommendationDismissal, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT recommendation_id, dismissed_at, dismissed_by, COALESCE(reason, '')
-		FROM recommendation_dismissals ORDER BY dismissed_at DESC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT recommendation_id, dismissed_at, dismissed_by, COALESCE(reason, '')
+		FROM recommendation_dismissals`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY dismissed_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list dismissals: %w", err)
 	}
@@ -120,21 +157,28 @@ func (s *Storage) CreateRecommendationOutcome(ctx context.Context, o *types.Reco
 	if o.AppliedBy == "" {
 		o.AppliedBy = "system"
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	var lastObs any
 	if !o.LastObservedAt.IsZero() {
 		lastObs = o.LastObservedAt
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO recommendation_outcomes
 			(id, recommendation_id, applied_at, applied_by, title, category,
 			 signal, attribute_key, baseline_bytes_per_hour,
 			 est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
-			 last_observed_at, realized_savings_per_month_usd, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			 last_observed_at, realized_savings_per_month_usd, status, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		o.ID, o.RecommendationID, o.AppliedAt, o.AppliedBy, o.Title, o.Category,
 		o.Signal, o.AttributeKey, o.BaselineBytesPerHour,
 		o.EstSavingsPerMonthUSDAtApply, o.LastObservedBytesPerHour,
-		lastObs, o.RealizedSavingsPerMonthUSD, o.Status)
+		lastObs, o.RealizedSavingsPerMonthUSD, o.Status, tenant)
 	if err != nil {
 		return fmt.Errorf("create recommendation outcome: %w", err)
 	}
@@ -147,31 +191,50 @@ func (s *Storage) UpdateRecommendationOutcome(ctx context.Context, o *types.Reco
 	if o == nil || o.ID == "" {
 		return fmt.Errorf("id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	var lastObs any
 	if !o.LastObservedAt.IsZero() {
 		lastObs = o.LastObservedAt
 	}
-	_, err := s.db.ExecContext(ctx, `
+	query := `
 		UPDATE recommendation_outcomes SET
 			last_observed_bytes_per_hour = $2,
 			last_observed_at = $3,
 			realized_savings_per_month_usd = $4,
 			status = $5
-		WHERE id = $1`,
-		o.ID, o.LastObservedBytesPerHour, lastObs, o.RealizedSavingsPerMonthUSD, o.Status)
-	if err != nil {
+		WHERE id = $1`
+	args := []any{o.ID, o.LastObservedBytesPerHour, lastObs, o.RealizedSavingsPerMonthUSD, o.Status}
+	if apply {
+		query += ` AND tenant_id = $6`
+		args = append(args, tenant)
+	}
+	if _, err = s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update recommendation outcome: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) ListRecommendationOutcomes(ctx context.Context) ([]*types.RecommendationOutcome, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT id, recommendation_id, applied_at, applied_by, title, category,
 		       signal, attribute_key, baseline_bytes_per_hour,
 		       est_savings_per_month_usd_at_apply, last_observed_bytes_per_hour,
 		       last_observed_at, realized_savings_per_month_usd, status
-		FROM recommendation_outcomes ORDER BY applied_at DESC`)
+		FROM recommendation_outcomes`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY applied_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list outcomes: %w", err)
 	}

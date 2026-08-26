@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -24,12 +25,19 @@ import (
 const automationColumns = `id, name, enabled, agent_id, group_id, trigger_type, action_type, cooldown_seconds, max_attempts, dry_run, created_at, updated_at`
 
 func (s *Storage) CreateAutomation(ctx context.Context, a *types.Automation) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO automations (`+automationColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO automations (`+automationColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		a.ID, a.Name, a.Enabled, strPtrToNull(a.AgentID), strPtrToNull(a.GroupID),
 		string(a.Trigger), string(a.Action), a.CooldownSeconds, a.MaxAttempts, a.DryRun,
-		a.CreatedAt, a.UpdatedAt)
+		a.CreatedAt, a.UpdatedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create automation: %w", err)
 	}
@@ -37,7 +45,17 @@ func (s *Storage) CreateAutomation(ctx context.Context, a *types.Automation) err
 }
 
 func (s *Storage) GetAutomation(ctx context.Context, id string) (*types.Automation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+automationColumns+` FROM automations WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + automationColumns + ` FROM automations WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	a, err := scanAutomation(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -46,7 +64,18 @@ func (s *Storage) GetAutomation(ctx context.Context, id string) (*types.Automati
 }
 
 func (s *Storage) ListAutomations(ctx context.Context) ([]*types.Automation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+automationColumns+` FROM automations ORDER BY name ASC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + automationColumns + ` FROM automations`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY name ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list automations: %w", err)
 	}
@@ -63,13 +92,24 @@ func (s *Storage) ListAutomations(ctx context.Context) ([]*types.Automation, err
 }
 
 func (s *Storage) UpdateAutomation(ctx context.Context, a *types.Automation) error {
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE automations SET name=$2, enabled=$3, agent_id=$4, group_id=$5, trigger_type=$6,
 			action_type=$7, cooldown_seconds=$8, max_attempts=$9, dry_run=$10, updated_at=$11
-		WHERE id=$1`,
+		WHERE id=$1`
+	args := []any{
 		a.ID, a.Name, a.Enabled, strPtrToNull(a.AgentID), strPtrToNull(a.GroupID),
 		string(a.Trigger), string(a.Action), a.CooldownSeconds, a.MaxAttempts, a.DryRun,
-		a.UpdatedAt)
+		a.UpdatedAt,
+	}
+	if apply {
+		stmt += ` AND tenant_id = $12`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update automation: %w", err)
 	}
@@ -80,7 +120,17 @@ func (s *Storage) UpdateAutomation(ctx context.Context, a *types.Automation) err
 }
 
 func (s *Storage) DeleteAutomation(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM automations WHERE id=$1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM automations WHERE id=$1`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("delete automation: %w", err)
 	}

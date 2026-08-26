@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // memoryStore is the in-memory Store implementation used by tests and
@@ -38,7 +40,7 @@ func NewMemoryStore() Store {
 
 // Create inserts a new connection. Mirrors sqliteStore.Create: same
 // validation, same ID stamping.
-func (m *memoryStore) Create(_ context.Context, conn *OCIConnection) error {
+func (m *memoryStore) Create(ctx context.Context, conn *OCIConnection) error {
 	if conn == nil {
 		return errors.New("ociconnstore: Create: conn is required")
 	}
@@ -61,6 +63,22 @@ func (m *memoryStore) Create(_ context.Context, conn *OCIConnection) error {
 		return errors.New("ociconnstore: Create: Region is required (OCI's API endpoints are regional)")
 	}
 
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict, but PERSIST the
+	// Squadron owner the handler stamped onto the struct (distinct from the
+	// OCI tenancy OCID), mirroring sqliteStore.Create.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	tenant := conn.OwnerTenantID
+	if tenant == "" {
+		if apply {
+			tenant = scopeTenant
+		} else {
+			tenant = identity.DefaultTenant
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -71,12 +89,7 @@ func (m *memoryStore) Create(_ context.Context, conn *OCIConnection) error {
 	if !conn.LearnFromAcceptedRecommendations {
 		conn.LearnFromAcceptedRecommendations = true
 	}
-	// ADR 0013 §D6-b: mirror sqliteStore.Create's Squadron owner-tenant
-	// default-guard so a struct built without a tenant lands "default"
-	// rather than an empty string.
-	if conn.OwnerTenantID == "" {
-		conn.OwnerTenantID = "default"
-	}
+	conn.OwnerTenantID = tenant
 
 	stored := cloneConnection(conn)
 	m.byID[conn.ID] = stored
@@ -86,14 +99,22 @@ func (m *memoryStore) Create(_ context.Context, conn *OCIConnection) error {
 // Get returns the connection for the supplied ID, or
 // ErrConnectionNotFound if no row matches. Returns a defensive copy
 // so callers can mutate the result without touching the store.
-func (m *memoryStore) Get(_ context.Context, id string) (*OCIConnection, error) {
+func (m *memoryStore) Get(ctx context.Context, id string) (*OCIConnection, error) {
 	if id == "" {
 		return nil, errors.New("ociconnstore: Get: id is required")
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	conn, ok := m.byID[id]
 	if !ok {
+		return nil, ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is invisible.
+	if apply && conn.OwnerTenantID != tenant {
 		return nil, ErrConnectionNotFound
 	}
 	return cloneConnection(conn), nil
@@ -102,11 +123,18 @@ func (m *memoryStore) Get(_ context.Context, id string) (*OCIConnection, error) 
 // List returns every connection, ordered by created_at ascending then
 // ID ascending (same order as the SQLite implementation for
 // deterministic tests).
-func (m *memoryStore) List(_ context.Context) ([]*OCIConnection, error) {
+func (m *memoryStore) List(ctx context.Context) ([]*OCIConnection, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]*OCIConnection, 0, len(m.byID))
 	for _, conn := range m.byID {
+		if apply && conn.OwnerTenantID != tenant {
+			continue
+		}
 		out = append(out, cloneConnection(conn))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -122,7 +150,7 @@ func (m *memoryStore) List(_ context.Context) ([]*OCIConnection, error) {
 // conn.ID and stamps UpdatedAt. A nil/empty SealedPrivateKey leaves
 // the stored sealed bytes in place; a fresh sealed blob rotates
 // them. Returns ErrConnectionNotFound when no row matches.
-func (m *memoryStore) Update(_ context.Context, conn *OCIConnection) error {
+func (m *memoryStore) Update(ctx context.Context, conn *OCIConnection) error {
 	if conn == nil {
 		return errors.New("ociconnstore: Update: conn is required")
 	}
@@ -144,10 +172,18 @@ func (m *memoryStore) Update(_ context.Context, conn *OCIConnection) error {
 	if conn.Region == "" {
 		return errors.New("ociconnstore: Update: Region is required (OCI's API endpoints are regional)")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, ok := m.byID[conn.ID]
 	if !ok {
+		return ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is not updatable.
+	if apply && existing.OwnerTenantID != tenant {
 		return ErrConnectionNotFound
 	}
 	existing.DisplayName = conn.DisplayName
@@ -169,13 +205,24 @@ func (m *memoryStore) Update(_ context.Context, conn *OCIConnection) error {
 }
 
 // Delete removes the row. Idempotent.
-func (m *memoryStore) Delete(_ context.Context, id string) error {
+func (m *memoryStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("ociconnstore: Delete: id is required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.byID, id)
+	if existing, ok := m.byID[id]; ok {
+		// Tenant isolation: a row owned by another tenant is invisible, so
+		// deleting it is a no-op (idempotent, and reveals nothing).
+		if apply && existing.OwnerTenantID != tenant {
+			return nil
+		}
+		delete(m.byID, id)
+	}
 	return nil
 }
 

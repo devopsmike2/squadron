@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // memoryStore is the in-memory Store implementation used by tests and
@@ -41,7 +43,7 @@ func NewMemoryStore() Store {
 // Create inserts a new connection. Mirrors sqliteStore.Create: same
 // validation, same ConnectionID stamping, same ErrConnectionConflict
 // signal when (Provider, RepoFullName) already exists.
-func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
+func (m *memoryStore) Create(ctx context.Context, conn *IaCConnection) error {
 	if conn == nil {
 		return errors.New("iacconnstore: Create: conn is required")
 	}
@@ -64,11 +66,31 @@ func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
 		return errors.New("iacconnstore: Create: CredCiphertext is required (callers must seal via MarshalGitHubPATCreds)")
 	}
 
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict, but PERSIST the
+	// owner the handler stamped onto the struct (a system/background create
+	// carries the owner on the struct), mirroring sqliteStore.Create. The
+	// per-tenant uniqueness check below uses this same resolved owner.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	tenant := conn.TenantID
+	if tenant == "" {
+		if apply {
+			tenant = scopeTenant
+		} else {
+			tenant = identity.DefaultTenant
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Uniqueness is per-tenant: (tenant_id, provider, repo_full_name),
+	// mirroring the SQLite unique index (migration0005). A different
+	// tenant may connect the same repo without colliding.
 	for _, existing := range m.byID {
-		if existing.Provider == conn.Provider && existing.RepoFullName == conn.RepoFullName {
+		if existing.TenantID == tenant && existing.Provider == conn.Provider && existing.RepoFullName == conn.RepoFullName {
 			return fmt.Errorf("%w: provider=%s repo=%s", ErrConnectionConflict, conn.Provider, conn.RepoFullName)
 		}
 	}
@@ -84,13 +106,7 @@ func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
 	if !conn.LearnFromAcceptedRecommendations {
 		conn.LearnFromAcceptedRecommendations = true
 	}
-	// ADR 0012 §Decision 3: default the tenant to the OSS single-tenant
-	// sentinel when unset, mirroring the SQLite ADD COLUMN default. The
-	// create handler stamps identity.TenantFromContext(ctx) before
-	// Create; an unstamped struct still lands a valid "default" row.
-	if conn.TenantID == "" {
-		conn.TenantID = "default"
-	}
+	conn.TenantID = tenant
 
 	// Defensive copy so a caller mutating its struct after Create
 	// doesn't mutate the stored row.
@@ -102,14 +118,22 @@ func (m *memoryStore) Create(_ context.Context, conn *IaCConnection) error {
 // Get returns the connection for the supplied ID, or
 // ErrConnectionNotFound if no row matches. Returns a defensive copy
 // so callers can mutate the result without touching the store.
-func (m *memoryStore) Get(_ context.Context, connectionID string) (*IaCConnection, error) {
+func (m *memoryStore) Get(ctx context.Context, connectionID string) (*IaCConnection, error) {
 	if connectionID == "" {
 		return nil, errors.New("iacconnstore: Get: connectionID is required")
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	conn, ok := m.byID[connectionID]
 	if !ok {
+		return nil, ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is invisible.
+	if apply && conn.TenantID != tenant {
 		return nil, ErrConnectionNotFound
 	}
 	return cloneConnection(conn), nil
@@ -118,10 +142,13 @@ func (m *memoryStore) Get(_ context.Context, connectionID string) (*IaCConnectio
 // GetByRepoFullName scans the map for connections matching repoFullName
 // and returns the most recently created one. Mirrors the SQLite
 // implementation's ORDER BY created_at DESC LIMIT 1 contract.
-func (m *memoryStore) GetByRepoFullName(_ context.Context, repoFullName string) (*IaCConnection, error) {
+func (m *memoryStore) GetByRepoFullName(ctx context.Context, repoFullName string) (*IaCConnection, error) {
 	if repoFullName == "" {
 		return nil, errors.New("iacconnstore: GetByRepoFullName: repoFullName is required")
 	}
+	// UNSCOPED BY DESIGN (ADR 0043): pre-tenant webhook resolver, mirrors the
+	// sqlite backend — the HMAC-authed receiver derives the tenant FROM the
+	// matched connection, so no predicate is applied.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var newest *IaCConnection
@@ -142,11 +169,18 @@ func (m *memoryStore) GetByRepoFullName(_ context.Context, repoFullName string) 
 // List returns every connection, ordered by created_at ascending then
 // connection_id ascending (same order as the SQLite implementation
 // for deterministic tests).
-func (m *memoryStore) List(_ context.Context) ([]*IaCConnection, error) {
+func (m *memoryStore) List(ctx context.Context) ([]*IaCConnection, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]*IaCConnection, 0, len(m.byID))
 	for _, conn := range m.byID {
+		if apply && conn.TenantID != tenant {
+			continue
+		}
 		out = append(out, cloneConnection(conn))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -159,28 +193,47 @@ func (m *memoryStore) List(_ context.Context) ([]*IaCConnection, error) {
 }
 
 // Delete removes the row. Idempotent.
-func (m *memoryStore) Delete(_ context.Context, connectionID string) error {
+func (m *memoryStore) Delete(ctx context.Context, connectionID string) error {
 	if connectionID == "" {
 		return errors.New("iacconnstore: Delete: connectionID is required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.byID, connectionID)
+	if existing, ok := m.byID[connectionID]; ok {
+		// Tenant isolation: a row owned by another tenant is invisible, so
+		// deleting it is a no-op (idempotent, and reveals nothing).
+		if apply && existing.TenantID != tenant {
+			return nil
+		}
+		delete(m.byID, connectionID)
+	}
 	return nil
 }
 
 // UpdatePlacementMap replaces the PlacementMap and stamps UpdatedAt.
-func (m *memoryStore) UpdatePlacementMap(_ context.Context, connectionID string, entries []PlacementMapEntry) error {
+func (m *memoryStore) UpdatePlacementMap(ctx context.Context, connectionID string, entries []PlacementMapEntry) error {
 	if connectionID == "" {
 		return errors.New("iacconnstore: UpdatePlacementMap: connectionID is required")
 	}
 	if entries == nil {
 		entries = []PlacementMapEntry{}
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	conn, ok := m.byID[connectionID]
 	if !ok {
+		return ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is not updatable.
+	if apply && conn.TenantID != tenant {
 		return ErrConnectionNotFound
 	}
 	// Copy the slice so a caller-side mutation post-call doesn't
@@ -196,14 +249,22 @@ func (m *memoryStore) UpdatePlacementMap(_ context.Context, connectionID string,
 // in the in-memory row and stamps UpdatedAt. A nil or zero-length
 // sealed slice clears the field — that's the env-var-fallback
 // sentinel mirrored from the SQLite NULL semantics. v0.89.31 (#650).
-func (m *memoryStore) SetWebhookSecret(_ context.Context, connectionID string, sealed []byte) error {
+func (m *memoryStore) SetWebhookSecret(ctx context.Context, connectionID string, sealed []byte) error {
 	if connectionID == "" {
 		return errors.New("iacconnstore: SetWebhookSecret: connectionID is required")
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	conn, ok := m.byID[connectionID]
 	if !ok {
+		return ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is not updatable.
+	if apply && conn.TenantID != tenant {
 		return ErrConnectionNotFound
 	}
 	if len(sealed) == 0 {
@@ -223,10 +284,12 @@ func (m *memoryStore) SetWebhookSecret(_ context.Context, connectionID string, s
 // GetWebhookSecret returns the sealed per-connection webhook secret
 // for the in-memory row, or (nil, nil) when none is set. Returns
 // ErrConnectionNotFound when no row matches. v0.89.31 (#650).
-func (m *memoryStore) GetWebhookSecret(_ context.Context, connectionID string) ([]byte, error) {
+func (m *memoryStore) GetWebhookSecret(ctx context.Context, connectionID string) ([]byte, error) {
 	if connectionID == "" {
 		return nil, errors.New("iacconnstore: GetWebhookSecret: connectionID is required")
 	}
+	// UNSCOPED BY DESIGN (ADR 0043): part of the HMAC-authed webhook flow,
+	// mirrors the sqlite backend and GetByRepoFullName's pre-tenant posture.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	conn, ok := m.byID[connectionID]
@@ -244,14 +307,22 @@ func (m *memoryStore) GetWebhookSecret(_ context.Context, connectionID string) (
 // UpdateLearnFromAcceptedRecommendations sets the per-connection
 // discovery-feedback opt-in flag and stamps UpdatedAt.
 // v0.89.28 (#643 slice 1).
-func (m *memoryStore) UpdateLearnFromAcceptedRecommendations(_ context.Context, connectionID string, learn bool) error {
+func (m *memoryStore) UpdateLearnFromAcceptedRecommendations(ctx context.Context, connectionID string, learn bool) error {
 	if connectionID == "" {
 		return errors.New("iacconnstore: UpdateLearnFromAcceptedRecommendations: connectionID is required")
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	conn, ok := m.byID[connectionID]
 	if !ok {
+		return ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is not updatable.
+	if apply && conn.TenantID != tenant {
 		return ErrConnectionNotFound
 	}
 	conn.LearnFromAcceptedRecommendations = learn

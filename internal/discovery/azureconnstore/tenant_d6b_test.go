@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // tenant_d6b_test.go — ADR 0013 §D6-b: the Azure connection carries a
@@ -24,19 +26,22 @@ func TestAzure_D6b_OwnerTenantRoundTrip(t *testing.T) {
 		backend := backend
 		t.Run(backend.name, func(t *testing.T) {
 			store := backend.factory(t)
+			// ADR 0043: the Squadron owner tenant is stamped from the
+			// tenant-scoped context, not the caller's struct, and reads are
+			// confined to that tenant.
+			ctx := identity.WithTenant(context.Background(), "acme")
 			conn := sampleConnection("acme-sub")
-			conn.SquadronTenantID = "acme"
-			require.NoError(t, store.Create(context.Background(), conn))
+			require.NoError(t, store.Create(ctx, conn))
 			require.Equal(t, "acme", conn.SquadronTenantID)
 			// The Azure-AD tenant is a separate namespace and is untouched.
 			require.Equal(t, "00000000-0000-0000-0000-000000000001", conn.TenantID)
 
-			got, err := store.Get(context.Background(), conn.ID)
+			got, err := store.Get(ctx, conn.ID)
 			require.NoError(t, err)
 			require.Equal(t, "acme", got.SquadronTenantID, "Get surfaces the Squadron owner tenant")
 			require.Equal(t, "00000000-0000-0000-0000-000000000001", got.TenantID, "Azure-AD tenant unchanged")
 
-			list, err := store.List(context.Background())
+			list, err := store.List(ctx)
 			require.NoError(t, err)
 			require.Len(t, list, 1)
 			require.Equal(t, "acme", list[0].SquadronTenantID)

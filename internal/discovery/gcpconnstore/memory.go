@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // memoryStore is the in-memory Store implementation used by tests and
@@ -38,7 +40,7 @@ func NewMemoryStore() Store {
 
 // Create inserts a new connection. Mirrors sqliteStore.Create: same
 // validation, same ID stamping.
-func (m *memoryStore) Create(_ context.Context, conn *GCPConnection) error {
+func (m *memoryStore) Create(ctx context.Context, conn *GCPConnection) error {
 	if conn == nil {
 		return errors.New("gcpconnstore: Create: conn is required")
 	}
@@ -52,6 +54,22 @@ func (m *memoryStore) Create(_ context.Context, conn *GCPConnection) error {
 		return errors.New("gcpconnstore: Create: SealedSA is required (callers must seal via credstore.SealGCPServiceAccount)")
 	}
 
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict, but PERSIST the
+	// owner the handler stamped onto the struct (a system/background create
+	// carries the owner on the struct), mirroring sqliteStore.Create.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	tenant := conn.TenantID
+	if tenant == "" {
+		if apply {
+			tenant = scopeTenant
+		} else {
+			tenant = identity.DefaultTenant
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -62,12 +80,7 @@ func (m *memoryStore) Create(_ context.Context, conn *GCPConnection) error {
 	if !conn.LearnFromAcceptedRecommendations {
 		conn.LearnFromAcceptedRecommendations = true
 	}
-	// ADR 0013 §D6-b: mirror sqliteStore.Create's owner-tenant
-	// default-guard so a struct built without a tenant lands "default"
-	// rather than an empty string.
-	if conn.TenantID == "" {
-		conn.TenantID = "default"
-	}
+	conn.TenantID = tenant
 
 	stored := cloneConnection(conn)
 	m.byID[conn.ID] = stored
@@ -77,14 +90,22 @@ func (m *memoryStore) Create(_ context.Context, conn *GCPConnection) error {
 // Get returns the connection for the supplied ID, or
 // ErrConnectionNotFound if no row matches. Returns a defensive copy
 // so callers can mutate the result without touching the store.
-func (m *memoryStore) Get(_ context.Context, id string) (*GCPConnection, error) {
+func (m *memoryStore) Get(ctx context.Context, id string) (*GCPConnection, error) {
 	if id == "" {
 		return nil, errors.New("gcpconnstore: Get: id is required")
+	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	conn, ok := m.byID[id]
 	if !ok {
+		return nil, ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is invisible.
+	if apply && conn.TenantID != tenant {
 		return nil, ErrConnectionNotFound
 	}
 	return cloneConnection(conn), nil
@@ -93,11 +114,18 @@ func (m *memoryStore) Get(_ context.Context, id string) (*GCPConnection, error) 
 // List returns every connection, ordered by created_at ascending then
 // ID ascending (same order as the SQLite implementation for
 // deterministic tests).
-func (m *memoryStore) List(_ context.Context) ([]*GCPConnection, error) {
+func (m *memoryStore) List(ctx context.Context) ([]*GCPConnection, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]*GCPConnection, 0, len(m.byID))
 	for _, conn := range m.byID {
+		if apply && conn.TenantID != tenant {
+			continue
+		}
 		out = append(out, cloneConnection(conn))
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -113,7 +141,7 @@ func (m *memoryStore) List(_ context.Context) ([]*GCPConnection, error) {
 // conn.ID and stamps UpdatedAt. A nil/empty SealedSA leaves the
 // stored sealed bytes in place; a fresh sealed blob rotates them.
 // Returns ErrConnectionNotFound when no row matches.
-func (m *memoryStore) Update(_ context.Context, conn *GCPConnection) error {
+func (m *memoryStore) Update(ctx context.Context, conn *GCPConnection) error {
 	if conn == nil {
 		return errors.New("gcpconnstore: Update: conn is required")
 	}
@@ -126,10 +154,18 @@ func (m *memoryStore) Update(_ context.Context, conn *GCPConnection) error {
 	if conn.ProjectID == "" {
 		return errors.New("gcpconnstore: Update: ProjectID is required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	existing, ok := m.byID[conn.ID]
 	if !ok {
+		return ErrConnectionNotFound
+	}
+	// Tenant isolation: a row owned by another tenant is not updatable.
+	if apply && existing.TenantID != tenant {
 		return ErrConnectionNotFound
 	}
 	existing.DisplayName = conn.DisplayName
@@ -149,13 +185,24 @@ func (m *memoryStore) Update(_ context.Context, conn *GCPConnection) error {
 }
 
 // Delete removes the row. Idempotent.
-func (m *memoryStore) Delete(_ context.Context, id string) error {
+func (m *memoryStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("gcpconnstore: Delete: id is required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.byID, id)
+	if existing, ok := m.byID[id]; ok {
+		// Tenant isolation: a row owned by another tenant is invisible, so
+		// deleting it is a no-op (idempotent, and reveals nothing).
+		if apply && existing.TenantID != tenant {
+			return nil
+		}
+		delete(m.byID, id)
+	}
 	return nil
 }
 

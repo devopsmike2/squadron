@@ -14,7 +14,7 @@ package iacconnstore
 // migration per bump, applied in order, idempotent SQL inside each
 // step. Existing migrations are NEVER edited after merge — they ran
 // against historical databases and edits desynchronize the schema.
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // migration0001IaCConnections is the initial schema. One table for
 // IaC repository connections, parallel to credstore's
@@ -107,6 +107,33 @@ ALTER TABLE iac_connections ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'
 INSERT OR IGNORE INTO schema_version (version) VALUES (4);
 `
 
+// migration0005TenantScopedRepoUniqueness — ADR 0043 (SECURITY-CRITICAL
+// tenant isolation). The original migration0001 unique index enforced
+// "one connection per (provider, repo_full_name)" GLOBALLY, across every
+// tenant — so two tenants could not each connect the same repo, and a
+// UNIQUE conflict leaked the existence of another tenant's connection.
+// Now that iac_connections carries an owner tenant_id (migration0004) and
+// reads/writes are tenant-scoped, uniqueness is redefined per-tenant:
+// (tenant_id, provider, repo_full_name). The old index is dropped and
+// rebuilt to include tenant_id at the front.
+//
+// DROP INDEX IF EXISTS + CREATE UNIQUE INDEX IF NOT EXISTS are both
+// idempotent, so re-running on an up-to-date database is a no-op — no
+// ADD COLUMN, so the isDuplicateColumnErr guard is not involved here.
+//
+// Backfill safety: pre-3d rows carry tenant_id='default' (migration0004's
+// column default), so the new index builds cleanly against existing data —
+// a single-tenant OSS deployment keeps exactly one row per (provider,
+// repo) because every row shares the 'default' tenant.
+const migration0005TenantScopedRepoUniqueness = `
+DROP INDEX IF EXISTS iac_connections_provider_repo_idx;
+
+CREATE UNIQUE INDEX IF NOT EXISTS iac_connections_tenant_provider_repo_idx
+	ON iac_connections (tenant_id, provider, repo_full_name);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+`
+
 // migrations is the ordered list of schema migrations. Index N is the
 // SQL applied at version N+1. New entries are appended; existing
 // entries are never edited.
@@ -115,4 +142,5 @@ var migrations = []string{
 	migration0002LearnFromAcceptedRecommendations,
 	migration0003WebhookSecretSealed,
 	migration0004TenantID,
+	migration0005TenantScopedRepoUniqueness,
 }

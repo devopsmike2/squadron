@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -49,11 +50,18 @@ func (s *Storage) SaveDiscoveryScan(ctx context.Context, rec *types.ScanRecord) 
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO discovery_scans (
 			scan_id, provider, scope_id, regions, started_at, completed_at,
-			partial, partial_reason, summary, result_json, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			partial, partial_reason, summary, result_json, tenant_id, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (scan_id) DO UPDATE SET
 			provider       = excluded.provider,
 			scope_id       = excluded.scope_id,
@@ -63,9 +71,10 @@ func (s *Storage) SaveDiscoveryScan(ctx context.Context, rec *types.ScanRecord) 
 			partial        = excluded.partial,
 			partial_reason = excluded.partial_reason,
 			summary        = excluded.summary,
-			result_json    = excluded.result_json`,
+			result_json    = excluded.result_json,
+			tenant_id      = excluded.tenant_id`,
 		rec.ScanID, rec.Provider, rec.ScopeID, regionsJSON, rec.StartedAt.UTC(), rec.CompletedAt.UTC(),
-		rec.Partial, nullString(rec.PartialReason), summaryJSON, nullString(rec.ResultJSON), createdAt.UTC())
+		rec.Partial, nullString(rec.PartialReason), summaryJSON, nullString(rec.ResultJSON), tenant, createdAt.UTC())
 	if err != nil {
 		return fmt.Errorf("insert discovery scan: %w", err)
 	}
@@ -83,8 +92,17 @@ func (s *Storage) DeleteDiscoveryScans(ctx context.Context, provider, scopeID st
 	if provider == "" || scopeID == "" {
 		return 0, fmt.Errorf("DeleteDiscoveryScans requires a non-empty provider and scopeID")
 	}
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM discovery_scans WHERE provider = $1 AND scope_id = $2`, provider, scopeID)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	query := `DELETE FROM discovery_scans WHERE provider = $1 AND scope_id = $2`
+	args := []any{provider, scopeID}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("delete discovery scans by scope: %w", err)
 	}
@@ -96,13 +114,25 @@ func (s *Storage) ListDiscoveryScans(ctx context.Context, provider, scopeID stri
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT scan_id, provider, scope_id, regions, started_at, completed_at,
 		       partial, partial_reason, summary, created_at
 		FROM discovery_scans
-		WHERE provider = $1 AND ($2 = '' OR scope_id = $2)
+		WHERE provider = $1 AND ($2 = '' OR scope_id = $2)`
+	args := []any{provider, scopeID}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	query += fmt.Sprintf(`
 		ORDER BY started_at DESC
-		LIMIT $3`, provider, scopeID, limit)
+		LIMIT $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list discovery scans: %w", err)
 	}
@@ -119,10 +149,20 @@ func (s *Storage) ListDiscoveryScans(ctx context.Context, provider, scopeID stri
 }
 
 func (s *Storage) GetDiscoveryScan(ctx context.Context, scanID string) (*types.ScanRecord, error) {
-	row := s.db.QueryRowContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT scan_id, provider, scope_id, regions, started_at, completed_at,
 		       partial, partial_reason, summary, result_json, created_at
-		FROM discovery_scans WHERE scan_id = $1`, scanID)
+		FROM discovery_scans WHERE scan_id = $1`
+	args := []any{scanID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	rec, err := scanDiscoveryScanRow(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

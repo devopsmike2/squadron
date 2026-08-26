@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -40,7 +41,15 @@ func (s *Storage) CreateAPIToken(ctx context.Context, t *types.APIToken) error {
 	}
 	tenantID := t.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		scopeTenant, apply, err := tenantScope(ctx)
+		if err != nil {
+			return err
+		}
+		if apply {
+			tenantID = scopeTenant
+		} else {
+			tenantID = identity.DefaultTenant
+		}
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO api_tokens (`+apiTokenColumns+`)
@@ -64,7 +73,18 @@ func (s *Storage) GetAPITokenByHash(ctx context.Context, hash string) (*types.AP
 }
 
 func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+apiTokenColumns+` FROM api_tokens ORDER BY created_at DESC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + apiTokenColumns + ` FROM api_tokens`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list api tokens: %w", err)
 	}
@@ -83,7 +103,17 @@ func (s *Storage) ListAPITokens(ctx context.Context) ([]*types.APIToken, error) 
 // UpdateAPITokenLastUsed touches last_used_at. Best-effort: no missing-row error,
 // matching the sqlite backend (the middleware fires this asynchronously).
 func (s *Storage) UpdateAPITokenLastUsed(ctx context.Context, id string, at time.Time) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE api_tokens SET last_used_at = $2 WHERE id = $1`, id, at); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE api_tokens SET last_used_at = $2 WHERE id = $1`
+	args := []any{id, at}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update api token last_used_at: %w", err)
 	}
 	return nil
@@ -93,8 +123,17 @@ func (s *Storage) UpdateAPITokenLastUsed(ctx context.Context, id string, at time
 // tokens keep their original stamp). Idempotent: revoking a missing or
 // already-revoked token is not an error, matching the sqlite backend.
 func (s *Storage) RevokeAPIToken(ctx context.Context, id string, at time.Time) error {
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE api_tokens SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`, id, at); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE api_tokens SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL`
+	args := []any{id, at}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("revoke api token: %w", err)
 	}
 	return nil
