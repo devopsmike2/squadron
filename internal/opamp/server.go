@@ -11,6 +11,7 @@ import (
 	"github.com/open-telemetry/opamp-go/server"
 	"github.com/open-telemetry/opamp-go/server/types"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/agentid"
@@ -104,6 +105,18 @@ type Server struct {
 	// the audit write a no-op, so pre-0039 behavior is unchanged. Wired at
 	// startup via SetAuditRecorder.
 	audit auditRecorder
+
+	// ADR 0042 — OpAMP channel authentication + DoS hardening. auth is the
+	// (optional) AuthService validating an opamp:enroll bearer presented on
+	// connect; requireAuth flips grace (accept unauthenticated with a warning)
+	// to enforcement (reject). maxMessageBytes caps a single message and
+	// maxMessagesPerSecond is the per-connection rate. All zero/nil by default
+	// (grace, no caps), so every existing test and the pre-0042 pilot path are
+	// unchanged until main.go wires them. See server_auth.go.
+	auth                 services.AuthService
+	requireAuth          bool
+	maxMessageBytes      int
+	maxMessagesPerSecond float64
 }
 
 // SetConnectionRegistry wires the HA S3b connection-registry seam (ADR 0035):
@@ -172,21 +185,32 @@ func (s *Server) Start(port int) error {
 					if s.metrics != nil {
 						s.metrics.AgentConnectionsTotal.Inc(1)
 					}
-					// ADR 0012 §Decision 2: resolve the per-connection tenant
-					// from the x-squadron-tenant header at connect time — the
-					// only point the raw *http.Request is in scope. It's
-					// captured in the per-connection callback closures below so
-					// onDisconnect (which runs on context.Background() after the
-					// wire is gone) can still stamp the connection's tenant
-					// without re-deriving it. Empty header resolves to
-					// identity.DefaultTenant, keeping OSS single-tenant behavior
-					// inert.
-					//
-					// ADR 0012 §Decision 2: enterprise strict rejects empty
-					// x-squadron-tenant — flipped on via
-					// SetRejectUntenantedConnections at the enterprise wire. OSS
-					// leaves the flag false and does NOT reject here.
-					if rejectUntenantedConnections && rawConnTenant(request) == "" {
+
+					// ADR 0042: authenticate the OpAMP channel. On success (or
+					// under grace) auth.tenant is the tenant every store write on
+					// this connection lands in — the TOKEN's tenant when
+					// authenticated, the legacy x-squadron-tenant header when not.
+					// accept=false only under enforcement with no valid token.
+					// This runs at connect time (the only point the raw request /
+					// Authorization header is in scope) and is captured in the
+					// per-connection closures below, mirroring how connTenant was
+					// captured pre-0042.
+					auth, accept := s.authenticateConn(context.Background(), request)
+					if !accept {
+						s.logger.Warn("rejecting OpAMP connection: authentication required and no valid opamp:enroll token was presented (ADR 0042)")
+						return types.ConnectionResponse{
+							Accept:         false,
+							HTTPStatusCode: http.StatusUnauthorized,
+						}
+					}
+
+					// ADR 0012 §Decision 2: enterprise strict rejects an empty
+					// x-squadron-tenant. This still applies to UNAUTHENTICATED
+					// (grace) connections, whose tenant is header-derived. An
+					// AUTHENTICATED connection derives its tenant from the token,
+					// so the untenanted-header reject is irrelevant (and skipped)
+					// there — the credential already scopes the tenant.
+					if !auth.authenticated && rejectUntenantedConnections && rawConnTenant(request) == "" {
 						if s.metrics != nil {
 							s.metrics.MessageErrors.Inc(1)
 						}
@@ -196,11 +220,22 @@ func (s *Server) Start(port int) error {
 							HTTPStatusCode: http.StatusUnauthorized,
 						}
 					}
-					connTenant := resolveConnTenant(request)
+
+					connTenant := auth.tenant
+					// Per-connection rate limiter (ADR 0042 DoS). nil when the
+					// rate cap is disabled (default / tests) → allows everything.
+					limiter := newConnRateLimiter(s.maxMessagesPerSecond)
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: server.ConnectionCallbacksStruct{
 							OnMessageFunc: func(ctx context.Context, conn types.Connection, msg *protobufs.AgentToServer) *protobufs.ServerToAgent {
+								if !limiter.allow() {
+									if s.metrics != nil {
+										s.metrics.RateLimitedMessagesTotal.Inc(1)
+									}
+									s.logger.Warn("dropping OpAMP message: per-connection rate limit exceeded (ADR 0042)")
+									return &protobufs.ServerToAgent{}
+								}
 								return s.onMessage(identity.WithTenant(ctx, connTenant), conn, msg)
 							},
 							OnConnectionCloseFunc: func(conn types.Connection) {
@@ -211,6 +246,13 @@ func (s *Server) Start(port int) error {
 				},
 			},
 		},
+		// ADR 0042 DoS: bound the request body for the plain-HTTP OpAMP
+		// transport (and the WebSocket upgrade request). opamp-go v0.16.0
+		// reads the HTTP body with io.ReadAll (unbounded); MaxBytesReader
+		// caps it. Post-upgrade WebSocket frames are bounded separately by
+		// the proto.Size check in onMessage. nil (cap disabled) → opamp-go
+		// mounts the handler with no middleware.
+		HTTPMiddleware: s.opampBodyLimitMiddleware(),
 		ListenEndpoint: fmt.Sprintf(":%d", port),
 	}
 
@@ -357,6 +399,25 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 	// Track message received
 	if s.metrics != nil {
 		s.metrics.MessagesReceived.Inc(1)
+	}
+
+	// ADR 0042 DoS: drop an oversized message before it drives any store write
+	// or config adoption. This is the WebSocket-transport counterpart to the
+	// HTTP body cap (post-upgrade WS frames bypass the HTTP middleware), and it
+	// also bounds what the reported-effective-config path will persist/adopt.
+	// The empty response (no ServerToAgent directives) is returned; the agent
+	// simply retries, and a persistently oversized reporter is a noisy warn +
+	// metric rather than an unbounded allocation.
+	if s.maxMessageBytes > 0 && proto.Size(msg) > s.maxMessageBytes {
+		if s.metrics != nil {
+			s.metrics.OversizedMessagesTotal.Inc(1)
+			s.metrics.MessageErrors.Inc(1)
+		}
+		s.logger.Warn("dropping oversized OpAMP message (ADR 0042 DoS cap)",
+			zap.Int("bytes", proto.Size(msg)),
+			zap.Int("limit_bytes", s.maxMessageBytes),
+			zap.String("instanceId", instanceId.String()))
+		return response
 	}
 
 	// Process the message

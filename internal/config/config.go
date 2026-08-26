@@ -40,6 +40,79 @@ type Config struct {
 	Ingest IngestConfig `yaml:"ingest,omitempty"`
 
 	HA HAConfig `yaml:"ha,omitempty"`
+
+	OpAMP OpAMPConfig `yaml:"opamp,omitempty"`
+}
+
+// OpAMPConfig groups the OpAMP control-channel security knobs (ADR 0042).
+//
+// The OpAMP listener is a SECOND network port, outside the REST bearer-auth
+// middleware. RequireAuth gates whether an OpAMP connection must present a
+// valid opamp:enroll bearer token (delivered by the supervisor via
+// server.headers). It is a pointer so an omitted key means "grace" (the
+// backward-compatible default): unauthenticated connections are ACCEPTED with a
+// loud, future-fatal warning, while authenticated connections derive their
+// tenant from the token. Set require_auth: true to ENFORCE — unauthenticated or
+// invalid-token connections are then refused with 401. The rollout is: mint
+// per-agent enrollment tokens, add them to each supervisor's server.headers,
+// watch the authenticated-vs-unauthenticated connection metrics until every
+// agent presents a token, THEN flip require_auth on.
+type OpAMPConfig struct {
+	// RequireAuth enforces OpAMP channel authentication. nil/false => grace
+	// (accept unauthenticated with a warning); true => reject unauthenticated.
+	RequireAuth *bool `yaml:"require_auth,omitempty"`
+
+	// MaxMessageBytes caps the size of a single OpAMP message (DoS hardening —
+	// the review flagged unbounded reported configs/messages). 0/unset =>
+	// defaultOpAMPMaxMessageBytes; negative => unbounded (opt-out).
+	MaxMessageBytes int `yaml:"max_message_bytes,omitempty"`
+
+	// MaxMessagesPerSecond is the per-connection message rate cap (token bucket;
+	// burst = 2×rate). 0/unset => defaultOpAMPMaxMessagesPerSecond; negative =>
+	// unlimited (opt-out). Sized well above steady-state heartbeat/status traffic
+	// so it only trips a misbehaving or hostile client.
+	MaxMessagesPerSecond float64 `yaml:"max_messages_per_second,omitempty"`
+}
+
+// Defaults for the OpAMP DoS caps. 4 MiB comfortably fits a large reported
+// effective config while bounding a single message's memory; 50 msg/s is far
+// above a healthy agent's cadence (status + heartbeat every few seconds).
+const (
+	defaultOpAMPMaxMessageBytes      = 4 << 20 // 4 MiB
+	defaultOpAMPMaxMessagesPerSecond = 50.0
+)
+
+// IsAuthRequired reports the effective enforcement posture (ADR 0042). Default
+// (nil) is grace/false — backward compatible so the pilot's currently token-less
+// supervised agents keep connecting until the operator flips it on.
+func (o OpAMPConfig) IsAuthRequired() bool {
+	return o.RequireAuth != nil && *o.RequireAuth
+}
+
+// ResolvedMaxMessageBytes applies the default/opt-out semantics for the message
+// size cap: 0 => default, negative => 0 (unbounded).
+func (o OpAMPConfig) ResolvedMaxMessageBytes() int {
+	switch {
+	case o.MaxMessageBytes == 0:
+		return defaultOpAMPMaxMessageBytes
+	case o.MaxMessageBytes < 0:
+		return 0
+	default:
+		return o.MaxMessageBytes
+	}
+}
+
+// ResolvedMaxMessagesPerSecond applies the default/opt-out semantics for the
+// per-connection rate cap: 0 => default, negative => 0 (unlimited).
+func (o OpAMPConfig) ResolvedMaxMessagesPerSecond() float64 {
+	switch {
+	case o.MaxMessagesPerSecond == 0:
+		return defaultOpAMPMaxMessagesPerSecond
+	case o.MaxMessagesPerSecond < 0:
+		return 0
+	default:
+		return o.MaxMessagesPerSecond
+	}
 }
 
 // HAConfig groups the high-availability tuning knobs (ADR 0035). Today it
