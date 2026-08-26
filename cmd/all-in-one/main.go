@@ -484,6 +484,25 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// timeline alongside config.stored.
 	opampServer.SetAuditRecorder(auditService)
 
+	// ADR 0042 — authenticate the OpAMP control channel. It is a SECOND network
+	// port outside the REST bearer middleware; wire the SAME AuthService so an
+	// enrollment token is an ordinary API token carrying the opamp:enroll scope,
+	// minted + revoked through the existing token infrastructure. require_auth
+	// defaults to GRACE (accept unauthenticated with a loud warning) so the
+	// pilot's currently token-less supervised agents keep connecting; the
+	// operator flips opamp.require_auth=true to ENFORCE after enrolling tokens.
+	opampAuthRequired := config.OpAMP.IsAuthRequired()
+	opampServer.SetOpAMPAuth(authService, opampAuthRequired)
+	opampServer.SetOpAMPLimits(config.OpAMP.ResolvedMaxMessageBytes(), config.OpAMP.ResolvedMaxMessagesPerSecond())
+	if !opampAuthRequired {
+		logger.Warn("SECURITY: OpAMP channel authentication is in GRACE mode (opamp.require_auth is not set). " +
+			"Unauthenticated OpAMP connections are ACCEPTED — any peer that can reach the OpAMP port can register agents and receive config. " +
+			"Enroll each agent's token via the supervisor server.headers (Authorization: Bearer <token with opamp:enroll scope>), " +
+			"then set opamp.require_auth=true to enforce. See ADR 0042.")
+	} else {
+		logger.Info("OpAMP channel authentication is ENFORCED (opamp.require_auth=true): connections must present a valid opamp:enroll token")
+	}
+
 	// Create telemetry query service
 	telemetryService := services.NewTelemetryQueryService(telemetryReader, agentService, logger)
 

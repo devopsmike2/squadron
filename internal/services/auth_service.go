@@ -143,6 +143,17 @@ const (
 	ScopeActionsRead  = "actions:read"
 	ScopeActionsWrite = "actions:write"
 
+	// ADR 0042 — OpAMP channel authentication. opamp:enroll is the scope an
+	// agent/enrollment bearer token must carry to authenticate an OpAMP control-
+	// channel connection. Squadron derives the connection's tenant from the
+	// token that carries this scope (never the spoofable x-squadron-tenant header
+	// or the AgentDescription). Kept distinct from the operator scopes so an
+	// enrollment token minted for the fleet cannot also drive the REST API: it
+	// grants ONLY the ability to open an authenticated OpAMP connection into its
+	// tenant. Delivered to the supervisor via server.headers (Authorization:
+	// Bearer …); revocable per-token like any API token.
+	ScopeOpAMPEnroll = "opamp:enroll"
+
 	// v0.54 — incident drafts (Move 3). Read covers listing and
 	// viewing drafted tickets in the operator inbox. Write covers
 	// editing, dismissing, and publishing through a provider plug
@@ -215,6 +226,7 @@ func AllScopes() []string {
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,
 		ScopeActionsRead, ScopeActionsWrite,
+		ScopeOpAMPEnroll,
 		ScopeIncidentsRead, ScopeIncidentsWrite,
 		ScopeSCIMRead, ScopeSCIMWrite,
 		ScopeSSORead, ScopeSSOWrite, ScopeSSOCrossTenant,

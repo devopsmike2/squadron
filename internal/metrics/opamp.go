@@ -11,6 +11,19 @@ type OpAMPMetrics struct {
 	AgentDisconnectsTotal Counter `metric:"opamp_agent_disconnects_total" tags:"component=opamp" help:"Total number of agent disconnections"`
 	ConnectionErrors      Counter `metric:"opamp_connection_errors_total" tags:"component=opamp" help:"Total number of connection errors"`
 
+	// ADR 0042 — OpAMP channel authentication. These three split the connection
+	// attempts by credential outcome so the rollout can watch the authenticated-
+	// vs-unauthenticated ratio and know when every agent presents a token before
+	// flipping opamp.require_auth on. AuthenticatedConnections: a valid
+	// opamp:enroll bearer. UnauthenticatedConnections: accepted under grace with
+	// no/invalid credential (the future-fatal path). RejectedConnections: refused
+	// because enforcement is on and no valid credential was presented.
+	AuthenticatedConnectionsTotal   Counter `metric:"opamp_authenticated_connections_total" tags:"component=opamp" help:"Total OpAMP connections accepted with a valid enrollment token"`
+	UnauthenticatedConnectionsTotal Counter `metric:"opamp_unauthenticated_connections_total" tags:"component=opamp" help:"Total OpAMP connections accepted WITHOUT a valid token under grace mode"`
+	RejectedConnectionsTotal        Counter `metric:"opamp_rejected_connections_total" tags:"component=opamp" help:"Total OpAMP connections rejected because auth is required and no valid token was presented"`
+	OversizedMessagesTotal          Counter `metric:"opamp_oversized_messages_total" tags:"component=opamp" help:"Total OpAMP messages dropped for exceeding the max message size"`
+	RateLimitedMessagesTotal        Counter `metric:"opamp_rate_limited_messages_total" tags:"component=opamp" help:"Total OpAMP messages dropped by the per-connection rate limit"`
+
 	// Message metrics
 	MessagesReceived       Counter `metric:"opamp_messages_received_total" tags:"component=opamp" help:"Total number of OpAMP messages received"`
 	MessagesSent           Counter `metric:"opamp_messages_sent_total" tags:"component=opamp" help:"Total number of OpAMP messages sent"`
