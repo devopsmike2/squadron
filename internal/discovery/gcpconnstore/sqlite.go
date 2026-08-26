@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // sqliteStore is the SQLite-backed Store implementation. It owns the
@@ -175,14 +177,22 @@ func (s *sqliteStore) Create(ctx context.Context, conn *GCPConnection) error {
 		learnInt = 0
 	}
 
-	// ADR 0013 §D6-b: default the owner tenant to the OSS single-tenant
-	// sentinel when the caller left it empty. The create handler stamps
-	// identity.TenantFromContext(ctx) onto the struct before Create; an
-	// unstamped struct (direct test construction, background path) still
-	// lands a valid "default" row rather than an empty tenant.
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict on an unstamped
+	// context, but PERSIST the owner the handler stamped onto the struct — a
+	// background/system create carries the owner on the struct under a system
+	// context, so overwriting it from the caller's own context would mis-home
+	// the row. Ownership stays immutable on re-save.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	tenantID := conn.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		if apply {
+			tenantID = tenant
+		} else {
+			tenantID = identity.DefaultTenant
+		}
 	}
 	conn.TenantID = tenantID
 
@@ -216,7 +226,11 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*GCPConnection, error
 	if id == "" {
 		return nil, errors.New("gcpconnstore: Get: id is required")
 	}
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, project_id, sealed_sa, region,
 		       learn_from_accepted_recommendations,
 		       tenant_id,
@@ -224,7 +238,12 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*GCPConnection, error
 		FROM gcp_connections
 		WHERE id = ?
 	`
-	row := s.db.QueryRowContext(ctx, stmt, id)
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	conn, err := scanConnection(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -237,15 +256,24 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*GCPConnection, error
 
 // List returns every connection row, ordered by created_at ascending.
 func (s *sqliteStore) List(ctx context.Context) ([]*GCPConnection, error) {
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, project_id, sealed_sa, region,
 		       learn_from_accepted_recommendations,
 		       tenant_id,
 		       created_at, updated_at
 		FROM gcp_connections
-		ORDER BY created_at ASC, id ASC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY created_at ASC, id ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("gcpconnstore: list gcp_connections: %w", err)
 	}
@@ -287,35 +315,42 @@ func (s *sqliteStore) Update(ctx context.Context, conn *GCPConnection) error {
 	}
 	now := s.timeNow()
 
-	var (
-		res sql.Result
-		err error
-	)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+
+	var res sql.Result
 	if len(conn.SealedSA) == 0 {
-		const stmt = `
+		stmt := `
 			UPDATE gcp_connections
 			SET display_name = ?, project_id = ?, region = ?,
 			    learn_from_accepted_recommendations = ?,
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.ProjectID,
 			nullableString(conn.Region),
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	} else {
-		const stmt = `
+		stmt := `
 			UPDATE gcp_connections
 			SET display_name = ?, project_id = ?, sealed_sa = ?,
 			    region = ?, learn_from_accepted_recommendations = ?,
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.ProjectID,
 			conn.SealedSA,
@@ -323,7 +358,12 @@ func (s *sqliteStore) Update(ctx context.Context, conn *GCPConnection) error {
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	}
 	if err != nil {
 		return fmt.Errorf("gcpconnstore: update gcp_connection %s: %w", conn.ID, err)
@@ -344,8 +384,17 @@ func (s *sqliteStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("gcpconnstore: Delete: id is required")
 	}
-	const stmt = `DELETE FROM gcp_connections WHERE id = ?`
-	if _, err := s.db.ExecContext(ctx, stmt, id); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM gcp_connections WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("gcpconnstore: delete gcp_connection %s: %w", id, err)
 	}
 	return nil

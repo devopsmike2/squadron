@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // sqliteStore is the SQLite-backed Store implementation. It owns the
@@ -182,15 +184,23 @@ func (s *sqliteStore) Create(ctx context.Context, conn *AzureConnection) error {
 		learnInt = 0
 	}
 
-	// ADR 0013 §D6-b: default the Squadron owner tenant to the OSS
-	// single-tenant sentinel when the caller left it empty. This is the
-	// squadron_tenant_id column — distinct from the Azure-AD tenant_id.
-	// The create handler stamps identity.TenantFromContext(ctx) onto the
-	// struct before Create; an unstamped struct (direct test
-	// construction, background path) still lands a valid "default" row.
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict on an unstamped
+	// context, but PERSIST the Squadron owner tenant the handler stamped onto
+	// the struct (the squadron_tenant_id column — distinct from the Azure-AD
+	// tenant_id). A background/system create carries the owner on the struct
+	// under a system context, so overwriting it from the caller's own context
+	// would mis-home the row. Ownership stays immutable on re-save.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	squadronTenantID := conn.SquadronTenantID
 	if squadronTenantID == "" {
-		squadronTenantID = "default"
+		if apply {
+			squadronTenantID = tenant
+		} else {
+			squadronTenantID = identity.DefaultTenant
+		}
 	}
 	conn.SquadronTenantID = squadronTenantID
 
@@ -227,7 +237,11 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*AzureConnection, err
 	if id == "" {
 		return nil, errors.New("azureconnstore: Get: id is required")
 	}
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, tenant_id, subscription_id, client_id,
 		       sealed_secret, location,
 		       learn_from_accepted_recommendations,
@@ -236,7 +250,12 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*AzureConnection, err
 		FROM azure_connections
 		WHERE id = ?
 	`
-	row := s.db.QueryRowContext(ctx, stmt, id)
+	args := []any{id}
+	if apply {
+		stmt += ` AND squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	conn, err := scanConnection(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -249,16 +268,25 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*AzureConnection, err
 
 // List returns every connection row, ordered by created_at ascending.
 func (s *sqliteStore) List(ctx context.Context) ([]*AzureConnection, error) {
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, tenant_id, subscription_id, client_id,
 		       sealed_secret, location,
 		       learn_from_accepted_recommendations,
 		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM azure_connections
-		ORDER BY created_at ASC, id ASC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	var args []any
+	if apply {
+		stmt += ` WHERE squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY created_at ASC, id ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("azureconnstore: list azure_connections: %w", err)
 	}
@@ -306,12 +334,14 @@ func (s *sqliteStore) Update(ctx context.Context, conn *AzureConnection) error {
 	}
 	now := s.timeNow()
 
-	var (
-		res sql.Result
-		err error
-	)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+
+	var res sql.Result
 	if len(conn.SealedSecret) == 0 {
-		const stmt = `
+		stmt := `
 			UPDATE azure_connections
 			SET display_name = ?, tenant_id = ?, subscription_id = ?,
 			    client_id = ?, location = ?,
@@ -319,7 +349,7 @@ func (s *sqliteStore) Update(ctx context.Context, conn *AzureConnection) error {
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.TenantID,
 			conn.SubscriptionID,
@@ -328,9 +358,14 @@ func (s *sqliteStore) Update(ctx context.Context, conn *AzureConnection) error {
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND squadron_tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	} else {
-		const stmt = `
+		stmt := `
 			UPDATE azure_connections
 			SET display_name = ?, tenant_id = ?, subscription_id = ?,
 			    client_id = ?, sealed_secret = ?, location = ?,
@@ -338,7 +373,7 @@ func (s *sqliteStore) Update(ctx context.Context, conn *AzureConnection) error {
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.TenantID,
 			conn.SubscriptionID,
@@ -348,7 +383,12 @@ func (s *sqliteStore) Update(ctx context.Context, conn *AzureConnection) error {
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND squadron_tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	}
 	if err != nil {
 		return fmt.Errorf("azureconnstore: update azure_connection %s: %w", conn.ID, err)
@@ -369,8 +409,17 @@ func (s *sqliteStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("azureconnstore: Delete: id is required")
 	}
-	const stmt = `DELETE FROM azure_connections WHERE id = ?`
-	if _, err := s.db.ExecContext(ctx, stmt, id); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM azure_connections WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("azureconnstore: delete azure_connection %s: %w", id, err)
 	}
 	return nil

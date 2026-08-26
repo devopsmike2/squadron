@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -42,12 +43,19 @@ func (s *Storage) CreateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEv
 	if e.Severity == "" {
 		e.Severity = "warn"
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO cost_spike_events (`+costSpikeColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO cost_spike_events (`+costSpikeColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		e.ID, e.StartedAt.UTC(), nullTime(e.EndedAt), e.Severity, e.Signal,
 		e.BaselineMonthlyUSD, e.PeakMonthlyUSD, e.PeakPctAboveBaseline,
-		e.AttributionJSON, nullTime(e.AcknowledgedAt), e.AcknowledgedBy)
+		e.AttributionJSON, nullTime(e.AcknowledgedAt), e.AcknowledgedBy, tenant)
 	if err != nil {
 		return fmt.Errorf("create cost spike event: %w", err)
 	}
@@ -58,24 +66,44 @@ func (s *Storage) UpdateCostSpikeEvent(ctx context.Context, e *types.CostSpikeEv
 	if e == nil || e.ID == "" {
 		return fmt.Errorf("id required")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE cost_spike_events SET
 			ended_at = $2, severity = $3, signal = $4,
 			baseline_monthly_usd = $5, peak_monthly_usd = $6,
 			peak_pct_above_baseline = $7, attribution_json = $8,
 			acknowledged_at = $9, acknowledged_by = $10
-		WHERE id = $1`,
+		WHERE id = $1`
+	args := []any{
 		e.ID, nullTime(e.EndedAt), e.Severity, e.Signal,
 		e.BaselineMonthlyUSD, e.PeakMonthlyUSD, e.PeakPctAboveBaseline,
-		e.AttributionJSON, nullTime(e.AcknowledgedAt), e.AcknowledgedBy)
-	if err != nil {
+		e.AttributionJSON, nullTime(e.AcknowledgedAt), e.AcknowledgedBy,
+	}
+	if apply {
+		query += ` AND tenant_id = $11`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 		return fmt.Errorf("update cost spike event: %w", err)
 	}
 	return nil
 }
 
 func (s *Storage) GetCostSpikeEvent(ctx context.Context, id string) (*types.CostSpikeEvent, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+costSpikeColumns+` FROM cost_spike_events WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + costSpikeColumns + ` FROM cost_spike_events WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	e, err := scanCostSpikeEvent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -84,7 +112,16 @@ func (s *Storage) GetCostSpikeEvent(ctx context.Context, id string) (*types.Cost
 }
 
 func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpikeFilter) ([]*types.CostSpikeEvent, error) {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + costSpikeColumns + ` FROM cost_spike_events WHERE 1=1`
+	var args []any
+	if apply {
+		query += ` AND tenant_id = $1`
+		args = append(args, tenant)
+	}
 	switch filter.Status {
 	case "open":
 		query += " AND ended_at IS NULL"
@@ -92,9 +129,8 @@ func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpik
 		query += " AND ended_at IS NOT NULL"
 	}
 	query += " ORDER BY started_at DESC"
-	var args []any
 	if filter.Limit > 0 {
-		query += " LIMIT $1"
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
 		args = append(args, filter.Limit)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -114,8 +150,19 @@ func (s *Storage) ListCostSpikeEvents(ctx context.Context, filter types.CostSpik
 }
 
 func (s *Storage) LatestOpenCostSpike(ctx context.Context) (*types.CostSpikeEvent, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+costSpikeColumns+`
-		FROM cost_spike_events WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + costSpikeColumns + `
+		FROM cost_spike_events WHERE ended_at IS NULL`
+	var args []any
+	if apply {
+		query += ` AND tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY started_at DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	e, err := scanCostSpikeEvent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

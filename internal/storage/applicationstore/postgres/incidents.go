@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -41,12 +42,19 @@ func (s *Storage) CreateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 	if d.Status == "" {
 		d.Status = "draft"
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO incident_drafts (`+incidentDraftColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO incident_drafts (`+incidentDraftColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		d.ID, nullString(d.ActionRequestID), nullString(d.RolloutID), d.Status, d.Title, d.BodyMarkdown,
 		nullString(d.DraftContentJSON), nullString(d.Provider), nullString(d.ExternalID), nullString(d.ExternalURL),
-		d.CreatedAt, d.UpdatedAt)
+		d.CreatedAt, d.UpdatedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create incident draft: %w", err)
 	}
@@ -55,13 +63,24 @@ func (s *Storage) CreateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 
 func (s *Storage) UpdateIncidentDraft(ctx context.Context, d *types.IncidentDraft) error {
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
 		UPDATE incident_drafts SET
 			status = $2, title = $3, body_markdown = $4, draft_content_json = $5,
 			provider = $6, external_id = $7, external_url = $8, updated_at = $9
-		WHERE id = $1`,
+		WHERE id = $1`
+	args := []any{
 		d.ID, d.Status, d.Title, d.BodyMarkdown, nullString(d.DraftContentJSON),
-		nullString(d.Provider), nullString(d.ExternalID), nullString(d.ExternalURL), now)
+		nullString(d.Provider), nullString(d.ExternalID), nullString(d.ExternalURL), now,
+	}
+	if apply {
+		query += ` AND tenant_id = $10`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update incident draft: %w", err)
 	}
@@ -73,7 +92,17 @@ func (s *Storage) UpdateIncidentDraft(ctx context.Context, d *types.IncidentDraf
 }
 
 func (s *Storage) GetIncidentDraft(ctx context.Context, id string) (*types.IncidentDraft, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+incidentDraftColumns+` FROM incident_drafts WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + incidentDraftColumns + ` FROM incident_drafts WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	d, err := scanIncidentDraft(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -85,8 +114,19 @@ func (s *Storage) GetIncidentDraftByActionRequestID(ctx context.Context, actionR
 	if actionRequestID == "" {
 		return nil, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+incidentDraftColumns+`
-		FROM incident_drafts WHERE action_request_id = $1 ORDER BY created_at DESC LIMIT 1`, actionRequestID)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + incidentDraftColumns + `
+		FROM incident_drafts WHERE action_request_id = $1`
+	args := []any{actionRequestID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	d, err := scanIncidentDraft(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -102,9 +142,18 @@ func (s *Storage) ListIncidentDrafts(ctx context.Context, filter types.IncidentD
 	if limit > 1000 {
 		limit = 1000
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + incidentDraftColumns + ` FROM incident_drafts WHERE 1=1`
 	var args []any
 	n := 0
+	if apply {
+		n++
+		query += fmt.Sprintf(" AND tenant_id = $%d", n)
+		args = append(args, tenant)
+	}
 	if filter.ActionRequestID != "" {
 		n++
 		query += fmt.Sprintf(" AND action_request_id = $%d", n)

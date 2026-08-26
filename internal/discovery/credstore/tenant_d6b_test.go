@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // tenant_d6b_test.go — ADR 0013 §D6-b: the shared cloud_connections
@@ -21,11 +23,12 @@ import (
 // owner tenant round-trips through Get and List.
 func TestCredstore_D6b_OwnerTenantRoundTrip(t *testing.T) {
 	store, _ := newTestStore(t)
-	ctx := context.Background()
+	// ADR 0043: ownership is stamped from the tenant-scoped context, not
+	// the caller's struct, and reads are confined to that tenant.
+	ctx := identity.WithTenant(context.Background(), "acme")
 	key := newTestKey(t)
 
 	conn := sampleAWSConnection(t, key, "111111111111")
-	conn.TenantID = "acme"
 	require.NoError(t, store.StoreConnection(ctx, conn))
 
 	got, err := store.GetConnection(ctx, "111111111111")
@@ -61,20 +64,23 @@ func TestCredstore_D6b_EmptyOwnerTenantDefaults(t *testing.T) {
 // immutable per ADR 0013 §D6-b).
 func TestCredstore_D6b_OwnershipImmutableOnUpsert(t *testing.T) {
 	store, _ := newTestStore(t)
-	ctx := context.Background()
+	// ADR 0043: ownership is stamped from the tenant-scoped context. The
+	// first tenant owns the row; a second tenant's re-save can touch
+	// mutable columns via the account-keyed UPSERT but must NOT re-home
+	// the row (tenant_id is excluded from ON CONFLICT DO UPDATE SET).
+	acmeCtx := identity.WithTenant(context.Background(), "acme")
+	intruderCtx := identity.WithTenant(context.Background(), "intruder")
 	key := newTestKey(t)
 
 	first := sampleAWSConnection(t, key, "333333333333")
-	first.TenantID = "acme"
-	require.NoError(t, store.StoreConnection(ctx, first))
+	require.NoError(t, store.StoreConnection(acmeCtx, first))
 
 	// A second save under a different tenant must NOT re-home the row.
 	second := sampleAWSConnection(t, key, "333333333333")
 	second.DisplayName = "renamed"
-	second.TenantID = "intruder"
-	require.NoError(t, store.StoreConnection(ctx, second))
+	require.NoError(t, store.StoreConnection(intruderCtx, second))
 
-	got, err := store.GetConnection(ctx, "333333333333")
+	got, err := store.GetConnection(acmeCtx, "333333333333")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, "renamed", got.DisplayName, "mutable columns update on re-save")

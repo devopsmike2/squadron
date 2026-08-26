@@ -39,15 +39,27 @@ func (s *Storage) ListAIVerdictsForGroup(ctx context.Context, groupID string, si
 	if limit > 1000 {
 		limit = 1000
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+rolloutColumns+`
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + rolloutColumns + `
 		FROM rollouts
 		WHERE group_id = $1
 		  AND proposed_by = 'ai'
 		  AND (approved_at IS NOT NULL OR rejected_at IS NOT NULL)
 		  AND COALESCE(approved_at, rejected_at) >= $2
-		  AND exclude_from_learning = FALSE
+		  AND exclude_from_learning = FALSE`
+	args := []any{groupID, since}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	query += fmt.Sprintf(`
 		ORDER BY COALESCE(approved_at, rejected_at) DESC
-		LIMIT $3`, groupID, since, limit)
+		LIMIT $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list AI verdicts for group: %w", err)
 	}

@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // sqliteStore is the SQLite-backed Store implementation. It owns the
@@ -203,14 +205,22 @@ func (s *sqliteStore) Create(ctx context.Context, conn *IaCConnection) error {
 		learnInt = 0
 	}
 
-	// ADR 0012 §Decision 3: default the tenant to the OSS single-tenant
-	// sentinel when the caller left it empty. The create handler stamps
-	// identity.TenantFromContext(ctx) onto the struct before Create; an
-	// unstamped struct (direct test construction, background path) still
-	// lands a valid "default" row rather than an empty tenant.
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict on an unstamped
+	// context, but PERSIST the owner the handler stamped onto the struct — a
+	// background/system create carries the owner on the struct under a system
+	// context, so overwriting it from the caller's own context would mis-home
+	// the row. Ownership stays immutable on re-save.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	tenantID := conn.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		if apply {
+			tenantID = tenant
+		} else {
+			tenantID = identity.DefaultTenant
+		}
 	}
 	conn.TenantID = tenantID
 
@@ -254,7 +264,11 @@ func (s *sqliteStore) Get(ctx context.Context, connectionID string) (*IaCConnect
 	if connectionID == "" {
 		return nil, errors.New("iacconnstore: Get: connectionID is required")
 	}
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
@@ -264,7 +278,12 @@ func (s *sqliteStore) Get(ctx context.Context, connectionID string) (*IaCConnect
 		FROM iac_connections
 		WHERE connection_id = ?
 	`
-	row := s.db.QueryRowContext(ctx, stmt, connectionID)
+	args := []any{connectionID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	conn, err := scanConnection(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -285,7 +304,14 @@ func (s *sqliteStore) GetByRepoFullName(ctx context.Context, repoFullName string
 	if repoFullName == "" {
 		return nil, errors.New("iacconnstore: GetByRepoFullName: repoFullName is required")
 	}
-	const stmt = `
+	// UNSCOPED BY DESIGN (ADR 0043): this is the pre-tenant webhook resolver —
+	// the HMAC-authed GitHub webhook receiver calls it BEFORE any tenant is
+	// known, to derive the owning tenant FROM the matched connection (exactly
+	// like GetAPITokenByHash is the pre-auth token lookup). Adding a tenant
+	// predicate here would make the receiver unable to find the connection
+	// (its request context carries no tenant yet), so the lookup stays
+	// cross-tenant. Operator-facing enumeration uses the tenant-scoped List.
+	stmt := `
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
@@ -310,7 +336,11 @@ func (s *sqliteStore) GetByRepoFullName(ctx context.Context, repoFullName string
 
 // List returns every connection row, ordered by created_at ascending.
 func (s *sqliteStore) List(ctx context.Context) ([]*IaCConnection, error) {
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT connection_id, provider, auth_kind, repo_full_name, default_branch,
 		       repo_layout, branch_prefix, reviewer_team_handle,
 		       placement_map_json, cred_ciphertext,
@@ -318,9 +348,14 @@ func (s *sqliteStore) List(ctx context.Context) ([]*IaCConnection, error) {
 		       tenant_id,
 		       created_at, updated_at
 		FROM iac_connections
-		ORDER BY created_at ASC, connection_id ASC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	var args []any
+	if apply {
+		stmt += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY created_at ASC, connection_id ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("iacconnstore: list iac_connections: %w", err)
 	}
@@ -345,8 +380,17 @@ func (s *sqliteStore) Delete(ctx context.Context, connectionID string) error {
 	if connectionID == "" {
 		return errors.New("iacconnstore: Delete: connectionID is required")
 	}
-	const stmt = `DELETE FROM iac_connections WHERE connection_id = ?`
-	if _, err := s.db.ExecContext(ctx, stmt, connectionID); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM iac_connections WHERE connection_id = ?`
+	args := []any{connectionID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("iacconnstore: delete iac_connection %s: %w", connectionID, err)
 	}
 	return nil
@@ -365,18 +409,27 @@ func (s *sqliteStore) UpdatePlacementMap(ctx context.Context, connectionID strin
 	if err != nil {
 		return fmt.Errorf("iacconnstore: marshal PlacementMap: %w", err)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	now := s.timeNow()
 
-	const stmt = `
+	stmt := `
 		UPDATE iac_connections
 		SET placement_map_json = ?, updated_at = ?
 		WHERE connection_id = ?
 	`
-	res, err := s.db.ExecContext(ctx, stmt,
+	args := []any{
 		string(placementJSON),
 		now.Format(timestampLayout),
 		connectionID,
-	)
+	}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("iacconnstore: update placement_map for %s: %w", connectionID, err)
 	}
@@ -399,8 +452,12 @@ func (s *sqliteStore) SetWebhookSecret(ctx context.Context, connectionID string,
 	if connectionID == "" {
 		return errors.New("iacconnstore: SetWebhookSecret: connectionID is required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	now := s.timeNow()
-	const stmt = `
+	stmt := `
 		UPDATE iac_connections
 		SET webhook_secret_sealed = ?, updated_at = ?
 		WHERE connection_id = ?
@@ -414,7 +471,12 @@ func (s *sqliteStore) SetWebhookSecret(ctx context.Context, connectionID string,
 	} else {
 		arg = sealed
 	}
-	res, err := s.db.ExecContext(ctx, stmt, arg, now.Format(timestampLayout), connectionID)
+	args := []any{arg, now.Format(timestampLayout), connectionID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("iacconnstore: set webhook_secret_sealed for %s: %w", connectionID, err)
 	}
@@ -441,7 +503,10 @@ func (s *sqliteStore) GetWebhookSecret(ctx context.Context, connectionID string)
 	if connectionID == "" {
 		return nil, errors.New("iacconnstore: GetWebhookSecret: connectionID is required")
 	}
-	const stmt = `SELECT webhook_secret_sealed FROM iac_connections WHERE connection_id = ?`
+	// UNSCOPED BY DESIGN (ADR 0043): part of the HMAC-authed webhook flow,
+	// keyed by the connection_id GetByRepoFullName just resolved — no operator
+	// identity is present. Mirrors GetByRepoFullName's pre-tenant posture.
+	stmt := `SELECT webhook_secret_sealed FROM iac_connections WHERE connection_id = ?`
 	var sealed []byte
 	if err := s.db.QueryRowContext(ctx, stmt, connectionID).Scan(&sealed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -463,13 +528,22 @@ func (s *sqliteStore) UpdateLearnFromAcceptedRecommendations(ctx context.Context
 	if learn {
 		val = 1
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	now := s.timeNow()
-	const stmt = `
+	stmt := `
 		UPDATE iac_connections
 		SET learn_from_accepted_recommendations = ?, updated_at = ?
 		WHERE connection_id = ?
 	`
-	res, err := s.db.ExecContext(ctx, stmt, val, now.Format(timestampLayout), connectionID)
+	args := []any{val, now.Format(timestampLayout), connectionID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("iacconnstore: update learn_from_accepted_recommendations for %s: %w", connectionID, err)
 	}

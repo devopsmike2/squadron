@@ -15,6 +15,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/services"
 )
 
@@ -233,14 +234,24 @@ func (s *sqliteStore) StoreConnection(ctx context.Context, conn CloudConnection)
 		created = now
 	}
 
-	// ADR 0013 §D6-b: default the owner tenant to the OSS single-tenant
-	// sentinel when the caller left it empty. The AWS save handler
-	// stamps identity.TenantFromContext(ctx) onto the struct before
-	// StoreConnection; an unstamped struct (direct test construction,
-	// background path) still lands a valid "default" row.
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict on an unstamped
+	// context, but the OWNER tenant is the one the handler already stamped
+	// onto the struct (identity.TenantFromContext at the save handler) — a
+	// background/system create (e.g. the discovery scan scheduler) carries the
+	// owner ON THE STRUCT under a system context, so we PERSIST the struct's
+	// owner rather than overwrite it from the caller's own context. Ownership
+	// stays immutable on re-save (excluded from ON CONFLICT DO UPDATE SET).
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	tenantID := conn.TenantID
 	if tenantID == "" {
-		tenantID = "default"
+		if apply {
+			tenantID = tenant
+		} else {
+			tenantID = identity.DefaultTenant
+		}
 	}
 	conn.TenantID = tenantID
 
@@ -289,7 +300,11 @@ func (s *sqliteStore) StoreConnection(ctx context.Context, conn CloudConnection)
 // (nil, nil) if no row matches. Emits one
 // discovery.<provider>.connection_read event on success.
 func (s *sqliteStore) GetConnection(ctx context.Context, accountID string) (*CloudConnection, error) {
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT account_id, provider, connection_type, display_name, regions,
 		       credentials_ciphertext, credentials_nonce,
 		       tenant_id,
@@ -297,7 +312,12 @@ func (s *sqliteStore) GetConnection(ctx context.Context, accountID string) (*Clo
 		FROM cloud_connections
 		WHERE account_id = ?
 	`
-	row := s.db.QueryRowContext(ctx, stmt, accountID)
+	args := []any{accountID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	conn, err := scanConnection(row, s.backend)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -316,7 +336,11 @@ func (s *sqliteStore) GetConnection(ctx context.Context, accountID string) (*Clo
 // trail records exactly which connections were read during a scan
 // dispatch.
 func (s *sqliteStore) ListConnections(ctx context.Context, filter ListFilter) ([]*CloudConnection, error) {
-	const base = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT account_id, provider, connection_type, display_name, regions,
 		       credentials_ciphertext, credentials_nonce,
 		       tenant_id,
@@ -324,16 +348,22 @@ func (s *sqliteStore) ListConnections(ctx context.Context, filter ListFilter) ([
 		FROM cloud_connections
 	`
 	var (
-		rows *sql.Rows
-		err  error
+		conds []string
+		args  []any
 	)
-	if filter.Provider == "" {
-		rows, err = s.db.QueryContext(ctx, base+` ORDER BY account_id ASC`)
-	} else {
-		rows, err = s.db.QueryContext(ctx,
-			base+` WHERE provider = ? ORDER BY account_id ASC`,
-			string(filter.Provider))
+	if filter.Provider != "" {
+		conds = append(conds, `provider = ?`)
+		args = append(args, string(filter.Provider))
 	}
+	if apply {
+		conds = append(conds, `tenant_id = ?`)
+		args = append(args, tenant)
+	}
+	if len(conds) > 0 {
+		stmt += ` WHERE ` + strings.Join(conds, ` AND `)
+	}
+	stmt += ` ORDER BY account_id ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("credstore: list cloud_connections: %w", err)
 	}
@@ -362,8 +392,17 @@ func (s *sqliteStore) DeleteConnection(ctx context.Context, accountID string) er
 	if accountID == "" {
 		return errors.New("credstore: DeleteConnection: accountID is required")
 	}
-	const stmt = `DELETE FROM cloud_connections WHERE account_id = ?`
-	if _, err := s.db.ExecContext(ctx, stmt, accountID); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM cloud_connections WHERE account_id = ?`
+	args := []any{accountID}
+	if apply {
+		stmt += ` AND tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("credstore: delete cloud_connection %s: %w", accountID, err)
 	}
 	return nil

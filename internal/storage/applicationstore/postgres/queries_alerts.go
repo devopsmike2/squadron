@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -37,10 +38,17 @@ func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery)
 	if err != nil {
 		return fmt.Errorf("marshal saved query tags: %w", err)
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO saved_queries (`+savedQueryColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		query.ID, query.Name, query.Description, query.Query, tags, query.CreatedAt, query.UpdatedAt)
+		INSERT INTO saved_queries (`+savedQueryColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		query.ID, query.Name, query.Description, query.Query, tags, query.CreatedAt, query.UpdatedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create saved query: %w", err)
 	}
@@ -48,7 +56,17 @@ func (s *Storage) CreateSavedQuery(ctx context.Context, query *types.SavedQuery)
 }
 
 func (s *Storage) GetSavedQuery(ctx context.Context, id string) (*types.SavedQuery, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+savedQueryColumns+` FROM saved_queries WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + savedQueryColumns + ` FROM saved_queries WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	sq, err := scanSavedQuery(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -57,7 +75,18 @@ func (s *Storage) GetSavedQuery(ctx context.Context, id string) (*types.SavedQue
 }
 
 func (s *Storage) ListSavedQueries(ctx context.Context) ([]*types.SavedQuery, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+savedQueryColumns+` FROM saved_queries ORDER BY updated_at DESC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + savedQueryColumns + ` FROM saved_queries`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY updated_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list saved queries: %w", err)
 	}
@@ -78,10 +107,19 @@ func (s *Storage) UpdateSavedQuery(ctx context.Context, query *types.SavedQuery)
 	if err != nil {
 		return fmt.Errorf("marshal saved query tags: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE saved_queries SET name=$2, description=$3, query=$4, tags=$5, updated_at=$6
-		WHERE id=$1`,
-		query.ID, query.Name, query.Description, query.Query, tags, query.UpdatedAt)
+		WHERE id=$1`
+	args := []any{query.ID, query.Name, query.Description, query.Query, tags, query.UpdatedAt}
+	if apply {
+		stmt += ` AND tenant_id = $7`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update saved query: %w", err)
 	}
@@ -92,7 +130,17 @@ func (s *Storage) UpdateSavedQuery(ctx context.Context, query *types.SavedQuery)
 }
 
 func (s *Storage) DeleteSavedQuery(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM saved_queries WHERE id=$1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM saved_queries WHERE id=$1`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("delete saved query: %w", err)
 	}
@@ -125,12 +173,19 @@ func scanSavedQuery(sc scanner) (*types.SavedQuery, error) {
 const alertRuleColumns = `id, name, description, query, threshold_operator, threshold_value, interval_seconds, severity, enabled, webhook_url, created_at, updated_at`
 
 func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO alert_rules (`+alertRuleColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	if !apply {
+		tenant = identity.DefaultTenant
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO alert_rules (`+alertRuleColumns+`, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		rule.ID, rule.Name, rule.Description, rule.Query, string(rule.ThresholdOperator),
 		rule.ThresholdValue, rule.IntervalSeconds, string(rule.Severity), rule.Enabled,
-		rule.WebhookURL, rule.CreatedAt, rule.UpdatedAt)
+		rule.WebhookURL, rule.CreatedAt, rule.UpdatedAt, tenant)
 	if err != nil {
 		return fmt.Errorf("create alert rule: %w", err)
 	}
@@ -138,7 +193,17 @@ func (s *Storage) CreateAlertRule(ctx context.Context, rule *types.AlertRule) er
 }
 
 func (s *Storage) GetAlertRule(ctx context.Context, id string) (*types.AlertRule, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+alertRuleColumns+` FROM alert_rules WHERE id = $1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + alertRuleColumns + ` FROM alert_rules WHERE id = $1`
+	args := []any{id}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanAlertRule(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -147,7 +212,18 @@ func (s *Storage) GetAlertRule(ctx context.Context, id string) (*types.AlertRule
 }
 
 func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+alertRuleColumns+` FROM alert_rules ORDER BY name ASC`)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + alertRuleColumns + ` FROM alert_rules`
+	var args []any
+	if apply {
+		query += ` WHERE tenant_id = $1`
+		args = append(args, tenant)
+	}
+	query += ` ORDER BY name ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list alert rules: %w", err)
 	}
@@ -164,13 +240,24 @@ func (s *Storage) ListAlertRules(ctx context.Context) ([]*types.AlertRule, error
 }
 
 func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) error {
-	res, err := s.db.ExecContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `
 		UPDATE alert_rules SET name=$2, description=$3, query=$4, threshold_operator=$5,
 			threshold_value=$6, interval_seconds=$7, severity=$8, enabled=$9, webhook_url=$10, updated_at=$11
-		WHERE id=$1`,
+		WHERE id=$1`
+	args := []any{
 		rule.ID, rule.Name, rule.Description, rule.Query, string(rule.ThresholdOperator),
 		rule.ThresholdValue, rule.IntervalSeconds, string(rule.Severity), rule.Enabled,
-		rule.WebhookURL, rule.UpdatedAt)
+		rule.WebhookURL, rule.UpdatedAt,
+	}
+	if apply {
+		stmt += ` AND tenant_id = $12`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("update alert rule: %w", err)
 	}
@@ -181,7 +268,17 @@ func (s *Storage) UpdateAlertRule(ctx context.Context, rule *types.AlertRule) er
 }
 
 func (s *Storage) DeleteAlertRule(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM alert_rules WHERE id=$1`, id)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM alert_rules WHERE id=$1`
+	args := []any{id}
+	if apply {
+		stmt += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	res, err := s.db.ExecContext(ctx, stmt, args...)
 	if err != nil {
 		return fmt.Errorf("delete alert rule: %w", err)
 	}

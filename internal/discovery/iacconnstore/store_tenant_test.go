@@ -12,6 +12,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // TestTenantIDRoundTrips exercises ADR 0012 §Decision 3: a connection
@@ -25,12 +27,14 @@ func TestTenantIDRoundTrips(t *testing.T) {
 		t.Run(backend.name, func(t *testing.T) {
 			t.Run("create_with_tenant_round_trips", func(t *testing.T) {
 				store := backend.factory(t)
-				ctx := context.Background()
+				// ADR 0043: ownership is stamped from the tenant-scoped
+				// context, not the caller's struct, and reads/GetByRepo are
+				// confined to that tenant.
+				ctx := identity.WithTenant(context.Background(), "acme")
 
 				in := sampleConnection("acme/infra")
-				in.TenantID = "acme"
 				require.NoError(t, store.Create(ctx, in))
-				assert.Equal(t, "acme", in.TenantID, "Create keeps the supplied tenant")
+				assert.Equal(t, "acme", in.TenantID, "Create stamps the context's owner tenant")
 
 				got, err := store.Get(ctx, in.ConnectionID)
 				require.NoError(t, err)

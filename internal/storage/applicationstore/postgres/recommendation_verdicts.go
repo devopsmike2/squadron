@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -61,6 +62,26 @@ func (s *Storage) SetRecommendationExclusion(
 		return false, fmt.Errorf("recommendation_kind required")
 	}
 
+	// ADR 0043 tenant scope: the reads + upsert below are scoped so a tenant
+	// can't observe or mutate another tenant's verdict row. tenantPred is empty
+	// in the inert/system path. The upsert's ON CONFLICT target is the composite
+	// (tenant_id, recommendation_id) key so two tenants can hold the same
+	// recommendation_id.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return false, err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+	tenantPred := ""
+	var tenantArgs []any
+	if apply {
+		tenantPred = ` AND tenant_id = $2`
+		tenantArgs = append(tenantArgs, scopeTenant)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("begin tx: %w", err)
@@ -74,8 +95,8 @@ func (s *Storage) SetRecommendationExclusion(
 		prevCreated  time.Time
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT exclude_from_learning, created_at FROM iac_recommendation_verdicts WHERE recommendation_id = $1`,
-		rec.RecommendationID).Scan(&prevExcluded, &prevCreated)
+		`SELECT exclude_from_learning, created_at FROM iac_recommendation_verdicts WHERE recommendation_id = $1`+tenantPred,
+		append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&prevExcluded, &prevCreated)
 	switch {
 	case err == nil:
 		hadRow = true
@@ -113,8 +134,8 @@ func (s *Storage) SetRecommendationExclusion(
 		var curAt sql.NullTime
 		var curBy sql.NullString
 		if err := tx.QueryRowContext(ctx,
-			`SELECT excluded_at, excluded_by FROM iac_recommendation_verdicts WHERE recommendation_id = $1`,
-			rec.RecommendationID).Scan(&curAt, &curBy); err != nil {
+			`SELECT excluded_at, excluded_by FROM iac_recommendation_verdicts WHERE recommendation_id = $1`+tenantPred,
+			append([]any{rec.RecommendationID}, tenantArgs...)...).Scan(&curAt, &curBy); err != nil {
 			return false, fmt.Errorf("read prior stamps: %w", err)
 		}
 		if curAt.Valid {
@@ -129,9 +150,9 @@ func (s *Storage) SetRecommendationExclusion(
 		INSERT INTO iac_recommendation_verdicts (
 			recommendation_id, connection_id, account_id, region,
 			recommendation_kind, resource_id, exclude_from_learning,
-			excluded_at, excluded_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (recommendation_id) DO UPDATE SET
+			excluded_at, excluded_by, created_at, updated_at, tenant_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (tenant_id, recommendation_id) DO UPDATE SET
 			connection_id         = excluded.connection_id,
 			account_id            = excluded.account_id,
 			region                = excluded.region,
@@ -140,10 +161,11 @@ func (s *Storage) SetRecommendationExclusion(
 			exclude_from_learning = excluded.exclude_from_learning,
 			excluded_at           = excluded.excluded_at,
 			excluded_by           = excluded.excluded_by,
-			updated_at            = excluded.updated_at`,
+			updated_at            = excluded.updated_at,
+			tenant_id             = excluded.tenant_id`,
 		rec.RecommendationID, rec.ConnectionID, rec.AccountID, rec.Region,
 		rec.RecommendationKind, nullString(rec.ResourceID), excluded,
-		stampAt, stampBy, createdAt, now); err != nil {
+		stampAt, stampBy, createdAt, now, rowTenant); err != nil {
 		return false, fmt.Errorf("upsert recommendation exclusion: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -166,15 +188,27 @@ func (s *Storage) ListExcludedRecommendations(
 	if connectionID == "" || accountID == "" || region == "" {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `
 		SELECT recommendation_id, connection_id, account_id, region,
 		       recommendation_kind, COALESCE(resource_id, ''),
 		       excluded_at, COALESCE(excluded_by, '')
 		FROM iac_recommendation_verdicts
 		WHERE connection_id = $1 AND account_id = $2 AND region = $3
-		  AND exclude_from_learning = TRUE
+		  AND exclude_from_learning = TRUE`
+	args := []any{connectionID, accountID, region}
+	if apply {
+		query += ` AND tenant_id = $4`
+		args = append(args, tenant)
+	}
+	query += fmt.Sprintf(`
 		ORDER BY excluded_at DESC
-		LIMIT $4`, connectionID, accountID, region, limit)
+		LIMIT $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list excluded recommendations: %w", err)
 	}
@@ -213,6 +247,19 @@ func (s *Storage) SetCheckRunForRecommendation(
 		return fmt.Errorf("recommendation_kind required")
 	}
 
+	// ADR 0043 tenant scope: the existence probe + UPDATE are scoped so a
+	// tenant can't touch another tenant's row; the INSERT stamps the row's
+	// tenant. Read-then-UPDATE-or-INSERT (no ON CONFLICT); the composite
+	// (tenant_id, recommendation_id) uniqueness is enforced on the INSERT path.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -221,8 +268,13 @@ func (s *Storage) SetCheckRunForRecommendation(
 
 	var hadRow bool
 	var one int
-	err = tx.QueryRowContext(ctx,
-		`SELECT 1 FROM iac_recommendation_verdicts WHERE recommendation_id = $1`, rec.RecommendationID).Scan(&one)
+	existsQuery := `SELECT 1 FROM iac_recommendation_verdicts WHERE recommendation_id = $1`
+	existsArgs := []any{rec.RecommendationID}
+	if apply {
+		existsQuery += ` AND tenant_id = $2`
+		existsArgs = append(existsArgs, scopeTenant)
+	}
+	err = tx.QueryRowContext(ctx, existsQuery, existsArgs...).Scan(&one)
 	switch {
 	case err == nil:
 		hadRow = true
@@ -256,7 +308,7 @@ func (s *Storage) SetCheckRunForRecommendation(
 	}
 
 	if hadRow {
-		if _, err := tx.ExecContext(ctx, `
+		updQuery := `
 			UPDATE iac_recommendation_verdicts SET
 				check_run_owner      = $2,
 				check_run_repo       = $3,
@@ -266,8 +318,13 @@ func (s *Storage) SetCheckRunForRecommendation(
 				check_run_conclusion = $7,
 				check_run_updated_at = $8,
 				updated_at           = $9
-			WHERE recommendation_id = $1`,
-			rec.RecommendationID, owner, repo, checkID, headSHA, statusVal, conclusionVal, now, now); err != nil {
+			WHERE recommendation_id = $1`
+		updArgs := []any{rec.RecommendationID, owner, repo, checkID, headSHA, statusVal, conclusionVal, now, now}
+		if apply {
+			updQuery += ` AND tenant_id = $10`
+			updArgs = append(updArgs, scopeTenant)
+		}
+		if _, err := tx.ExecContext(ctx, updQuery, updArgs...); err != nil {
 			return fmt.Errorf("update check run state: %w", err)
 		}
 	} else {
@@ -278,11 +335,11 @@ func (s *Storage) SetCheckRunForRecommendation(
 				excluded_at, excluded_by,
 				check_run_owner, check_run_repo, check_run_id, check_run_head_sha,
 				check_run_status, check_run_conclusion, check_run_updated_at,
-				created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,FALSE,NULL,NULL,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+				created_at, updated_at, tenant_id
+			) VALUES ($1,$2,$3,$4,$5,$6,FALSE,NULL,NULL,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 			rec.RecommendationID, rec.ConnectionID, rec.AccountID, rec.Region,
 			rec.RecommendationKind, nullString(rec.ResourceID),
-			owner, repo, checkID, headSHA, statusVal, conclusionVal, now, now, now); err != nil {
+			owner, repo, checkID, headSHA, statusVal, conclusionVal, now, now, now, rowTenant); err != nil {
 			return fmt.Errorf("insert check run state: %w", err)
 		}
 	}
@@ -299,16 +356,26 @@ func (s *Storage) GetCheckRunForRecommendation(
 	if recommendationID == "" {
 		return types.CheckRunRef{}, "", "", false, fmt.Errorf("recommendation_id required")
 	}
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return types.CheckRunRef{}, "", "", false, err
+	}
+	query := `
+		SELECT COALESCE(check_run_owner, ''), COALESCE(check_run_repo, ''),
+		       COALESCE(check_run_id, 0), COALESCE(check_run_head_sha, ''),
+		       COALESCE(check_run_status, ''), COALESCE(check_run_conclusion, '')
+		FROM iac_recommendation_verdicts WHERE recommendation_id = $1`
+	args := []any{recommendationID}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
 	var (
 		ref        types.CheckRunRef
 		status     string
 		conclusion string
 	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(check_run_owner, ''), COALESCE(check_run_repo, ''),
-		       COALESCE(check_run_id, 0), COALESCE(check_run_head_sha, ''),
-		       COALESCE(check_run_status, ''), COALESCE(check_run_conclusion, '')
-		FROM iac_recommendation_verdicts WHERE recommendation_id = $1`, recommendationID).Scan(
+	err = s.db.QueryRowContext(ctx, query, args...).Scan(
 		&ref.Owner, &ref.Repo, &ref.CheckID, &ref.HeadSHA, &status, &conclusion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return types.CheckRunRef{}, "", "", false, nil

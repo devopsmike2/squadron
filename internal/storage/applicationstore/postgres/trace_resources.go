@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/traceindex"
 )
 
@@ -56,6 +57,19 @@ func (s *Storage) UpsertTraceResources(ctx context.Context, rows []traceindex.Re
 	if len(rows) == 0 {
 		return 0, nil
 	}
+	// ADR 0043 tenant scope: stamp each row's tenant (DefaultTenant under a
+	// system context, e.g. the trace flusher) and target the composite
+	// (tenant_id, resource_key) conflict key so two tenants can hold the same
+	// resource_key. The LRU eviction below is PER-TENANT so one tenant's flush
+	// can't evict another tenant's index rows.
+	scopeTenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	rowTenant := scopeTenant
+	if !apply {
+		rowTenant = identity.DefaultTenant
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
@@ -65,9 +79,9 @@ func (s *Storage) UpsertTraceResources(ctx context.Context, rows []traceindex.Re
 	const stmt = `INSERT INTO trace_resource_seen (
 		resource_key, provider, scope_id, resource_id_hint, service_name,
 		first_seen_at, last_seen_at, span_count_24h, root_span_count_24h,
-		attributes_json, match_confidence, updated_at
-	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-	ON CONFLICT (resource_key) DO UPDATE SET
+		attributes_json, match_confidence, updated_at, tenant_id
+	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+	ON CONFLICT (tenant_id, resource_key) DO UPDATE SET
 		provider            = excluded.provider,
 		scope_id            = excluded.scope_id,
 		resource_id_hint    = COALESCE(NULLIF(excluded.resource_id_hint, ''), trace_resource_seen.resource_id_hint),
@@ -77,7 +91,8 @@ func (s *Storage) UpsertTraceResources(ctx context.Context, rows []traceindex.Re
 		root_span_count_24h = trace_resource_seen.root_span_count_24h + excluded.root_span_count_24h,
 		attributes_json     = excluded.attributes_json,
 		match_confidence    = excluded.match_confidence,
-		updated_at          = excluded.updated_at`
+		updated_at          = excluded.updated_at,
+		tenant_id           = excluded.tenant_id`
 
 	for _, r := range rows {
 		var scopeID, hint, attrJSON, svc any
@@ -100,31 +115,59 @@ func (s *Storage) UpsertTraceResources(ctx context.Context, rows []traceindex.Re
 		if _, err := tx.ExecContext(ctx, stmt,
 			r.ResourceKey, r.Provider, scopeID, hint, svc,
 			r.FirstSeenAt.UTC(), r.LastSeenAt.UTC(), r.SpanCount24h, r.RootSpanCount24h,
-			attrJSON, conf, r.UpdatedAt.UTC()); err != nil {
+			attrJSON, conf, r.UpdatedAt.UTC(), rowTenant); err != nil {
 			return 0, fmt.Errorf("upsert trace_resource_seen row %q: %w", r.ResourceKey, err)
 		}
 	}
 
-	// LRU eviction: count rows, and if over budget delete the oldest last_seen_at
-	// rows down to the cap. OSS single-tenant, so the sweep is global.
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM trace_resource_seen`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count trace_resource_seen: %w", err)
+	// Per-tenant LRU eviction: count rows per tenant, then evict each
+	// over-budget tenant's oldest last_seen_at rows down to the cap. tenant_id
+	// is in both the outer WHERE and the subquery so a resource_key shared with
+	// another tenant is never collaterally deleted (mirrors sqlite's ADR 0024
+	// per-tenant sweep; OSS single-tenant ⇒ global == per-tenant).
+	type tenantCount struct {
+		tenant string
+		count  int
 	}
+	cntRows, err := tx.QueryContext(ctx, `SELECT tenant_id, COUNT(*) FROM trace_resource_seen GROUP BY tenant_id`)
+	if err != nil {
+		return 0, fmt.Errorf("count trace_resource_seen per tenant: %w", err)
+	}
+	var counts []tenantCount
+	for cntRows.Next() {
+		var tc tenantCount
+		if err := cntRows.Scan(&tc.tenant, &tc.count); err != nil {
+			_ = cntRows.Close()
+			return 0, fmt.Errorf("scan trace_resource_seen tenant count: %w", err)
+		}
+		counts = append(counts, tc)
+	}
+	if err := cntRows.Err(); err != nil {
+		_ = cntRows.Close()
+		return 0, fmt.Errorf("trace_resource_seen tenant count iteration: %w", err)
+	}
+	_ = cntRows.Close()
+
 	evicted := 0
-	if budget := traceIndexMaxRows(); count > budget {
-		over := count - budget
+	budget := traceIndexMaxRows()
+	for _, tc := range counts {
+		if tc.count <= budget {
+			continue
+		}
+		over := tc.count - budget
 		res, err := tx.ExecContext(ctx, `DELETE FROM trace_resource_seen
-			WHERE resource_key IN (
+			WHERE tenant_id = $1
+			  AND resource_key IN (
 				SELECT resource_key FROM trace_resource_seen
+				WHERE tenant_id = $2
 				ORDER BY last_seen_at ASC
-				LIMIT $1
-			)`, over)
+				LIMIT $3
+			)`, tc.tenant, tc.tenant, over)
 		if err != nil {
-			return 0, fmt.Errorf("evict oldest trace_resource_seen rows: %w", err)
+			return 0, fmt.Errorf("evict oldest trace_resource_seen rows for tenant %q: %w", tc.tenant, err)
 		}
 		n, _ := res.RowsAffected()
-		evicted = int(n)
+		evicted += int(n)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -142,8 +185,17 @@ func (s *Storage) GetTraceResource(ctx context.Context, key string) (*traceindex
 	if key == "" {
 		return nil, fmt.Errorf("resource_key required")
 	}
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+traceResourceSelectCols+` FROM trace_resource_seen WHERE resource_key = $1`, key)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + traceResourceSelectCols + ` FROM trace_resource_seen WHERE resource_key = $1`
+	args := []any{key}
+	if apply {
+		query += ` AND tenant_id = $2`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	r, err := scanTraceResourceRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -166,13 +218,25 @@ func (s *Storage) ListTraceResourcesByScope(
 	if limit <= 0 || limit > 100_000 {
 		limit = 1000
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+traceResourceSelectCols+`
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + traceResourceSelectCols + `
 		FROM trace_resource_seen
 		WHERE provider = $1
 		  AND (scope_id = $2 OR ($2 = '' AND scope_id IS NULL))
-		  AND last_seen_at >= $3
+		  AND last_seen_at >= $3`
+	args := []any{provider, scopeID, since.UTC()}
+	if apply {
+		query += ` AND tenant_id = $4`
+		args = append(args, tenant)
+	}
+	query += fmt.Sprintf(`
 		ORDER BY last_seen_at DESC
-		LIMIT $4`, provider, scopeID, since.UTC(), limit)
+		LIMIT $%d`, len(args)+1)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list trace_resource_seen rows: %w", err)
 	}
@@ -192,10 +256,20 @@ func (s *Storage) CountTraceResourcesByScope(ctx context.Context, provider, scop
 	if provider == "" {
 		return 0, nil
 	}
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM trace_resource_seen
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	query := `SELECT COUNT(*) FROM trace_resource_seen
 		WHERE provider = $1
-		  AND (scope_id = $2 OR ($2 = '' AND scope_id IS NULL))`, provider, scopeID).Scan(&n); err != nil {
+		  AND (scope_id = $2 OR ($2 = '' AND scope_id IS NULL))`
+	args := []any{provider, scopeID}
+	if apply {
+		query += ` AND tenant_id = $3`
+		args = append(args, tenant)
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count trace_resource_seen: %w", err)
 	}
 	return n, nil

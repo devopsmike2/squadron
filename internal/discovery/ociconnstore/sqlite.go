@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
+
+	"github.com/devopsmike2/squadron/extension/identity"
 )
 
 // sqliteStore is the SQLite-backed Store implementation. It owns the
@@ -189,15 +191,23 @@ func (s *sqliteStore) Create(ctx context.Context, conn *OCIConnection) error {
 		learnInt = 0
 	}
 
-	// ADR 0013 §D6-b: default the Squadron owner tenant to the OSS
-	// single-tenant sentinel when the caller left it empty. This is the
-	// squadron_tenant_id column — distinct from the OCI tenancy_ocid.
-	// The create handler stamps identity.TenantFromContext(ctx) onto the
-	// struct before Create; an unstamped struct (direct test
-	// construction, background path) still lands a valid "default" row.
+	// ADR 0043 / ADR 0013 §D6-b: fail closed under strict on an unstamped
+	// context, but PERSIST the Squadron owner tenant the handler stamped onto
+	// the struct (the squadron_tenant_id column — distinct from the OCI
+	// tenancy_ocid). A background/system create carries the owner on the struct
+	// under a system context, so overwriting it from the caller's own context
+	// would mis-home the row. Ownership stays immutable on re-save.
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
 	ownerTenantID := conn.OwnerTenantID
 	if ownerTenantID == "" {
-		ownerTenantID = "default"
+		if apply {
+			ownerTenantID = tenant
+		} else {
+			ownerTenantID = identity.DefaultTenant
+		}
 	}
 	conn.OwnerTenantID = ownerTenantID
 
@@ -234,7 +244,11 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*OCIConnection, error
 	if id == "" {
 		return nil, errors.New("ociconnstore: Get: id is required")
 	}
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, tenancy_ocid, user_ocid, fingerprint,
 		       sealed_private_key, region,
 		       learn_from_accepted_recommendations,
@@ -243,7 +257,12 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*OCIConnection, error
 		FROM oci_connections
 		WHERE id = ?
 	`
-	row := s.db.QueryRowContext(ctx, stmt, id)
+	args := []any{id}
+	if apply {
+		stmt += ` AND squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	row := s.db.QueryRowContext(ctx, stmt, args...)
 	conn, err := scanConnection(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -256,16 +275,25 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*OCIConnection, error
 
 // List returns every connection row, ordered by created_at ascending.
 func (s *sqliteStore) List(ctx context.Context) ([]*OCIConnection, error) {
-	const stmt = `
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	stmt := `
 		SELECT id, display_name, tenancy_ocid, user_ocid, fingerprint,
 		       sealed_private_key, region,
 		       learn_from_accepted_recommendations,
 		       squadron_tenant_id,
 		       created_at, updated_at
 		FROM oci_connections
-		ORDER BY created_at ASC, id ASC
 	`
-	rows, err := s.db.QueryContext(ctx, stmt)
+	var args []any
+	if apply {
+		stmt += ` WHERE squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	stmt += ` ORDER BY created_at ASC, id ASC`
+	rows, err := s.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ociconnstore: list oci_connections: %w", err)
 	}
@@ -316,12 +344,14 @@ func (s *sqliteStore) Update(ctx context.Context, conn *OCIConnection) error {
 	}
 	now := s.timeNow()
 
-	var (
-		res sql.Result
-		err error
-	)
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+
+	var res sql.Result
 	if len(conn.SealedPrivateKey) == 0 {
-		const stmt = `
+		stmt := `
 			UPDATE oci_connections
 			SET display_name = ?, tenancy_ocid = ?, user_ocid = ?,
 			    fingerprint = ?, region = ?,
@@ -329,7 +359,7 @@ func (s *sqliteStore) Update(ctx context.Context, conn *OCIConnection) error {
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.TenancyOCID,
 			conn.UserOCID,
@@ -338,9 +368,14 @@ func (s *sqliteStore) Update(ctx context.Context, conn *OCIConnection) error {
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND squadron_tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	} else {
-		const stmt = `
+		stmt := `
 			UPDATE oci_connections
 			SET display_name = ?, tenancy_ocid = ?, user_ocid = ?,
 			    fingerprint = ?, sealed_private_key = ?, region = ?,
@@ -348,7 +383,7 @@ func (s *sqliteStore) Update(ctx context.Context, conn *OCIConnection) error {
 			    updated_at = ?
 			WHERE id = ?
 		`
-		res, err = s.db.ExecContext(ctx, stmt,
+		args := []any{
 			conn.DisplayName,
 			conn.TenancyOCID,
 			conn.UserOCID,
@@ -358,7 +393,12 @@ func (s *sqliteStore) Update(ctx context.Context, conn *OCIConnection) error {
 			learnInt,
 			now.Format(timestampLayout),
 			conn.ID,
-		)
+		}
+		if apply {
+			stmt += ` AND squadron_tenant_id = ?`
+			args = append(args, tenant)
+		}
+		res, err = s.db.ExecContext(ctx, stmt, args...)
 	}
 	if err != nil {
 		return fmt.Errorf("ociconnstore: update oci_connection %s: %w", conn.ID, err)
@@ -379,8 +419,17 @@ func (s *sqliteStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("ociconnstore: Delete: id is required")
 	}
-	const stmt = `DELETE FROM oci_connections WHERE id = ?`
-	if _, err := s.db.ExecContext(ctx, stmt, id); err != nil {
+	tenant, apply, err := tenantScope(ctx)
+	if err != nil {
+		return err
+	}
+	stmt := `DELETE FROM oci_connections WHERE id = ?`
+	args := []any{id}
+	if apply {
+		stmt += ` AND squadron_tenant_id = ?`
+		args = append(args, tenant)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt, args...); err != nil {
 		return fmt.Errorf("ociconnstore: delete oci_connection %s: %w", id, err)
 	}
 	return nil
