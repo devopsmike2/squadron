@@ -127,6 +127,14 @@ func appliedConfigHashFromDesired(ctx context.Context, svc services.AgentService
 		return "", false
 	}
 
+	// A FAILED apply echoes the pushed hash just like a successful one, so the
+	// store-derived DELIVERED/APPLIED path must also withhold the stamp when the
+	// agent reported FAILED — otherwise a rejected config (kept last-known-good)
+	// reads as synced (WA4.2). Mirrors Agent.appliedConfigHash.
+	if agent.remoteConfigApplyFailed() {
+		return "", false
+	}
+
 	content, found := resolveStoredConfig(ctx, svc, agent)
 	if !found {
 		return "", false

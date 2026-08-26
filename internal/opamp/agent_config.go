@@ -149,6 +149,18 @@ func (agent *Agent) appliedConfigHash() (string, bool) {
 	if agent.remoteConfig == nil {
 		return "", false
 	}
+	// A FAILED apply echoes the pushed LastRemoteConfigHash exactly like a
+	// successful one: the agent RECEIVED the config Squadron staged, it just could
+	// not APPLY it — a supervised collector rejects it and keeps its last-known-good
+	// effective config (the WA4.2 field finding). The DELIVERED/APPLIED signal
+	// (delivered_config_hash) is documented as "the config the agent has confirmed
+	// APPLIED", so it must NOT be stamped from a FAILED ack; otherwise drift reads a
+	// rejected delivered config as synced (intent==delivered==bad-hash while the
+	// effective config is the last-known-good). Only APPLIED/APPLYING/UNSET acks —
+	// the successful/in-flight cases, unchanged from before — are treated as applied.
+	if agent.remoteConfigApplyFailed() {
+		return "", false
+	}
 	acked := agent.Status.RemoteConfigStatus.LastRemoteConfigHash
 	if len(acked) == 0 {
 		return "", false
@@ -157,6 +169,22 @@ func (agent *Agent) appliedConfigHash() (string, bool) {
 		return "", false
 	}
 	return confignorm.Hash(agent.CustomInstanceConfig), true
+}
+
+// remoteConfigApplyFailed reports whether the agent's last-reported
+// RemoteConfigStatus is FAILED — i.e. the agent received the remote config
+// Squadron pushed but could not apply it. This is the WA4.2 signal that
+// distinguishes a genuinely-applied config (APPLIED) from a rejected/failed one
+// that nonetheless echoes back the same LastRemoteConfigHash. It is the ONLY
+// distinguishing signal available (both cases carry the same acked wire hash and
+// a divergent effective config), so the DELIVERED/APPLIED hash stamping — the
+// input to drift's supervised-synced path (ADR 0040) — gates on it. Safe on a
+// nil Status / RemoteConfigStatus (returns false).
+func (agent *Agent) remoteConfigApplyFailed() bool {
+	if agent == nil || agent.Status == nil || agent.Status.RemoteConfigStatus == nil {
+		return false
+	}
+	return agent.Status.RemoteConfigStatus.Status == protobufs.RemoteConfigStatuses_RemoteConfigStatuses_FAILED
 }
 
 // Configuration comparison helper functions

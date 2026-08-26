@@ -145,6 +145,83 @@ func TestAppliedConfigHashFromDesired(t *testing.T) {
 			t.Fatal("expected ok=false: report-only agents are never on the delivered path")
 		}
 	})
+
+	// BUG 2 / WA4.2: the agent reports the assigned config's wire hash but with a
+	// FAILED status — it received the config and could not apply it (kept its
+	// last-known-good effective config). The store-derived delivered path must NOT
+	// treat this as applied, or drift reads a rejected config as synced. RED on
+	// main (Status ignored), GREEN after the fix.
+	t.Run("reports the assigned wire hash but FAILED -> not applied", func(t *testing.T) {
+		svc, id := newDriftTestService(t)
+		if _, err := svc.StoreConfigForAgent(ctx, id, driftCompactIntent); err != nil {
+			t.Fatalf("StoreConfigForAgent: %v", err)
+		}
+		agent := newReconcileAgent(id, wireConfigHash(driftCompactIntent))
+		agent.Status.RemoteConfigStatus.Status = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_FAILED
+		if _, ok := appliedConfigHashFromDesired(ctx, svc, agent); ok {
+			t.Fatal("expected ok=false: the agent reported FAILED (rejected the config), not applied")
+		}
+	})
+}
+
+// TestPersistAgent_FailedApplyStaysDrifted is the end-to-end BUG 2 regression
+// (WA4.2). Squadron pushed a config to a supervised agent; the agent RECEIVED it
+// (echoes back the pushed wire hash) but could NOT apply it and reports FAILED,
+// keeping its last-known-good effective config. The pushed config is the current
+// intent, so intent==delivered-on-wire==bad-hash while the effective config is the
+// old good one (intent != effective). persistAgent must NOT stamp
+// delivered_config_hash from the FAILED ack, so drift stays DRIFTED (a genuine
+// unapplied/rejected config) instead of reporting synced.
+//
+// RED on main: appliedConfigHashFromDesired ignored Status, stamped
+// delivered==intent, and computeConfigDrift's delivered-signal branch read Synced.
+// GREEN after the fix: no stamp, drift falls through to Drifted.
+func TestPersistAgent_FailedApplyStaysDrifted(t *testing.T) {
+	ctx := context.Background()
+	svc, id := newDriftTestService(t)
+
+	// The pushed (and rejected) config is the current intent.
+	const badIntent = `receivers:
+  otlp:
+    protocols:
+      grpc:
+exporters:
+  otlphttp:
+    endpoint: ${BROKEN}
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]`
+	if _, err := svc.StoreConfigForAgent(ctx, id, badIntent); err != nil {
+		t.Fatalf("StoreConfigForAgent: %v", err)
+	}
+	// The agent kept its last-known-good effective config (different from intent).
+	if err := svc.UpdateAgentEffectiveConfig(ctx, id, driftExpandedEffective); err != nil {
+		t.Fatalf("UpdateAgentEffectiveConfig: %v", err)
+	}
+
+	server := &Server{logger: zap.NewNop(), agentService: svc}
+
+	// Heartbeat: reports the pushed config's wire hash, but Status=FAILED.
+	agent := newReconcileAgent(id, wireConfigHash(badIntent))
+	agent.Status.RemoteConfigStatus.Status = protobufs.RemoteConfigStatuses_RemoteConfigStatuses_FAILED
+	agent.Status.SequenceNum = 1
+
+	server.persistAgent(ctx, agent, &protobufs.AgentToServer{})
+
+	got, err := svc.GetAgent(ctx, id)
+	if err != nil {
+		t.Fatalf("GetAgent (post): %v", err)
+	}
+	if got.DriftStatus != services.ConfigDriftStatusDrifted {
+		t.Fatalf("want %s (rejected delivered config must not read synced), got %s",
+			services.ConfigDriftStatusDrifted, got.DriftStatus)
+	}
+	// The bad intent hash must NOT have been stamped as delivered/applied.
+	if got.DriftDetails != nil && got.DriftDetails.DeliveredHash == confignorm.Hash(badIntent) {
+		t.Fatal("a FAILED apply must not stamp delivered_config_hash == intent hash")
+	}
 }
 
 // TestPersistAgentStampsDeliveredHashForAlreadyAppliedAgent is the end-to-end

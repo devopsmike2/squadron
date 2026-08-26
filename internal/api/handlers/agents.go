@@ -580,6 +580,17 @@ func (h *AgentHandlers) HandleSendConfigToAgent(c *gin.Context) {
 		return
 	}
 
+	// Validate the config content server-side BEFORE creating a version or
+	// delivering it. Squadron must never push a config it hasn't validated: a
+	// supervised agent is saved by the supervisor's last-known-good, but a
+	// report-only / bare-opamp-extension agent would apply the bad config and
+	// break (the WA4.2 field finding). Reuses the exact validation behind
+	// POST /api/v1/configs/validate and mirrors its error shape.
+	if errs := validateConfigForDelivery(req.Content); len(errs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"valid": false, "errors": errs})
+		return
+	}
+
 	// 3. Store config in database (validates agent and capability)
 	config, err := h.agentService.StoreConfigForAgent(c.Request.Context(), agentUUID, req.Content)
 	if err != nil {

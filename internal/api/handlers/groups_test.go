@@ -358,3 +358,90 @@ func TestHandleUpdateGroup_RequireApprovalForRollback(t *testing.T) {
 	require.NotNil(t, stored2)
 	assert.True(t, stored2.RequireApprovalForRollback, "omitted field must leave the gate untouched (still on)")
 }
+
+// setupGroupHandlersWithRecorder wires a GroupHandlers against a recording
+// mockCommander so a test can assert whether the group config was delivered to
+// the group's agents (SendConfigToAgentsInGroup).
+func setupGroupHandlersWithRecorder() (*GroupHandlers, *testutils.MockAgentService, *mockCommander) {
+	mockService := testutils.NewMockAgentService()
+	rec := newMockCommander()
+	handlers := NewGroupHandlers(mockService, rec, zap.NewNop())
+	return handlers, mockService, rec
+}
+
+// assignGroupConfig drives HandleAssignConfig (POST /api/v1/groups/:id/config).
+func assignGroupConfig(t *testing.T, h *GroupHandlers, groupID, configID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: groupID}}
+	body, err := json.Marshal(AssignConfigRequest{ConfigID: configID})
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/api/v1/groups/"+groupID+"/config", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.HandleAssignConfig(c)
+	return w
+}
+
+// TestHandleAssignConfig_RejectsMalformedYAML is the group-assign arm of the BUG
+// 1 regression (WA4.2): assigning a config whose content is malformed YAML must
+// be rejected with 400 BEFORE a new group config version is created or delivered
+// to the group's agents. On unfixed main it returned 200 and fanned the invalid
+// config out to every agent in the group.
+func TestHandleAssignConfig_RejectsMalformedYAML(t *testing.T) {
+	h, mock, rec := setupGroupHandlersWithRecorder()
+	ctx := context.Background()
+
+	groupID := "grp-1"
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: groupID, Name: "prod"}))
+	// Seed a malformed config directly (the mock store does not validate).
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-bad", Content: "receivers:\n\totlp: {\n  bad", Version: 1}))
+
+	w := assignGroupConfig(t, h, groupID, "cfg-bad")
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	var resp struct {
+		Valid  bool     `json:"valid"`
+		Errors []string `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Valid)
+	assert.NotEmpty(t, resp.Errors)
+
+	// No group config version was created (only the seeded agent-less cfg-bad
+	// exists, which has no GroupID).
+	gc, err := mock.GetLatestConfigForGroup(ctx, groupID)
+	require.NoError(t, err)
+	assert.Nil(t, gc, "a rejected config must not create a group config version")
+
+	// Nothing was delivered to the group.
+	assert.Empty(t, rec.sendConfigToAgentsInGroupCalls, "a rejected config must not be delivered")
+}
+
+// TestHandleAssignConfig_AcceptsValidYAML guards unchanged valid-config
+// behavior: 200, a group config version created, and delivery fired.
+func TestHandleAssignConfig_AcceptsValidYAML(t *testing.T) {
+	h, mock, rec := setupGroupHandlersWithRecorder()
+	ctx := context.Background()
+
+	groupID := "grp-1"
+	require.NoError(t, mock.CreateGroup(ctx, &services.Group{ID: groupID, Name: "prod"}))
+	require.NoError(t, mock.CreateConfig(ctx, &services.Config{
+		ID: "cfg-good", Content: validGroupConfigYAML, Version: 1}))
+
+	w := assignGroupConfig(t, h, groupID, "cfg-good")
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// A group config version now resolves for the group.
+	gc, err := mock.GetLatestConfigForGroup(ctx, groupID)
+	require.NoError(t, err)
+	require.NotNil(t, gc)
+	assert.Equal(t, validGroupConfigYAML, gc.Content)
+
+	// It was delivered to the group's agents.
+	require.Len(t, rec.sendConfigToAgentsInGroupCalls, 1)
+	assert.Equal(t, groupID, rec.sendConfigToAgentsInGroupCalls[0].groupID)
+	assert.Equal(t, validGroupConfigYAML, rec.sendConfigToAgentsInGroupCalls[0].configContent)
+}

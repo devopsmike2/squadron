@@ -1406,3 +1406,99 @@ func TestHandleClearAgentConfig_BadID(t *testing.T) {
 	w := clearConfig(t, handlers, "not-a-uuid")
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// sendConfig drives HandleSendConfigToAgent (POST /api/v1/agents/:id/config)
+// with the :id path param and a JSON body carrying content.
+func sendConfig(t *testing.T, h *AgentHandlers, agentID, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: agentID}}
+	body, err := json.Marshal(SendConfigRequest{Content: content})
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest("POST", "/api/v1/agents/"+agentID+"/config", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.HandleSendConfigToAgent(c)
+	return w
+}
+
+// malformedAgentConfigYAML is not parseable as a YAML mapping — a tab-indented
+// block ("\t" is illegal YAML indentation), the exact class of malformed content
+// the WA4.2 field finding pushed to an agent with HTTP 200.
+const malformedAgentConfigYAML = "receivers:\n\totlp: {\n  bad"
+
+// validAgentConfigYAML is a minimal well-formed otelcol config.
+const validAgentConfigYAML = `receivers:
+  otlp:
+    protocols:
+      grpc:
+exporters:
+  otlp:
+    endpoint: localhost:4317
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]`
+
+// TestHandleSendConfigToAgent_RejectsMalformedYAML is the BUG 1 regression (WA4.2):
+// assigning malformed YAML to an agent must be rejected server-side with 400 and
+// must NOT create a config version or deliver anything to the agent. On unfixed
+// main the handler returned 200 and delivered the invalid config.
+func TestHandleSendConfigToAgent_RejectsMalformedYAML(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "supervised", Capabilities: []string{"accepts_remote_config"}}))
+
+	w := sendConfig(t, h, agentID.String(), malformedAgentConfigYAML)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	// Mirrors /configs/validate's error shape.
+	var resp struct {
+		Valid  bool     `json:"valid"`
+		Errors []string `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Valid)
+	assert.NotEmpty(t, resp.Errors, "the validation errors must be returned")
+
+	// No config version was created.
+	cfg, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	assert.Nil(t, cfg, "a rejected config must not create a version")
+
+	// Nothing was delivered to the agent.
+	_, delivered := sender.sent[agentID]
+	assert.False(t, delivered, "a rejected config must not be delivered")
+}
+
+// TestHandleSendConfigToAgent_AcceptsValidYAML guards that valid-config behavior
+// is unchanged: 200, a version created, and the config delivered.
+func TestHandleSendConfigToAgent_AcceptsValidYAML(t *testing.T) {
+	mock := testutils.NewMockAgentService()
+	sender := newRecordingConfigSender()
+	h := NewAgentHandlers(mock, sender, zap.NewNop())
+	ctx := context.Background()
+
+	agentID := uuid.New()
+	require.NoError(t, mock.CreateAgent(ctx, &services.Agent{
+		ID: agentID, Name: "supervised", Capabilities: []string{"accepts_remote_config"}}))
+
+	w := sendConfig(t, h, agentID.String(), validAgentConfigYAML)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// A config version was created and stored.
+	cfg, err := mock.GetLatestConfigForAgent(ctx, agentID)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, validAgentConfigYAML, cfg.Content)
+
+	// It was delivered to the agent.
+	assert.Equal(t, validAgentConfigYAML, sender.sent[agentID])
+}
