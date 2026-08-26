@@ -378,16 +378,49 @@ type OTLPExportConfig struct {
 
 // AuthConfig controls API authentication. When enabled, every
 // /api/v1/* request must carry a valid Bearer token. /metrics and
-// /health stay public regardless. Defaults to disabled — turn it on
-// before exposing Squadron beyond a trusted network.
+// /health stay public regardless.
+//
+// ADR 0045 — secure by default. Auth now defaults to ENABLED: an omitted
+// `auth.enabled` key resolves to true (IsEnabled). Enabled is a *bool so the
+// loader can distinguish "operator omitted the key" (nil → secure default on)
+// from an explicit `auth.enabled: false` opt-out. The explicit opt-out is
+// preserved (so a pilot running auth-off keeps working) but, when the control
+// plane also binds a non-loopback interface, it now triggers a loud startup
+// warning (see AuthStartupWarning) that will become fatal in a future release.
 type AuthConfig struct {
-	Enabled bool `yaml:"enabled"`
+	// Enabled is the master switch. nil (key omitted) resolves to true via
+	// IsEnabled — secure by default. Set explicitly to false to opt out
+	// (local-dev only); doing so on a network-reachable bind is warned about
+	// loudly and is slated to become fatal.
+	Enabled *bool `yaml:"enabled"`
+
+	// InsecureAllowUnauthenticated is the explicit, ugly-on-purpose acknowledgement
+	// that the operator intends to run with auth disabled on a network-reachable
+	// bind. It does NOT change behavior in this release (the insecure-bind check is
+	// warn-only for now); it exists so operators can pre-acknowledge the posture and
+	// so the flag is in place to flip the check to fatal in a future release. The
+	// real fix is always `auth.enabled: true`.
+	InsecureAllowUnauthenticated bool `yaml:"insecure_allow_unauthenticated"`
+}
+
+// IsEnabled reports the effective auth-enabled state (ADR 0045). A nil Enabled
+// (the operator omitted `auth.enabled`) resolves to true — secure by default.
+// An explicit value is honored as-is, so `auth.enabled: false` still opts out.
+func (a AuthConfig) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
 }
 
 // ServerConfig contains server configuration
 type ServerConfig struct {
 	HTTPPort  int `yaml:"http_port"`
 	OpAMPPort int `yaml:"opamp_port"`
+
+	// Host is the interface the HTTP control plane binds to. Empty (the
+	// default) binds all interfaces (0.0.0.0) — network-reachable. Set to a
+	// loopback host ("127.0.0.1", "::1", or "localhost") to bind local-only,
+	// which is the supported way to run with auth disabled without tripping the
+	// ADR 0045 insecure-bind warning.
+	Host string `yaml:"host,omitempty"`
 }
 
 // OTLPConfig contains OTLP receiver configuration

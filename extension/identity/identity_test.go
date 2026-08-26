@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestScopeAuthorizer_MirrorsHasScope pins the OSS authorizer to the exact
-// truth table of internal/services.AuthActor.HasScope, which
-// middleware.RequireScope enforces today:
-//   - empty scope set  => allow (legacy full-access)
+// TestScopeAuthorizer_MirrorsHasScope pins the OSS authorizer truth table,
+// which middleware.RequireScope enforces:
+//   - empty scope set  => DENY (ADR 0045 — closed the legacy fail-open where
+//     empty scopes meant full access)
 //   - wildcard present => allow
 //   - required present => allow
 //   - otherwise        => deny
@@ -25,8 +25,8 @@ func TestScopeAuthorizer_MirrorsHasScope(t *testing.T) {
 		required string
 		want     bool
 	}{
-		{"empty scopes = legacy full access", nil, "rollouts:write", true},
-		{"empty slice = legacy full access", []string{}, "agents:read", true},
+		{"empty scopes = deny (ADR 0045)", nil, "rollouts:write", false},
+		{"empty slice = deny (ADR 0045)", []string{}, "agents:read", false},
 		{"wildcard grants anything", []string{"*"}, "rollouts:approve", true},
 		{"exact scope match", []string{"agents:read", "rollouts:write"}, "rollouts:write", true},
 		{"missing scope denied", []string{"agents:read"}, "rollouts:write", false},

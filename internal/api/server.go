@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,6 +84,7 @@ type Server struct {
 	rolloutService    services.RolloutService
 	authService       services.AuthService
 	authConfig        AuthConfig
+	bindHost          string // ADR 0045: "" binds all interfaces; set to loopback for local-only
 	commander         AgentCommander
 	broker            *events.Broker
 	configsTracer     *configs.Tracer   // optional; nil disables config-push spans on direct handler pushes
@@ -2608,14 +2610,28 @@ func (s *Server) recommendationsTrampoline(fn func(*handlers.RecommendationsHand
 	}
 }
 
+// SetBindHost sets the interface the HTTP control plane binds to (ADR 0045).
+// Empty (the default) binds all interfaces (":port"); a loopback host binds
+// local-only. Call before Start.
+func (s *Server) SetBindHost(host string) {
+	s.bindHost = host
+}
+
 // Start starts the HTTP server
 func (s *Server) Start(port string) error {
+	// ADR 0045 — respect an operator-configured bind host. Empty stays ":port"
+	// (all interfaces, unchanged default); a loopback host (127.0.0.1/::1) binds
+	// local-only, the supported way to run with auth disabled.
+	addr := ":" + port
+	if h := strings.TrimSpace(s.bindHost); h != "" {
+		addr = net.JoinHostPort(h, port)
+	}
 	s.httpServer = &http.Server{
-		Addr:    ":" + port,
+		Addr:    addr,
 		Handler: s.router,
 	}
 
-	s.logger.Info("Starting HTTP API server", zap.String("port", port))
+	s.logger.Info("Starting HTTP API server", zap.String("addr", addr))
 	return s.httpServer.ListenAndServe()
 }
 

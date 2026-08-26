@@ -13,6 +13,12 @@ nameOverride: ""
 fullnameOverride: ""
 
 # Non-sensitive runtime config -> env vars.
+#
+# ADR 0045 — secure by default: API authentication is ENABLED by default (the
+# binary defaults auth on when unset, and this chart does not disable it). On
+# first start Squadron emits a one-time bootstrap token to the pod logs
+# (`kubectl logs`); use it to log in, mint proper tokens, and store them in the
+# Secret. Do NOT disable auth on a cluster-reachable Service. See docs/auth.md.
 config:
   ginMode: release
   logLevel: info

@@ -42,11 +42,20 @@ worker:
   timeout: 5s
 
 auth:
-  # When true, every /api/v1/* request must carry a valid Bearer token.
-  # /metrics and /health stay public for scrapers and load balancers.
-  # On first start with auth enabled and an empty tokens table, Squadron
-  # emits a bootstrap token to stderr that operators use to log in and
-  # create proper tokens. See docs/auth.md for the full flow.
+  # ADR 0045 — SECURE BY DEFAULT. When true (the default when this key is
+  # OMITTED), every /api/v1/* request must carry a valid Bearer token; /metrics
+  # and /health stay public for scrapers and load balancers. On first start with
+  # auth enabled and an empty tokens table, Squadron emits a one-time bootstrap
+  # token to stderr that operators use to log in and create proper tokens. See
+  # docs/auth.md for the full flow.
+  #
+  # This example config sets `enabled: false` as an EXPLICIT local-dev opt-out.
+  # Production deployments should omit this key (or set true). Running auth-off
+  # on a network-reachable bind now logs a LOUD startup warning and will become
+  # fatal in a future release. To run auth-off quietly for local development,
+  # bind loopback-only with `server.host: 127.0.0.1`. To pre-acknowledge the
+  # insecure posture, set `insecure_allow_unauthenticated: true` (the real fix is
+  # `enabled: true`).
   enabled: false
 
 telemetry:

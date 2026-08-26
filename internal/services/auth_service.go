@@ -268,16 +268,16 @@ func (t *APIToken) IsExpired() bool {
 }
 
 // HasScope reports whether this token may exercise the given scope.
-// Wildcard "*" matches every scope; empty scopes (the legacy
-// pre-v0.10 token shape) also matches every scope. New tokens are
-// required to specify scopes so the empty case is bounded to
-// existing rows.
+// Wildcard "*" matches every scope. Empty scopes grant NOTHING (ADR 0045 —
+// previously empty meant legacy full-access; that fail-open is closed). New
+// tokens are required to specify scopes, so the empty case is bounded to
+// legacy/out-of-band rows, which now deny rather than grant all.
 func (t *APIToken) HasScope(required string) bool {
 	if t == nil {
 		return false
 	}
 	if len(t.Scopes) == 0 {
-		return true // legacy full-access
+		return false // ADR 0045: empty scopes = no access (was full-access)
 	}
 	for _, s := range t.Scopes {
 		if s == ScopeWildcard || s == required {
@@ -299,7 +299,7 @@ func (t *APIToken) IsActive() bool {
 //
 // Scopes are carried so middleware downstream of RequireBearer (e.g.
 // RequireScope) can authorize without re-querying the store. Same
-// semantics as APIToken.Scopes — empty means legacy full-access.
+// semantics as APIToken.Scopes — empty means NO access (ADR 0045).
 type AuthActor struct {
 	TokenID    string
 	TokenLabel string
@@ -317,7 +317,7 @@ type AuthActor struct {
 // middleware can decide without holding the full token row.
 func (a AuthActor) HasScope(required string) bool {
 	if len(a.Scopes) == 0 {
-		return true // legacy full-access
+		return false // ADR 0045: empty scopes = no access (was full-access)
 	}
 	for _, s := range a.Scopes {
 		if s == ScopeWildcard || s == required {
