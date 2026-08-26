@@ -168,6 +168,33 @@ func SetAuthorizer(a identity.Authorizer) {
 	}
 }
 
+// authEnabled reports whether the server mounts bearer authentication (ADR
+// 0045). It governs the zero-actor path in RequireScope / AuthorizeScope:
+//
+//   - authEnabled == true: a request that reaches a scope check WITHOUT an
+//     authenticated actor is a fail-CLOSED 403. With auth on, the bearer
+//     middleware should have populated an actor (or already 401'd a bad/absent
+//     token); if a zero actor still reaches here — a route that forgot
+//     RequireBearer, or a future refactor that drops it — deny rather than wave
+//     it through. This is the belt-and-suspenders that turns a latent fail-open
+//     into fail-closed.
+//   - authEnabled == false: auth is disabled server-side, so no actor is ever
+//     populated; the zero-actor path is a pass-through, preserving the pre-0045
+//     behavior of auth-off dev/staging deployments.
+//
+// Defaults to false so any caller that never calls SetAuthEnabled (e.g. a unit
+// test wiring RequireScope directly) keeps the historical pass-through. Set
+// once at startup from main.go, mirroring SetAuthorizer.
+var authEnabled bool
+
+// SetAuthEnabled records whether the process runs with API auth enabled, so the
+// scope middleware can fail closed on a missing actor when it is (ADR 0045).
+// Called once from main.go during startup, before the server accepts traffic;
+// not safe for concurrent use with in-flight requests.
+func SetAuthEnabled(enabled bool) {
+	authEnabled = enabled
+}
+
 // tenantResolver is the resolver the ResolveTenant middleware consults to
 // map a request to its tenant. It defaults to the OSS single-tenant resolver
 // (every request runs under identity.DefaultTenant). main.go overrides it once
@@ -225,6 +252,16 @@ func RequireScope(required string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		actor := ActorFromGin(c)
 		if actor.IsZero() {
+			if authEnabled {
+				// ADR 0045 fail-closed: auth is ON but no actor reached the
+				// scope check (bearer middleware absent/bypassed). Deny — never
+				// wave an unauthenticated request through when auth is enabled.
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error":  "forbidden",
+					"detail": "authentication required",
+				})
+				return
+			}
 			// Auth is disabled server-side; nothing to authorize against.
 			c.Next()
 			return
@@ -253,8 +290,9 @@ func RequireScope(required string) gin.HandlerFunc {
 // AuthorizeScope runs the wired Authorizer for an in-handler scope check that
 // can't be expressed as route-level RequireScope middleware — e.g. a scope
 // gated on the request payload. It returns true if the actor is allowed the
-// required scope. When auth is disabled server-side (zero actor) it returns
-// true, mirroring RequireScope's skip. The decision goes through the same
+// required scope. On a zero actor it mirrors RequireScope's ADR 0045 gate:
+// pass-through (true) when auth is disabled, fail-closed (false) when auth is
+// enabled. The decision goes through the same
 // process-wide authorizer as RequireScope (ADR 0006/0010): INERT under the OSS
 // ScopeAuthorizer (flat-scope allow reproduces the historical HasScope check),
 // while the enterprise deny-by-default, resource-aware Authorizer sees the
@@ -263,7 +301,9 @@ func RequireScope(required string) gin.HandlerFunc {
 func AuthorizeScope(c *gin.Context, required string) bool {
 	actor := ActorFromGin(c)
 	if actor.IsZero() {
-		return true
+		// ADR 0045 fail-closed: mirror RequireScope. With auth ON a zero actor
+		// is denied; with auth OFF it passes through (nothing to authorize).
+		return !authEnabled
 	}
 	decision := authorizer.Authorize(c.Request.Context(), identity.Principal{
 		ID:     actor.TokenID,

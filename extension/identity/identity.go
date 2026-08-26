@@ -131,24 +131,23 @@ type BearerAuthenticator struct{}
 // Name reports the OSS authentication scheme.
 func (BearerAuthenticator) Name() string { return "bearer" }
 
-// ScopeAuthorizer is the OSS default authorizer. It implements the exact
-// flat-scope semantics of the historical middleware.RequireScope /
-// services.AuthActor.HasScope:
+// ScopeAuthorizer is the OSS default authorizer. It implements flat-scope
+// semantics:
 //
-//   - an empty scope set is legacy full-access (pre-scopes tokens);
+//   - an empty scope set is DENY-ALL (ADR 0045 — closed the legacy fail-open
+//     where empty scopes meant full access);
 //   - otherwise the principal must carry the wildcard or the required scope.
-//
-// Keeping this byte-identical is what lets slice 2 route the auth
-// middleware through the Authorizer without changing OSS behavior.
 type ScopeAuthorizer struct{}
 
 // Authorize applies the flat-scope check. The resource is ignored — OSS
 // scopes are action-level, not resource-scoped.
 func (ScopeAuthorizer) Authorize(_ context.Context, p Principal, requiredScope string, _ Resource) Decision {
 	if len(p.Scopes) == 0 {
-		// Legacy full-access: pre-scopes tokens carry no scopes and retain
-		// full access, exactly as services.AuthActor.HasScope grants it.
-		return Decision{Allow: true}
+		// ADR 0045: empty scopes grant NOTHING (was legacy full-access). New
+		// tokens can't be issued with empty scopes; this closes the fail-open on
+		// any legacy/out-of-band row so a scopeless principal is denied, not
+		// waved through with implicit full access.
+		return Decision{Allow: false, Reason: "token does not have the required scope"}
 	}
 	for _, s := range p.Scopes {
 		if s == Wildcard || s == requiredScope {

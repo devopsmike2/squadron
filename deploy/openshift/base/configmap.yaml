@@ -17,10 +17,12 @@ data:
 
     api:
       listen: ":8080"
-      # Auth defaults to disabled until you generate a bootstrap
-      # token (see docs/auth.md). Flip to true once you've put
-      # the token in the squadron-secrets Secret.
-      auth_enabled: false
+      # ADR 0045 — secure by default. Auth is ENABLED on this shipped
+      # manifest. On first start Squadron emits a one-time bootstrap token
+      # to the pod logs; capture it, log in, mint proper tokens, and store
+      # them in the squadron-secrets Secret (see docs/auth.md). Only set
+      # this to false for a strictly local, loopback-only dev instance.
+      auth_enabled: true
 
     opamp:
       listen: ":4320"

@@ -102,10 +102,50 @@ func TestRequireScope_AuthDisabledPassesThrough(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "auth-disabled deploys must pass through scope checks")
 }
 
-// (The empty-scopes legacy-full-access branch is pinned at the authorizer
-// unit level in extension/identity/identity_test.go — tokens can no longer be
-// issued with empty scopes, so it can't be exercised through the issue path
-// here.)
+// (The empty-scopes DENY branch (ADR 0045) is pinned at the authorizer unit
+// level in extension/identity/identity_test.go — tokens can no longer be issued
+// with empty scopes, so it can't be exercised through the issue path here.)
+
+// TestRequireScope_AuthEnabledNoActor_FailsClosed is the ADR 0045 regression
+// guard. When the process runs with auth ENABLED (SetAuthEnabled(true)) but a
+// request reaches RequireScope WITHOUT an authenticated actor — a route that
+// forgot RequireBearer, or a refactor that drops it — the scope check must fail
+// CLOSED (403), not wave the request through. Before ADR 0045 the zero-actor
+// path was an unconditional c.Next(), so this was a silent fail-open.
+func TestRequireScope_AuthEnabledNoActor_FailsClosed(t *testing.T) {
+	SetAuthEnabled(true)
+	defer SetAuthEnabled(false) // authEnabled is process-global; restore for siblings.
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	// Deliberately NO RequireBearer in front — simulate the dropped-middleware
+	// bug. With auth on, a missing actor must be denied.
+	r.GET("/scoped", RequireScope(services.ScopeRolloutsWrite), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/scoped", nil)
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"auth-on + missing actor must fail closed (403), not pass through")
+}
+
+// TestAuthorizeScope_FailClosedWhenAuthEnabled mirrors the above for the
+// in-handler AuthorizeScope path: zero actor + auth on => false (deny), while
+// auth off preserves the historical pass-through (true).
+func TestAuthorizeScope_FailClosedWhenAuthEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/x", nil)
+
+	SetAuthEnabled(true)
+	assert.False(t, AuthorizeScope(c, services.ScopeRolloutsWrite),
+		"auth-on + zero actor must deny")
+	SetAuthEnabled(false)
+	assert.True(t, AuthorizeScope(c, services.ScopeRolloutsWrite),
+		"auth-off + zero actor preserves pass-through")
+}
 
 // denyAllAuthorizer is a test double proving RequireScope consults the wired
 // identity.Authorizer rather than a hardcoded scope check.

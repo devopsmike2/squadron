@@ -409,6 +409,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// (ADR 0006 slice 3). OSS resolves the single implicit "default" tenant;
 	// the enterprise edition derives a real tenant from the principal.
 	middleware.SetTenantResolver(idSeam.TenantResolver)
+	// ADR 0045 — record the effective auth-enabled state so the scope
+	// middleware fails CLOSED (403) on a missing actor when auth is on, rather
+	// than waving it through. Inert when auth is off (pass-through preserved).
+	authEnabled := config.Auth.IsEnabled()
+	middleware.SetAuthEnabled(authEnabled)
 
 	// Bootstrap an initial token if auth is enabled and the store has
 	// none yet. Operators see this token in stderr on first start; they
@@ -417,7 +422,7 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// emits a token when the store is empty so subsequent restarts are
 	// quiet. See docs/auth.md for the recovery flow if every token is
 	// lost.
-	if config.Auth.Enabled {
+	if authEnabled {
 		// ADR 0012 §4 — bootstrap runs authService.List/Issue on a bare
 		// background context. Stamp it as an explicit all-tenant system
 		// operation so it stays a boot-time fleet-wide op under enterprise
@@ -427,8 +432,19 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 			logger.Fatal("Failed to bootstrap auth token", zap.Error(err))
 		}
 	} else {
-		logger.Warn("API auth is disabled — every endpoint is open. " +
-			"Set auth.enabled=true in squadron.yaml for production.")
+		// ADR 0045 — auth is explicitly disabled. If the control plane also
+		// binds a non-loopback interface, emit a LOUD, unmistakable warning:
+		// the control plane is unauthenticated AND reachable over the network.
+		// This is warn-only for now (a pilot running auth-off must not
+		// hard-break on upgrade) but is slated to become fatal in a future
+		// release; the message states the timeline and the fix. A loopback-only
+		// bind (server.host=127.0.0.1) stays quiet — the supported dev path.
+		if warn, msg := config.Auth.StartupWarning(config.Server.Host); warn {
+			logger.Error(msg)
+		} else {
+			logger.Warn("API auth is disabled — every endpoint is open. " +
+				"Set auth.enabled=true in squadron.yaml for production.")
+		}
 	}
 
 	// Create config sender (separate concern from AgentService)
@@ -696,7 +712,11 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// Share the same Prometheus registry so that /metrics exposes OpAMP, OTLP,
 	// worker, and API metrics in a single endpoint. The event broker is
 	// shared with publishers so /events/stream reflects what they emit.
-	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: config.Auth.Enabled}, configSender, eventBroker, configsTracer, registry, logger)
+	apiServer := api.NewServer(agentService, telemetryService, savedQueryService, alertService, auditService, rolloutService, authService, api.AuthConfig{Enabled: authEnabled}, configSender, eventBroker, configsTracer, registry, logger)
+	// ADR 0045 — bind the HTTP control plane to the configured host. Empty (the
+	// default) binds all interfaces; a loopback host (server.host=127.0.0.1)
+	// binds local-only, the supported way to run with auth disabled.
+	apiServer.SetBindHost(config.Server.Host)
 	// v0.52 — wire API-server-level Compliance Pack extension points.
 	// OSS leaves the per-request access audit middleware unmounted;
 	// Compliance Pack installs it. Called here before any other

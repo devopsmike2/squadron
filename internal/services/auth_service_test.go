@@ -188,14 +188,17 @@ func TestAuthService_Issue_DedupsScopes(t *testing.T) {
 	assert.Len(t, token.Scopes, 2)
 }
 
-func TestAPIToken_HasScope_LegacyEmptyMeansFullAccess(t *testing.T) {
-	// The empty-scope special case is the ONLY back-compat path for
-	// pre-v0.10 tokens. Pin the behavior so refactors can't quietly
-	// flip the default for existing rows.
+func TestAPIToken_HasScope_EmptyScopesDeny(t *testing.T) {
+	// ADR 0045 — empty scopes grant NOTHING (previously empty was treated as
+	// legacy full-access, a fail-open). New tokens can't be issued with empty
+	// scopes; any legacy/out-of-band scopeless row now denies every scope.
 	legacy := &APIToken{Scopes: nil}
-	assert.True(t, legacy.HasScope(ScopeAgentsRead))
-	assert.True(t, legacy.HasScope(ScopeRolloutsWrite))
-	assert.True(t, legacy.HasScope("anything"))
+	assert.False(t, legacy.HasScope(ScopeAgentsRead))
+	assert.False(t, legacy.HasScope(ScopeRolloutsWrite))
+	assert.False(t, legacy.HasScope("anything"))
+
+	empty := &APIToken{Scopes: []string{}}
+	assert.False(t, empty.HasScope(ScopeAgentsRead))
 }
 
 func TestAPIToken_HasScope_WildcardMatchesEverything(t *testing.T) {
