@@ -32,7 +32,14 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, automations, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
+	// audit_chain_head (ADR 0044 keyed-chain high-water-mark) MUST be truncated
+	// alongside audit_events: it is the MAC-authenticated tail marker, and
+	// VerifySealed fail-closes when an HWM row is present but the store has no key
+	// (the correct tamper-evidence behavior). SQLite tests get a fresh DB per test
+	// so they never carry a stale HWM; the shared-DB Postgres harness must reset it
+	// explicitly, or a legacy (no-key) test run after a keyed test would inherit a
+	// stale keyed HWM for the default tenant and spuriously fail self-verify.
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, automations, audit_events, audit_chain_checkpoints, audit_chain_head, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
