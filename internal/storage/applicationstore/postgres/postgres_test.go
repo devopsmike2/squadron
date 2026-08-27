@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +32,14 @@ func testStore(t *testing.T) *Storage {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, automations, audit_events, audit_chain_checkpoints, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
+	// audit_chain_head (ADR 0044 keyed-chain high-water-mark) MUST be truncated
+	// alongside audit_events: it is the MAC-authenticated tail marker, and
+	// VerifySealed fail-closes when an HWM row is present but the store has no key
+	// (the correct tamper-evidence behavior). SQLite tests get a fresh DB per test
+	// so they never carry a stale HWM; the shared-DB Postgres harness must reset it
+	// explicitly, or a legacy (no-key) test run after a keyed test would inherit a
+	// stale keyed HWM for the default tenant and spuriously fail self-verify.
+	if _, err := s.db.Exec("TRUNCATE groups, agents, configs, rollouts, rollout_approvals, saved_queries, alert_rules, automations, audit_events, audit_chain_checkpoints, audit_chain_head, action_runner_registrations, action_requests, deploy_targets, deploy_runs, expected_agents, api_tokens, recommendation_dismissals, recommendation_outcomes, cost_spike_events, webhook_delivery_dedupe, iac_recommendation_verdicts, incident_drafts, discovery_scans, trace_resource_seen, siem_destinations, connection_registry"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return s
@@ -1486,5 +1494,130 @@ func TestPostgres_ExpectedAgentCRUD(t *testing.T) {
 func TestOpen_EmptyDSN(t *testing.T) {
 	if _, err := Open(context.Background(), ""); err == nil {
 		t.Fatal("Open with empty DSN must error")
+	}
+}
+
+// ============================================================================
+// ADR 0044 — keyed tamper-evident chain on Postgres (Integration). Mirrors the
+// sqlite keyed tests so the two backends are provably symmetric. Gated on
+// TEST_POSTGRES_DSN via testStore(t).
+// ============================================================================
+
+func pgKeyedTestKey(t *testing.T) *chain.Key {
+	t.Helper()
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i*7 + 1)
+	}
+	k, err := chain.NewKey(raw)
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
+	return k
+}
+
+func TestPostgres_AuditChainKeyed_VerifiesAndReportsKeyed(t *testing.T) {
+	s := testStore(t)
+	s.SetAuditChainKey(pgKeyedTestKey(t))
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !res.OK || !res.Keyed || res.RowsVerified != 5 || res.HighWaterMarkSeq != 5 {
+		t.Fatalf("keyed verify summary mismatch: %+v", res)
+	}
+}
+
+// TestPostgres_AuditChainKeyed_DBWriterForgeDetected — the CRITICAL regression on
+// Postgres: an edit re-hashed with the PUBLIC SHA-256 must be caught by the key.
+func TestPostgres_AuditChainKeyed_DBWriterForgeDetected(t *testing.T) {
+	s := testStore(t)
+	s.SetAuditChainKey(pgKeyedTestKey(t))
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	var id, actor, eventType, targetType, targetID, action, payload, tenant, prevHash string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id, actor, event_type, target_type, target_id, action, payload, tenant_id, prev_hash FROM audit_events WHERE seq=3`).
+		Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &tenant, &prevHash); err != nil {
+		t.Fatalf("read seq 3: %v", err)
+	}
+	forged := chain.RowHash(id, actor, eventType, targetType, targetID, "tampered", payload, tenant, 3, prevHash)
+	if _, err := s.db.ExecContext(ctx, `UPDATE audit_events SET action='tampered', row_hash=$1 WHERE seq=3`, forged); err != nil {
+		t.Fatalf("forge: %v", err)
+	}
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.OK || res.FirstBreakSeq != 3 {
+		t.Fatalf("forge must be caught at seq 3, got %+v", res)
+	}
+}
+
+// TestPostgres_AuditChainKeyed_TailTruncationDetected — deleting the newest rows
+// is caught by the high-water-mark.
+func TestPostgres_AuditChainKeyed_TailTruncationDetected(t *testing.T) {
+	s := testStore(t)
+	s.SetAuditChainKey(pgKeyedTestKey(t))
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM audit_events WHERE seq IN (4,5)`); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.OK || res.FirstBreakSeq != 5 || !strings.Contains(strings.ToLower(res.Detail), "truncation") {
+		t.Fatalf("tail truncation must be caught via HWM, got %+v", res)
+	}
+}
+
+// TestPostgres_AuditChainKeyed_BackdateDetected — timestamp is in the keyed hash.
+func TestPostgres_AuditChainKeyed_BackdateDetected(t *testing.T) {
+	s := testStore(t)
+	s.SetAuditChainKey(pgKeyedTestKey(t))
+	ctx := context.Background()
+	for i := 1; i <= 5; i++ {
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE audit_events SET timestamp='2020-01-01T00:00:00Z' WHERE seq=3`); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if res.OK || res.FirstBreakSeq != 3 {
+		t.Fatalf("backdate must be caught at seq 3, got %+v", res)
+	}
+}
+
+// TestPostgres_AuditChainKeyed_MigrationLegacyPrefixThenKeyed — legacy rows keep
+// verifying alongside a keyed suffix (the migration guarantee).
+func TestPostgres_AuditChainKeyed_MigrationLegacyPrefixThenKeyed(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for i := 1; i <= 3; i++ { // unkeyed legacy prefix
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	s.SetAuditChainKey(pgKeyedTestKey(t))
+	for i := 4; i <= 6; i++ { // keyed suffix
+		appendPGAuditEvent(t, s, ctx, i)
+	}
+	res, err := s.VerifyAuditChain(ctx)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !res.OK || !res.Keyed || res.RowsVerified != 6 || res.HighWaterMarkSeq != 6 {
+		t.Fatalf("mixed legacy+keyed chain must verify: %+v", res)
 	}
 }

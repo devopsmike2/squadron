@@ -73,10 +73,15 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	if e.Timestamp.IsZero() {
 		e.Timestamp = e.CreatedAt
 	}
+	// ADR 0044 — normalize the timestamp to the SAME micro-truncated UTC value
+	// folded into the keyed hash so the stored column and the hashed canonical
+	// string round-trip byte-identically (Postgres timestamptz keeps micros).
+	e.Timestamp = e.Timestamp.UTC().Truncate(time.Microsecond)
 
 	// payloadStr is computed once and reused for BOTH the stored payload column
 	// and the hash so the two can never drift (ADR 0027 requirement).
 	payloadStr := string(payloadJSON)
+	key := s.currentAuditKey()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -106,11 +111,25 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		}
 	}
 	seq := prevSeq + 1
-	rowHash := chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+
+	// ADR 0044 — seal with the keyed HMAC scheme when a key is configured, else
+	// fall back to the ADR 0027 unkeyed legacy scheme (warn-window degraded
+	// mode). Mirrors the sqlite backend byte-for-byte.
+	var (
+		algo    string
+		rowHash string
+	)
+	if key != nil {
+		algo = chain.AlgoHMACSHA256
+		rowHash = chain.RowHashV2(key, e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, chain.CanonicalTimestamp(e.Timestamp), seq, prevHash)
+	} else {
+		algo = chain.AlgoLegacySHA256
+		rowHash = chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		e.ID,
 		e.Timestamp,
 		e.Actor,
@@ -124,9 +143,28 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		seq,
 		prevHash,
 		rowHash,
+		nullString(algo),
 	); err != nil {
 		return fmt.Errorf("failed to create audit event: %w", err)
 	}
+
+	// ADR 0044 — advance the MAC-authenticated high-water-mark inside the same
+	// advisory-locked tx so tail truncation is detectable. Keyed mode only.
+	if key != nil {
+		mac := key.HeadMAC(tenant, seq, rowHash)
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO audit_chain_head (tenant_id, head_seq, head_row_hash, mac)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (tenant_id) DO UPDATE SET
+			    head_seq = excluded.head_seq,
+			    head_row_hash = excluded.head_row_hash,
+			    mac = excluded.mac`,
+			tenant, seq, rowHash, mac,
+		); err != nil {
+			return fmt.Errorf("failed to update audit chain head: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit audit event: %w", err)
 	}
@@ -295,7 +333,7 @@ func (s *Storage) UpdateAuditEventExplanation(ctx context.Context, id, explanati
 // never diverge on what a "row" is — exactly the sqlite backend's invariant.
 func (s *Storage) auditChainRows(ctx context.Context, tenant string) ([]chain.Row, error) {
 	dbRows, err := s.db.QueryContext(ctx,
-		`SELECT id, actor, event_type, target_type, target_id, action, payload, seq, prev_hash, row_hash
+		`SELECT id, actor, event_type, target_type, target_id, action, payload, timestamp, seq, prev_hash, row_hash, chain_algo
 		 FROM audit_events WHERE tenant_id = $1 AND seq IS NOT NULL ORDER BY seq ASC`,
 		tenant,
 	)
@@ -309,10 +347,11 @@ func (s *Storage) auditChainRows(ctx context.Context, tenant string) ([]chain.Ro
 		var (
 			id, actor, eventType, targetType, action string
 			targetID, payload                        sql.NullString
+			ts                                       time.Time
 			seq                                      int64
-			prevHash, rowHash                        sql.NullString
+			prevHash, rowHash, algo                  sql.NullString
 		)
-		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &seq, &prevHash, &rowHash); err != nil {
+		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &ts, &seq, &prevHash, &rowHash, &algo); err != nil {
 			return nil, fmt.Errorf("failed to scan audit chain row: %w", err)
 		}
 		rows = append(rows, chain.Row{
@@ -327,12 +366,35 @@ func (s *Storage) auditChainRows(ctx context.Context, tenant string) ([]chain.Ro
 			Seq:        seq,
 			PrevHash:   prevHash.String,
 			RowHash:    rowHash.String,
+			Timestamp:  chain.CanonicalTimestamp(ts),
+			Algo:       algo.String,
 		})
 	}
 	if err := dbRows.Err(); err != nil {
 		return nil, fmt.Errorf("audit chain iteration: %w", err)
 	}
 	return rows, nil
+}
+
+// loadAuditHead loads the tenant's ADR 0044 high-water-mark, or nil when none is
+// recorded (legacy / not-yet-keyed chain). Mirrors the sqlite backend.
+func (s *Storage) loadAuditHead(ctx context.Context, tenant string) (*chain.Head, error) {
+	var (
+		headSeq     int64
+		headRowHash string
+		mac         string
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT head_seq, head_row_hash, mac FROM audit_chain_head WHERE tenant_id = $1`,
+		tenant,
+	).Scan(&headSeq, &headRowHash, &mac)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read audit chain head: %w", err)
+	}
+	return &chain.Head{Tenant: tenant, HeadSeq: headSeq, HeadRowHash: headRowHash, MAC: mac}, nil
 }
 
 // VerifyAuditChain walks the caller's tenant hash-chain (ADR 0027) and reports
@@ -358,6 +420,13 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		return nil, err
 	}
 
+	// ADR 0044 — load the MAC-authenticated high-water-mark so VerifySealed can
+	// detect tail truncation. Absent (legacy / not-yet-keyed) → nil.
+	head, err := s.loadAuditHead(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+
 	// ADR 0027 slice 2 — load this tenant's latest checkpoint so the first
 	// surviving row can be POSITIVELY anchored to a known-good boundary. A
 	// missing checkpoint is fine (anchoring only ever adds a positive signal, it
@@ -371,7 +440,7 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		tenant,
 	).Scan(&cpSeq, &cpRowHash)
 
-	res := chain.Verify(rows)
+	res := chain.VerifySealed(rows, s.currentAuditKey(), head)
 	out := &types.AuditChainVerification{
 		OK:            res.OK,
 		RowsVerified:  res.RowsVerified,
@@ -380,6 +449,10 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		CoversFromSeq: res.CoversFromSeq,
 		HeadSeq:       res.HeadSeq,
 		HeadRowHash:   res.HeadRowHash,
+		Keyed:         s.currentAuditKey() != nil,
+	}
+	if head != nil {
+		out.HighWaterMarkSeq = head.HeadSeq
 	}
 
 	// Anchor the first surviving row to the latest checkpoint: the checkpoint

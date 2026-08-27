@@ -40,6 +40,22 @@ type Storage struct {
 	// hash-chain (ADR 0027 slice 1). It guards ONLY the chain append; every
 	// other write uses the shared *sql.DB handle directly.
 	auditChainMu sync.Mutex
+	// auditKey is the ADR 0044 audit HMAC key. nil = the DEGRADED warn-window
+	// (no SQUADRON_AUDIT_HMAC_KEY): appends fall back to the unkeyed ADR 0027
+	// legacy scheme and the high-water-mark is not maintained. Non-nil: every
+	// append is HMAC-keyed (timestamp covered) and updates the per-tenant HWM.
+	// Installed once at startup via SetAuditChainKey before any append; guarded
+	// by auditChainMu on the append path so a concurrent append sees a stable
+	// value.
+	auditKey *chain.Key
+}
+
+// SetAuditChainKey installs the ADR 0044 audit HMAC key. Call once at startup,
+// before serving traffic. nil keeps the store in the unkeyed-legacy warn-window.
+func (s *Storage) SetAuditChainKey(k *chain.Key) {
+	s.auditChainMu.Lock()
+	defer s.auditChainMu.Unlock()
+	s.auditKey = k
 }
 
 // SetTraceBudgetProvider installs the per-tenant trace-index budget provider
@@ -1233,6 +1249,24 @@ func (s *Storage) migrate() error {
 	    PRIMARY KEY (tenant_id, checkpoint_seq)
 	)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_checkpoints(tenant_id, checkpoint_seq DESC)`,
+		// ADR 0044 — keyed tamper-evident chain. chain_algo self-describes the
+		// scheme each row was sealed under: NULL/'' = legacy unkeyed SHA-256
+		// (ADR 0027), 'hmac-sha256-v2' = keyed HMAC-SHA256 with timestamp
+		// coverage. Nullable + additive so pre-0044 rows keep their original
+		// (legacy) hashes and are NEVER re-hashed. Idempotent via the
+		// duplicate-column swallow, like the chain columns above.
+		`ALTER TABLE audit_events ADD COLUMN chain_algo TEXT`,
+		// ADR 0044 — per-tenant high-water-mark head. The latest sealed
+		// {head_seq, head_row_hash}, authenticated by a MAC a DB writer without
+		// the key cannot forge, so VerifyAuditChain can detect TAIL truncation
+		// (the newest rows deleted) — the gap ADR 0027 self-verify could not
+		// close. Upserted inside the serialized append critical section.
+		`CREATE TABLE IF NOT EXISTS audit_chain_head (
+	    tenant_id     TEXT    NOT NULL PRIMARY KEY,
+	    head_seq      INTEGER NOT NULL,
+	    head_row_hash TEXT    NOT NULL,
+	    mac           TEXT    NOT NULL
+	)`,
 		`ALTER TABLE rollouts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`,
 		`CREATE INDEX IF NOT EXISTS idx_rollouts_tenant ON rollouts(tenant_id)`,
 		// api_tokens.tenant_id added in slice 3a — index only.
@@ -3004,6 +3038,10 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	if e.Timestamp.IsZero() {
 		e.Timestamp = e.CreatedAt
 	}
+	// ADR 0044 — normalize the timestamp to the SAME micro-truncated UTC value we
+	// fold into the keyed hash, so the stored column and the hashed canonical
+	// string round-trip byte-identically on both sqlite and postgres.
+	e.Timestamp = e.Timestamp.UTC().Truncate(time.Microsecond)
 
 	// ADR 0027 slice 1 — extend the per-tenant tamper-evident hash-chain. The
 	// read-head -> insert critical section MUST be serialized: two concurrent
@@ -3015,6 +3053,7 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	payloadStr := string(payloadJSON)
 	s.auditChainMu.Lock()
 	defer s.auditChainMu.Unlock()
+	key := s.auditKey // snapshot under the lock
 
 	var prevSeq int64
 	var prevHash string
@@ -3031,11 +3070,27 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		}
 	}
 	seq := prevSeq + 1
-	rowHash := chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+
+	// ADR 0044 — seal with the keyed HMAC scheme when a key is configured, else
+	// fall back to the ADR 0027 unkeyed legacy scheme (the warn-window degraded
+	// mode). The per-row chain_algo marker records which; the first keyed append
+	// on an upgraded chain links (prev_hash) straight to the last legacy row,
+	// pinning the legacy prefix under a hash the attacker cannot recompute.
+	var (
+		algo    string
+		rowHash string
+	)
+	if key != nil {
+		algo = chain.AlgoHMACSHA256
+		rowHash = chain.RowHashV2(key, e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, chain.CanonicalTimestamp(e.Timestamp), seq, prevHash)
+	} else {
+		algo = chain.AlgoLegacySHA256
+		rowHash = chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	}
 
 	stmt := `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		e.ID,
@@ -3051,8 +3106,28 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		seq,
 		prevHash,
 		rowHash,
+		nullableString(algo),
 	); err != nil {
 		return fmt.Errorf("failed to create audit event: %w", err)
+	}
+
+	// ADR 0044 — advance the MAC-authenticated high-water-mark so a later tail
+	// truncation (deleting these newest rows) is detectable. Only maintained in
+	// keyed mode; the MAC a DB writer cannot forge is what makes the HWM a
+	// trustworthy floor.
+	if key != nil {
+		mac := key.HeadMAC(tenant, seq, rowHash)
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO audit_chain_head (tenant_id, head_seq, head_row_hash, mac)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(tenant_id) DO UPDATE SET
+			    head_seq = excluded.head_seq,
+			    head_row_hash = excluded.head_row_hash,
+			    mac = excluded.mac`,
+			tenant, seq, rowHash, mac,
+		); err != nil {
+			return fmt.Errorf("failed to update audit chain head: %w", err)
+		}
 	}
 	return nil
 }
