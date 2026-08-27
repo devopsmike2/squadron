@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Squadron Web Frontend - React-based observability interface",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
