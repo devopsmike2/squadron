@@ -20,12 +20,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	// pgx stdlib driver, registered under the name "pgx".
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/google/uuid"
+
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
@@ -34,6 +37,31 @@ import (
 // Storage is the Postgres-backed application store.
 type Storage struct {
 	db *sql.DB
+
+	// auditKey is the ADR 0044 audit HMAC key. nil = the DEGRADED warn-window
+	// (no SQUADRON_AUDIT_HMAC_KEY): appends fall back to the unkeyed ADR 0027
+	// legacy scheme and the high-water-mark is not maintained. Installed once at
+	// startup via SetAuditChainKey. Guarded by auditKeyMu so a concurrent append
+	// (serialized per tenant by the DB advisory lock, but not against the setter)
+	// reads a stable value.
+	auditKeyMu sync.RWMutex
+	auditKey   *chain.Key
+}
+
+// SetAuditChainKey installs the ADR 0044 audit HMAC key. Call once at startup,
+// before serving traffic. nil keeps the store in the unkeyed-legacy warn-window.
+func (s *Storage) SetAuditChainKey(k *chain.Key) {
+	s.auditKeyMu.Lock()
+	defer s.auditKeyMu.Unlock()
+	s.auditKey = k
+}
+
+// currentAuditKey returns the configured audit HMAC key (nil in the degraded
+// warn-window).
+func (s *Storage) currentAuditKey() *chain.Key {
+	s.auditKeyMu.RLock()
+	defer s.auditKeyMu.RUnlock()
+	return s.auditKey
 }
 
 // Compile-time proof that the Postgres backend satisfies the FULL
@@ -306,6 +334,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
     seq                         BIGINT,
     prev_hash                   TEXT,
     row_hash                    TEXT,
+    -- ADR 0044 — per-row scheme marker: NULL/'' = legacy unkeyed SHA-256,
+    -- 'hmac-sha256-v2' = keyed HMAC-SHA256 (timestamp covered).
+    chain_algo                  TEXT,
     ai_explanation              TEXT,
     ai_explanation_model        TEXT,
     ai_explanation_generated_at TIMESTAMPTZ
@@ -334,6 +365,23 @@ CREATE TABLE IF NOT EXISTS audit_chain_checkpoints (
     PRIMARY KEY (tenant_id, checkpoint_seq)
 );
 CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_checkpoints(tenant_id, checkpoint_seq DESC);
+
+-- ADR 0044 — keyed tamper-evident chain. Additive chain_algo column for
+-- databases created before the keyed cutover (idempotent; fresh DBs already
+-- have it from the CREATE TABLE above). Existing rows read NULL = legacy and
+-- are NEVER re-hashed.
+ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS chain_algo TEXT;
+
+-- ADR 0044 — per-tenant high-water-mark head. The latest sealed
+-- {head_seq, head_row_hash}, authenticated by a MAC a DB writer without the key
+-- cannot forge, so VerifyAuditChain detects TAIL truncation. Upserted inside the
+-- per-tenant advisory-locked append tx. Mirrors sqlite exactly.
+CREATE TABLE IF NOT EXISTS audit_chain_head (
+    tenant_id     TEXT   NOT NULL PRIMARY KEY,
+    head_seq      BIGINT NOT NULL,
+    head_row_hash TEXT   NOT NULL,
+    mac           TEXT   NOT NULL
+);
 
 -- ADR 0033, slice 5 (OPERATIONS cluster) — action runner registrations
 -- (v0.53 Move 2). CRUD + revoke, semantics mirror the sqlite backend.

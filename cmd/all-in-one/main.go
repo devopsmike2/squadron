@@ -34,6 +34,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/api"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
+	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/automations"
 	"github.com/devopsmike2/squadron/internal/billing"
 	"github.com/devopsmike2/squadron/internal/config"
@@ -188,6 +189,37 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		} else {
 			logger.Warn("per-tenant trace-index budget provider present but the store does not support SetTraceBudgetProvider; ignoring")
 		}
+	}
+
+	// ADR 0044 — install the DEDICATED audit HMAC key so the tamper-evident
+	// chain is KEYED (HMAC-SHA256 + high-water-mark + timestamp coverage). The
+	// key is external and distinct from SQUADRON_SECRETS_KEY (separation of
+	// duties: a data-encryption-key leak must not also grant the ability to
+	// forge the audit trail). It is read from SQUADRON_AUDIT_HMAC_KEY and is
+	// NEVER auto-generated next to the DB — an attacker with DB/filesystem write
+	// must not be able to obtain it.
+	//
+	// Warn-window (mirrors ADR 0045): a MISSING key is NOT fatal — the control
+	// plane boots into a clearly-flagged DEGRADED mode where audit appends use
+	// the legacy unkeyed scheme and a future release will REFUSE to start. A
+	// MALFORMED key IS fatal (a typo must not silently degrade the trail).
+	if auditKey, present, kerr := chain.LoadKeyFromEnv(); kerr != nil {
+		logger.Fatal("audit HMAC key is set but malformed",
+			zap.String("env", chain.EnvVarAuditKey), zap.Error(kerr))
+	} else if !present {
+		logger.Error("AUDIT TAMPER-EVIDENCE DEGRADED: " + chain.EnvVarAuditKey +
+			" is not set. The audit hash-chain is UNKEYED (ADR 0027 legacy): a party " +
+			"with database write access can silently re-forge audit history, and tail " +
+			"truncation is undetectable. Provide a dedicated base64 32-byte key via " +
+			chain.EnvVarAuditKey + " from your secret manager to seal the chain (HMAC + " +
+			"high-water-mark + timestamp coverage, ADR 0044). A FUTURE RELEASE WILL " +
+			"REFUSE TO START without it.")
+	} else if ks, ok := appStore.(interface{ SetAuditChainKey(*chain.Key) }); ok {
+		ks.SetAuditChainKey(auditKey)
+		logger.Info("audit tamper-evident chain is KEYED (ADR 0044: HMAC-SHA256 + high-water-mark + timestamp coverage)")
+	} else {
+		logger.Warn("audit HMAC key provided but the application store does not support SetAuditChainKey; audit chain remains unkeyed",
+			zap.String("env", chain.EnvVarAuditKey))
 	}
 
 	// Ensure application store factory is properly closed on shutdown

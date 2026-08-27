@@ -110,6 +110,11 @@ type Store struct {
 	// ADR 0027 slice 2 — retention checkpoints, keyed by (tenant, seq).
 	// Test-only mirror of the sqlite audit_chain_checkpoints table.
 	auditCheckpoints map[string]map[int64]types.AuditCheckpoint
+	// ADR 0044 — optional audit HMAC key + per-tenant high-water-mark mirror so
+	// the memory store exercises the same keyed append/verify path the sqlite
+	// store does. nil key = the legacy unkeyed warn-window (default).
+	auditKey  *chain.Key
+	auditHead map[string]chain.Head
 
 	// HA S3b (ADR 0035) — connection registry mirror. Keyed by the Squadron
 	// fleet id (agent_id), one owner per agent. SYSTEM-SCOPED: no tenant
@@ -176,6 +181,7 @@ func NewStore() *Store {
 		auditChains: make(map[string][]memAuditChainRow),
 		// ADR 0027 slice 2.
 		auditCheckpoints: make(map[string]map[int64]types.AuditCheckpoint),
+		auditHead:        make(map[string]chain.Head),
 		// HA S3b (ADR 0035).
 		connectionOwners: make(map[uuid.UUID]types.ConnectionOwner),
 	}
@@ -1007,12 +1013,36 @@ func (s *Store) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) error
 		prevHash = tenantChain[n-1].rowHash
 	}
 	seq := prevSeq + 1
-	rowHash := chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	// ADR 0044 — keyed HMAC append (timestamp covered + HWM) when a key is
+	// configured, else the legacy unkeyed scheme. Mirrors the sqlite backend.
+	var (
+		algo    string
+		rowHash string
+		canonTS string
+	)
+	ts := e.Timestamp
+	if ts.IsZero() {
+		ts = e.CreatedAt
+	}
+	canonTS = chain.CanonicalTimestamp(ts)
+	if s.auditKey != nil {
+		algo = chain.AlgoHMACSHA256
+		rowHash = chain.RowHashV2(s.auditKey, e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, canonTS, seq, prevHash)
+	} else {
+		algo = chain.AlgoLegacySHA256
+		rowHash = chain.RowHash(e.ID, e.Actor, e.EventType, e.TargetType, e.TargetID, e.Action, payloadStr, tenant, seq, prevHash)
+	}
 	s.auditChains[tenant] = append(tenantChain, memAuditChainRow{
 		id: e.ID, actor: e.Actor, eventType: e.EventType, targetType: e.TargetType,
 		targetID: e.TargetID, action: e.Action, payloadStr: payloadStr,
-		seq: seq, prevHash: prevHash, rowHash: rowHash,
+		seq: seq, prevHash: prevHash, rowHash: rowHash, timestamp: canonTS, algo: algo,
 	})
+	if s.auditKey != nil {
+		s.auditHead[tenant] = chain.Head{
+			Tenant: tenant, HeadSeq: seq, HeadRowHash: rowHash,
+			MAC: s.auditKey.HeadMAC(tenant, seq, rowHash),
+		}
+	}
 	return nil
 }
 

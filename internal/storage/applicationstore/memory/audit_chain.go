@@ -21,6 +21,17 @@ type memAuditChainRow struct {
 	seq                                                            int64
 	prevHash                                                       string
 	rowHash                                                        string
+	// ADR 0044 — canonical timestamp folded into the keyed hash + the per-row
+	// scheme marker (empty = legacy unkeyed).
+	timestamp string
+	algo      string
+}
+
+// SetAuditChainKey installs the ADR 0044 audit HMAC key on the memory store.
+func (s *Store) SetAuditChainKey(k *chain.Key) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auditKey = k
 }
 
 // VerifyAuditChain walks the caller's tenant hash-chain in the memory store
@@ -50,11 +61,17 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifica
 			Seq:        row.seq,
 			PrevHash:   row.prevHash,
 			RowHash:    row.rowHash,
+			Timestamp:  row.timestamp,
+			Algo:       row.algo,
 		})
 	}
 
-	res := chain.Verify(rows)
-	return &types.AuditChainVerification{
+	var head *chain.Head
+	if h, ok := s.auditHead[tenant]; ok {
+		head = &h
+	}
+	res := chain.VerifySealed(rows, s.auditKey, head)
+	out := &types.AuditChainVerification{
 		OK:            res.OK,
 		RowsVerified:  res.RowsVerified,
 		FirstBreakSeq: res.FirstBreakSeq,
@@ -62,7 +79,12 @@ func (s *Store) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifica
 		CoversFromSeq: res.CoversFromSeq,
 		HeadSeq:       res.HeadSeq,
 		HeadRowHash:   res.HeadRowHash,
-	}, nil
+		Keyed:         s.auditKey != nil,
+	}
+	if head != nil {
+		out.HighWaterMarkSeq = head.HeadSeq
+	}
+	return out, nil
 }
 
 // WriteAuditCheckpoint upserts a retention/chain reconciliation checkpoint in
@@ -119,6 +141,8 @@ func (s *Store) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
 			Seq:        row.seq,
 			PrevHash:   row.prevHash,
 			RowHash:    row.rowHash,
+			Timestamp:  row.timestamp,
+			Algo:       row.algo,
 		})
 	}
 	return rows, nil

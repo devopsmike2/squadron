@@ -1203,6 +1203,17 @@ type AuditChainVerification struct {
 	// start (legacy prune with no checkpoint) stays lenient.
 	AnchoredByCheckpoint bool  `json:"anchored_by_checkpoint,omitempty"`
 	CheckpointSeq        int64 `json:"checkpoint_seq,omitempty"` // seq of the anchoring checkpoint (0 when unanchored)
+
+	// ADR 0044 — keyed tamper-evidence reporting.
+	// Keyed is true when the chain is verified with the server-held HMAC key
+	// (tamper-EVIDENT against a DB writer). False = the DEGRADED warn-window
+	// state: no SQUADRON_AUDIT_HMAC_KEY is configured, so the chain is only
+	// unkeyed-legacy (forgeable by a DB writer) — surface this loudly to
+	// operators, it is NOT a full tamper-evidence guarantee.
+	Keyed bool `json:"keyed,omitempty"`
+	// HighWaterMarkSeq is the seq of the recorded, MAC-authenticated head the
+	// tail-truncation check compared against (0 when none is recorded yet).
+	HighWaterMarkSeq int64 `json:"high_water_mark_seq,omitempty"`
 }
 
 // AuditCheckpoint is a retention/chain reconciliation checkpoint (ADR 0027

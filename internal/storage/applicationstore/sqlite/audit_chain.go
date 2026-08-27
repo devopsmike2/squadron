@@ -47,43 +47,17 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		tenant = identity.DefaultTenant
 	}
 
-	dbRows, err := s.db.QueryContext(ctx,
-		`SELECT id, actor, event_type, target_type, target_id, action, payload, seq, prev_hash, row_hash
-		 FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL ORDER BY seq ASC`,
-		tenant,
-	)
+	rows, err := s.auditChainRows(ctx, tenant)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read audit chain: %w", err)
+		return nil, err
 	}
-	defer dbRows.Close()
 
-	var rows []chain.Row
-	for dbRows.Next() {
-		var (
-			id, actor, eventType, targetType, action string
-			targetID, payload                        sql.NullString
-			seq                                      int64
-			prevHash, rowHash                        sql.NullString
-		)
-		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &seq, &prevHash, &rowHash); err != nil {
-			return nil, fmt.Errorf("failed to scan audit chain row: %w", err)
-		}
-		rows = append(rows, chain.Row{
-			ID:         id,
-			Actor:      actor,
-			EventType:  eventType,
-			TargetType: targetType,
-			TargetID:   targetID.String,
-			Action:     action,
-			Payload:    payload.String,
-			Tenant:     tenant,
-			Seq:        seq,
-			PrevHash:   prevHash.String,
-			RowHash:    rowHash.String,
-		})
-	}
-	if err := dbRows.Err(); err != nil {
-		return nil, fmt.Errorf("audit chain iteration: %w", err)
+	// ADR 0044 — load the MAC-authenticated high-water-mark so VerifySealed can
+	// detect tail truncation. Absent (legacy / not-yet-keyed) → nil, and the
+	// truncation assertion is simply not made.
+	head, err := s.loadAuditHead(ctx, tenant)
+	if err != nil {
+		return nil, err
 	}
 
 	// ADR 0027 slice 2 — load this tenant's latest retention checkpoint so the
@@ -99,7 +73,7 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		tenant,
 	).Scan(&cpSeq, &cpRowHash)
 
-	res := chain.Verify(rows)
+	res := chain.VerifySealed(rows, s.currentAuditKey(), head)
 	out := &types.AuditChainVerification{
 		OK:            res.OK,
 		RowsVerified:  res.RowsVerified,
@@ -108,6 +82,10 @@ func (s *Storage) VerifyAuditChain(ctx context.Context) (*types.AuditChainVerifi
 		CoversFromSeq: res.CoversFromSeq,
 		HeadSeq:       res.HeadSeq,
 		HeadRowHash:   res.HeadRowHash,
+		Keyed:         s.currentAuditKey() != nil,
+	}
+	if head != nil {
+		out.HighWaterMarkSeq = head.HeadSeq
 	}
 
 	// Anchor the first surviving row to the latest checkpoint: the checkpoint
@@ -204,14 +182,31 @@ func (s *Storage) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
 	if !apply {
 		tenant = identity.DefaultTenant
 	}
+	return s.auditChainRows(ctx, tenant)
+}
 
+// currentAuditKey returns the configured ADR 0044 audit HMAC key (nil in the
+// degraded warn-window). Read under auditChainMu so it can't tear against a
+// concurrent SetAuditChainKey.
+func (s *Storage) currentAuditKey() *chain.Key {
+	s.auditChainMu.Lock()
+	defer s.auditChainMu.Unlock()
+	return s.auditKey
+}
+
+// auditChainRows reads the caller's tenant chain rows (seq ASC) with the RAW
+// payload column string plus the ADR 0044 timestamp + chain_algo fields the
+// keyed recompute needs, byte-identical to what the append path hashed. Shared
+// by VerifyAuditChain and ListAuditChainRows so the two can never diverge on
+// what a "row" is.
+func (s *Storage) auditChainRows(ctx context.Context, tenant string) ([]chain.Row, error) {
 	dbRows, err := s.db.QueryContext(ctx,
-		`SELECT id, actor, event_type, target_type, target_id, action, payload, seq, prev_hash, row_hash
+		`SELECT id, actor, event_type, target_type, target_id, action, payload, timestamp, seq, prev_hash, row_hash, chain_algo
 		 FROM audit_events WHERE tenant_id = ? AND seq IS NOT NULL ORDER BY seq ASC`,
 		tenant,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read audit chain rows: %w", err)
+		return nil, fmt.Errorf("failed to read audit chain: %w", err)
 	}
 	defer dbRows.Close()
 
@@ -220,10 +215,11 @@ func (s *Storage) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
 		var (
 			id, actor, eventType, targetType, action string
 			targetID, payload                        sql.NullString
+			ts                                       time.Time
 			seq                                      int64
-			prevHash, rowHash                        sql.NullString
+			prevHash, rowHash, algo                  sql.NullString
 		)
-		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &seq, &prevHash, &rowHash); err != nil {
+		if err := dbRows.Scan(&id, &actor, &eventType, &targetType, &targetID, &action, &payload, &ts, &seq, &prevHash, &rowHash, &algo); err != nil {
 			return nil, fmt.Errorf("failed to scan audit chain row: %w", err)
 		}
 		rows = append(rows, chain.Row{
@@ -238,10 +234,34 @@ func (s *Storage) ListAuditChainRows(ctx context.Context) ([]chain.Row, error) {
 			Seq:        seq,
 			PrevHash:   prevHash.String,
 			RowHash:    rowHash.String,
+			Timestamp:  chain.CanonicalTimestamp(ts),
+			Algo:       algo.String,
 		})
 	}
 	if err := dbRows.Err(); err != nil {
 		return nil, fmt.Errorf("audit chain rows iteration: %w", err)
 	}
 	return rows, nil
+}
+
+// loadAuditHead loads the tenant's ADR 0044 high-water-mark, or nil when none is
+// recorded (legacy / not-yet-keyed chain). The MAC is verified by VerifySealed,
+// not here — this is a plain read.
+func (s *Storage) loadAuditHead(ctx context.Context, tenant string) (*chain.Head, error) {
+	var (
+		headSeq     int64
+		headRowHash string
+		mac         string
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT head_seq, head_row_hash, mac FROM audit_chain_head WHERE tenant_id = ?`,
+		tenant,
+	).Scan(&headSeq, &headRowHash, &mac)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read audit chain head: %w", err)
+	}
+	return &chain.Head{Tenant: tenant, HeadSeq: headSeq, HeadRowHash: headRowHash, MAC: mac}, nil
 }
