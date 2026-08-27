@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -57,7 +58,8 @@ func NewAzureDevOpsProvider(baseURL string) *AzureDevOpsProvider {
 	}
 	return &AzureDevOpsProvider{
 		BaseURL: strings.TrimRight(baseURL, "/"),
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		// ADR 0046: self-hosted Azure DevOps Server base URL is operator-supplied.
+		HTTP: egressguard.NewClient(30 * time.Second),
 	}
 }
 

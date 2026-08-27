@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/connectors"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
 
 // TypeName is the registry key for the Loki connector. It matches
@@ -134,11 +135,12 @@ func New(cfg connectors.Config, creds connectors.ConnectorCredentials) (connecto
 		baseURL: strings.TrimRight(cfg.Endpoint, "/"),
 		orgID:   cfg.Settings[SettingOrgID],
 		auth:    auth,
-		// Nil Transport => http.DefaultTransport, which honors HTTPS_PROXY
-		// / HTTP_PROXY / NO_PROXY via ProxyFromEnvironment. The context on
-		// each request carries cancellation and the caller's deadline; the
-		// client Timeout is a backstop.
-		client: &http.Client{Timeout: timeout},
+		// ADR 0046: the Loki endpoint is operator-supplied — route through the
+		// shared egress guard (which clones the default transport, preserving
+		// HTTPS_PROXY / HTTP_PROXY / NO_PROXY). The context on each request
+		// carries cancellation and the caller's deadline; the client Timeout
+		// is a backstop.
+		client: egressguard.NewClient(timeout),
 	}, nil
 }
 

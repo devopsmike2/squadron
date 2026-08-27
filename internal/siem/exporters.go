@@ -11,9 +11,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
 
 // Exporter ships a single Event to a SIEM destination. Implementations
@@ -26,10 +27,14 @@ type Exporter interface {
 	Send(ctx context.Context, ev Event) error
 }
 
-// httpClient is what both exporters use. Extracted so tests can swap
-// in a httptest server. 10s timeout is generous enough for slow SIEMs
-// but tight enough that a stuck remote doesn't pile up backlog.
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+// httpClient is what both exporters use. It routes through the shared
+// egress guard (ADR 0046) so a SIEM destination URL can't be turned into
+// an SSRF probe to cloud-metadata/loopback; the guard resolves the live
+// process policy at dial time. Tests hit httptest servers on 127.0.0.1,
+// which the unconfigured default guard permits. 10s timeout is generous
+// enough for slow SIEMs but tight enough that a stuck remote doesn't pile
+// up backlog.
+var httpClient = egressguard.NewClient(10 * time.Second)
 
 // SplunkHECExporter posts to Splunk HEC's /services/collector/event
 // endpoint. Body is { "event": <payload>, "sourcetype": "squadron",
@@ -66,12 +71,11 @@ func (e *SplunkHECExporter) Send(ctx context.Context, ev Event) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		// Drain a chunk of the body so the operator can debug
-		// — Splunk returns JSON with an "code" / "text" pair on
-		// errors. Cap at 256 bytes so a misconfigured endpoint
-		// returning a giant HTML page doesn't bloat our logs.
-		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("splunk hec %d: %s", resp.StatusCode, string(buf))
+		// ADR 0046: do NOT echo the upstream body. Returning the remote
+		// response turned the SIEM /test endpoint into a semi-blind SSRF
+		// exfil channel. The status code alone is enough for an operator
+		// to distinguish auth (401/403) from routing (404/5xx) errors.
+		return fmt.Errorf("splunk hec returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -112,8 +116,8 @@ func (e *WebhookExporter) Send(ctx context.Context, ev Event) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("webhook %d: %s", resp.StatusCode, string(buf))
+		// ADR 0046: status only — never echo the upstream body (SSRF oracle).
+		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 	return nil
 }

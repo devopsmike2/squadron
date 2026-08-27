@@ -32,6 +32,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/reconcilecoord"
 	"github.com/devopsmike2/squadron/internal/configs"
 	"github.com/devopsmike2/squadron/internal/connectors"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/services"
@@ -395,11 +396,12 @@ func NewEngine(
 		telemetry:      telemetry,
 		commander:      commander,
 		broker:         broker,
-		httpClient:     &http.Client{Timeout: 10 * time.Second},
-		tracer:         tracer,
-		configsTracer:  configsTracer,
-		logger:         logger,
-		shutdown:       make(chan struct{}),
+		// ADR 0046: rollout NotificationURL is user-supplied — guard it.
+		httpClient:    egressguard.NewClient(10 * time.Second),
+		tracer:        tracer,
+		configsTracer: configsTracer,
+		logger:        logger,
+		shutdown:      make(chan struct{}),
 		// HA S3d (ADR 0035) defaults. Desired-state writes are ON in a real
 		// deployment (the AgentService always exposes CreateConfig /
 		// GetLatestConfigForAgent); the convergence gate + coverage grace fall

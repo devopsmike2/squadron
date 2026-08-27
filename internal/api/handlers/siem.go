@@ -6,6 +6,7 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/devopsmike2/squadron/internal/services"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -140,12 +141,14 @@ func (h *SiemHandlers) HandleTestSiem(c *gin.Context) {
 			return
 		}
 		// Test failures are not server-side bugs — surface as 502
-		// so the UI can show "Splunk returned 401" vs Squadron
-		// being broken. We don't log at error because operators
-		// see these constantly while debugging configs.
+		// so the UI can show "authentication failed (401)" vs Squadron
+		// being broken. ADR 0046: return a SANITIZED category, never the
+		// raw dial error or upstream body — echoing those turned /test
+		// into a semi-blind SSRF probing oracle. The full error is logged
+		// server-side (operators can still debug from the logs).
 		h.logger.Info("siem destination test failed",
 			zap.String("id", id), zap.String("error", err.Error()))
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadGateway, gin.H{"error": egressguard.SanitizeError(err)})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"result": "ok"})

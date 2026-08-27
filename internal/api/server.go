@@ -4123,7 +4123,11 @@ func (s *Server) registerRoutes() {
 		// path without firing a workflow. Operator clicks "Validate"
 		// to confirm the target is wired correctly before the first
 		// real deploy. Idempotent + cheap.
-		v1.POST("/deploy/targets/:id/validate", deployRead, func(c *gin.Context) {
+		// ADR 0046: requires deploy:write (ScopeDeployTrigger), NOT deploy:read
+		// — /validate transmits the target's Bearer PAT to an operator-chosen
+		// host (ProbeAuth/FetchFile), so it is effectively a write-power
+		// operation and must not be a lower-privilege probing oracle.
+		v1.POST("/deploy/targets/:id/validate", deployWrite, func(c *gin.Context) {
 			handlers.NewDeployHandlers(s.deploy, s.logger).HandleValidate(c)
 		})
 		// v0.35.0: redeploy with a past run's inputs. Same lint gate

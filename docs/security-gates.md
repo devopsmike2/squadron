@@ -12,7 +12,7 @@ justification and a TODO — nothing is silenced without a reason.
 | Gate | Tool | What fails the build | Baseline / allowlist |
 |------|------|----------------------|----------------------|
 | Reachable Go vulns | `govulncheck` | Any **call-graph-reachable** vuln not in the allowlist | `.govulncheck-allow.txt` |
-| Go SAST | `gosec -severity high -confidence high` | Any High-severity **and** High-confidence finding | inline `#nosec` (one) |
+| Go SAST | `gosec -severity high -confidence high` | Any High-severity **and** High-confidence finding | inline `#nosec` (G701 ×1, G402 ×2) |
 | Secrets | `gitleaks dir` (default rules) | Any secret outside the allowlisted fixtures | `.gitleaks.toml` |
 | Go dependency vulns | `trivy fs --severity HIGH,CRITICAL` (Go graph) | Any HIGH/CRITICAL Go CVE not ignored | `.trivyignore` |
 | UI prod dependency vulns | `npm audit --omit=dev --audit-level=high` | Any high/critical advisory in the **production** tree | none (tree is clean) |
@@ -34,9 +34,17 @@ All items trace back to the 2026-08-24 deep security scan triage.
   memory_limit=...` has no bind form, so the value is string-interpolated. The
   value is operator config only (a flag / `SQUADRON_DUCKDB_MEMORY_LIMIT`), never
   request/agent input, and is now regex-validated before use (defense-in-depth).
-  Annotated `#nosec G701` with that rationale. No other high/high findings exist;
-  the medium/low FPs from the deep scan (G204 exec, G404 rng, G101 label consts,
-  G201/G202 fmt) fall below the high/high threshold and never reach this gate.
+  Annotated `#nosec G701` with that rationale.
+- **G402** (×2) in `internal/egressguard/egressguard.go` — `InsecureSkipVerify:
+  true` is set ONLY when a per-destination operator opt-in is passed
+  (`AllowInsecureTLS` / the Splunk connector's `insecure_skip_verify` knob, e.g.
+  an on-prem Splunk HEC with a self-signed cert). The default is verify-on: both
+  code paths are gated behind an explicit boolean that is never set from
+  request/agent input. This preserves the exact pre-ADR-0046 Splunk behavior,
+  now centralized in the shared egress guard. Annotated `#nosec G402` with that
+  rationale. No other high/high findings exist; the medium/low FPs from the deep
+  scan (G204 exec, G404 rng, G101 label consts, G201/G202 fmt) fall below the
+  high/high threshold and never reach this gate.
 
 ### gitleaks — `.gitleaks.toml`
 Full git history is clean (trufflehog `--only-verified` = 0). The allowlist
