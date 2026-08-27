@@ -12,7 +12,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
+
+// TestNewDispatcher_UsesGuardedClient asserts the production dispatcher routes
+// webhook POSTs through the shared SSRF egress guard (ADR 0046).
+func TestNewDispatcher_UsesGuardedClient(t *testing.T) {
+	if !egressguard.IsGuarded(NewDispatcher().HTTP) {
+		t.Fatal("NewDispatcher must build a guarded HTTP client")
+	}
+}
 
 func sampleEvent() Event {
 	return Event{

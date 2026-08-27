@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -57,7 +58,10 @@ type AnsibleTowerProvider struct {
 // Tower's base URL comes from each target (GitHubOwner field).
 func NewAnsibleTowerProvider() *AnsibleTowerProvider {
 	return &AnsibleTowerProvider{
-		HTTP: &http.Client{Timeout: 30 * time.Second},
+		// ADR 0046: Tower base URL is operator-supplied (often on-prem/private).
+		// Guard it — private ranges shadow-warn until the operator allowlists
+		// the real Tower host, then enforce.
+		HTTP: egressguard.NewClient(30 * time.Second),
 	}
 }
 

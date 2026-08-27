@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/connectors"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -503,8 +504,11 @@ func TestNew_InsecureSkipVerifyBuildsCustomTransport(t *testing.T) {
 	require.NoError(t, err)
 	sc, ok := c.(*splunkConnector)
 	require.True(t, ok)
-	tr, ok := sc.client.Transport.(*http.Transport)
-	require.True(t, ok)
+	// ADR 0046: the client now routes through the shared egress guard; unwrap
+	// the scheme guard to inspect the underlying transport's TLS config.
+	require.True(t, egressguard.IsGuarded(sc.client))
+	tr := egressguard.BaseTransport(sc.client)
+	require.NotNil(t, tr)
 	require.NotNil(t, tr.TLSClientConfig)
 	assert.True(t, tr.TLSClientConfig.InsecureSkipVerify)
 }

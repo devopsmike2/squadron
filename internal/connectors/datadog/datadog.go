@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/connectors"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
 
 // TypeName is the connector's stable type key. It matches
@@ -169,11 +170,12 @@ func New(cfg connectors.Config, creds connectors.ConnectorCredentials) (*Client,
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		appKey:  appKey,
-		// Nil Transport => http.DefaultTransport, which honors
-		// HTTPS_PROXY / HTTP_PROXY / NO_PROXY via ProxyFromEnvironment.
+		// ADR 0046: the Datadog endpoint is operator-supplied (site/override),
+		// so route through the shared egress guard. The guard clones the
+		// default transport, preserving HTTPS_PROXY / HTTP_PROXY / NO_PROXY.
 		// The context on each request carries the caller's deadline; the
 		// client Timeout is a backstop.
-		client: &http.Client{Timeout: timeout},
+		client: egressguard.NewClient(timeout),
 	}, nil
 }
 

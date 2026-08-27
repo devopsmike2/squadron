@@ -48,6 +48,7 @@ import (
 	"github.com/devopsmike2/squadron/internal/discovery/iacconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/ociconnstore"
 	"github.com/devopsmike2/squadron/internal/discovery/scannerfactory"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/devopsmike2/squadron/internal/events"
 	iacgithub "github.com/devopsmike2/squadron/internal/iac/github"
 	"github.com/devopsmike2/squadron/internal/incidents"
@@ -108,6 +109,29 @@ func main() {
 	}
 }
 
+// configureEgressGuard translates the operator's egress config (ADR 0046) into
+// the process-wide guard policy and installs it. Metadata/loopback are always
+// blocked; private/internal ranges shadow-warn until Enforce is set.
+func configureEgressGuard(cfg config.EgressConfig, logger *zap.Logger) error {
+	allowlist, err := egressguard.ParseAllowlist(cfg.AllowPrivateCIDRs)
+	if err != nil {
+		return err
+	}
+	mode := egressguard.ModeShadow
+	if cfg.IsEnforced() {
+		mode = egressguard.ModeEnforce
+	}
+	egressguard.Configure(egressguard.Policy{
+		Mode:             mode,
+		PrivateAllowlist: allowlist,
+	}, logger)
+	logger.Info("SSRF egress guard configured (ADR 0046)",
+		zap.Bool("enforce_private_ranges", cfg.IsEnforced()),
+		zap.Int("private_allowlist_cidrs", len(allowlist)),
+		zap.String("note", "cloud-metadata + loopback are always blocked; private ranges shadow-warn until enforce"))
+	return nil
+}
+
 func runSquadron(cmd *cobra.Command, args []string) error {
 	// Load configuration
 	configPath := viper.GetString("config")
@@ -126,6 +150,16 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	logger.Info("Starting Squadron",
 		zap.String("version", version),
 		zap.String("config", configPath))
+
+	// ADR 0046: configure the process-wide SSRF egress guard BEFORE any
+	// server-side fetch path is constructed. Cloud-metadata/loopback are
+	// blocked always; private/internal ranges shadow-warn until the operator
+	// flips enforce (SQUADRON_EGRESS_ENFORCE / egress.enforce) after capturing
+	// their real internal destination IPs from the shadow warnings and adding
+	// them to egress.allow_private_cidrs.
+	if err := configureEgressGuard(config.Egress, logger); err != nil {
+		return fmt.Errorf("failed to configure egress guard: %w", err)
+	}
 
 	// HA S1 (HA architecture, ADR ~0035) — resolve the leader-election seam.
 	// The OSS build wires the always-leader elector: this single instance is

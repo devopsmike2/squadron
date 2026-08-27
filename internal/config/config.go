@@ -42,6 +42,41 @@ type Config struct {
 	HA HAConfig `yaml:"ha,omitempty"`
 
 	OpAMP OpAMPConfig `yaml:"opamp,omitempty"`
+
+	Egress EgressConfig `yaml:"egress,omitempty"`
+}
+
+// EgressConfig groups the SSRF egress-guard knobs (ADR 0046). Every server-side
+// fetch of a user/config-supplied URL (SIEM destinations, deploy targets,
+// alert/rollout webhooks, the ADR-0034 connectors) routes through one shared
+// guard that blocks cloud-metadata/loopback/link-local addresses at connect
+// time (post-DNS, rebinding-safe) and denies redirects.
+//
+// Rollout posture (mirrors OpAMP require_auth / the 0044/0045 warn windows):
+// cloud-metadata and loopback are blocked IMMEDIATELY and ALWAYS. Private and
+// internal ranges (RFC1918, CGNAT, ULA) are SHADOW-WARNED by default — the
+// guard logs what it WOULD block without blocking — so an operator can capture
+// their real internal SIEM/Tower/webhook IPs from the logs and add them to
+// AllowPrivateCIDRs before flipping Enforce on.
+type EgressConfig struct {
+	// Enforce blocks private/internal ranges (deny-by-default, allowlist opt-in).
+	// nil/false => shadow (warn-only for private ranges). Pointer so an omitted
+	// key means "shadow" (the backward-compatible default). Metadata/loopback
+	// are blocked regardless.
+	Enforce *bool `yaml:"enforce,omitempty"`
+
+	// AllowPrivateCIDRs is the operator-maintained allowlist of private-range
+	// CIDRs (or bare IPs) permitted even under Enforce — the on-prem SIEM /
+	// Ansible Tower / webhook destinations captured from the shadow warnings.
+	// Cloud-metadata and loopback are NEVER allowlistable.
+	AllowPrivateCIDRs []string `yaml:"allow_private_cidrs,omitempty"`
+}
+
+// IsEnforced reports the effective posture (ADR 0046). Default (nil) is shadow
+// so the pilot's internal destinations keep working until the operator has
+// captured and allowlisted them.
+func (e EgressConfig) IsEnforced() bool {
+	return e.Enforce != nil && *e.Enforce
 }
 
 // OpAMPConfig groups the OpAMP control-channel security knobs (ADR 0042).
@@ -595,8 +630,27 @@ func LoadConfig(path string) (*Config, error) {
 	applyAIEnv(&config.AI)
 	applyLoggingEnv(&config.Logging)
 	applyUsageEnv(&config.UsageReporting)
+	applyEgressEnv(&config.Egress)
 
 	return &config, nil
+}
+
+// applyEgressEnv lets an operator flip the SSRF egress posture (ADR 0046) at
+// container start without editing squadron.yaml. SQUADRON_EGRESS_ENFORCE=true
+// flips shadow->enforce; SQUADRON_EGRESS_ALLOW_PRIVATE_CIDRS is a comma-separated
+// allowlist of private-range CIDRs. Unset leaves the yaml (or default) intact.
+func applyEgressEnv(c *EgressConfig) {
+	if v := firstNonEmptyEnv("SQUADRON_EGRESS_ENFORCE"); v != "" {
+		enforce := strings.EqualFold(strings.TrimSpace(v), "true") || strings.TrimSpace(v) == "1"
+		c.Enforce = &enforce
+	}
+	if v := firstNonEmptyEnv("SQUADRON_EGRESS_ALLOW_PRIVATE_CIDRS"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				c.AllowPrivateCIDRs = append(c.AllowPrivateCIDRs, p)
+			}
+		}
+	}
 }
 
 // applyLoggingEnv lets an operator override the log level/format at container

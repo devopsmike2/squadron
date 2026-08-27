@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
 
@@ -41,7 +42,9 @@ func NewGitHubProvider(baseURL string) *GitHubProvider {
 	}
 	return &GitHubProvider{
 		BaseURL: baseURL,
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		// ADR 0046: the GitHub Enterprise base URL is operator-supplied and
+		// the PAT rides along, so guard every dispatch/poll/fetch.
+		HTTP: egressguard.NewClient(30 * time.Second),
 	}
 }
 
