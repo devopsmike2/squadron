@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/devopsmike2/squadron/internal/configlint"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/devopsmike2/squadron/internal/quickstart"
 	apptypes "github.com/devopsmike2/squadron/internal/storage/applicationstore/types"
 )
@@ -68,11 +69,12 @@ type Service struct {
 // disable the feature (the API layer will 503 in that case).
 func NewService(store Store, provider Provider, crypter *Crypter, logger *zap.Logger) *Service {
 	return &Service{
-		store:      store,
-		provider:   provider,
-		crypter:    crypter,
-		logger:     logger,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		store:    store,
+		provider: provider,
+		crypter:  crypter,
+		logger:   logger,
+		// ADR 0046: deploy completion_webhook_url is operator-supplied — guard it.
+		httpClient: egressguard.NewClient(10 * time.Second),
 	}
 }
 
@@ -712,7 +714,7 @@ func (s *Service) Validate(ctx context.Context, targetID string) (*ValidationRes
 
 	// Check 1: GitHub auth via cheap repo metadata fetch.
 	if probeErr := s.provider.ProbeAuth(ctx, target, string(pat)); probeErr != nil {
-		result.GitHubAuth = CheckStatus{Status: "fail", Message: probeErr.Error()}
+		result.GitHubAuth = CheckStatus{Status: "fail", Message: sanitizeProbeErr(probeErr)}
 	} else {
 		result.GitHubAuth = CheckStatus{Status: "ok", Message: "PAT can read the repo"}
 	}
@@ -720,7 +722,7 @@ func (s *Service) Validate(ctx context.Context, targetID string) (*ValidationRes
 	// Check 2: workflow file exists (only meaningful if auth passed).
 	if result.GitHubAuth.Status == "ok" {
 		if probeErr := s.provider.ProbeWorkflow(ctx, target, string(pat)); probeErr != nil {
-			result.WorkflowExists = CheckStatus{Status: "fail", Message: probeErr.Error()}
+			result.WorkflowExists = CheckStatus{Status: "fail", Message: sanitizeProbeErr(probeErr)}
 		} else {
 			result.WorkflowExists = CheckStatus{
 				Status:  "ok",
@@ -739,7 +741,7 @@ func (s *Service) Validate(ctx context.Context, targetID string) (*ValidationRes
 	} else {
 		raw, ferr := s.provider.FetchFile(ctx, target, string(pat), target.InventoryPath)
 		if ferr != nil {
-			result.Inventory = CheckStatus{Status: "fail", Message: ferr.Error()}
+			result.Inventory = CheckStatus{Status: "fail", Message: sanitizeProbeErr(ferr)}
 		} else {
 			hosts := ParseInventoryHosts(raw)
 			if len(hosts) == 0 {
@@ -785,6 +787,14 @@ func (s *Service) lintCheckStatus(ctx context.Context, target *apptypes.DeployTa
 		}
 	}
 	return CheckStatus{Status: "ok", Message: "lint passes"}
+}
+
+// sanitizeProbeErr converts a provider probe/fetch error into a safe category
+// for the /validate response (ADR 0046). /validate transmits the target PAT to
+// an operator-chosen host, so echoing the raw upstream error/body made it an
+// SSRF probing + response-exfil oracle. We surface a category, not the body.
+func sanitizeProbeErr(err error) string {
+	return egressguard.SanitizeError(err)
 }
 
 func branchOrMain(t *apptypes.DeployTarget) string {

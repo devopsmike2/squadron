@@ -33,7 +33,6 @@ package splunk
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +42,7 @@ import (
 	"time"
 
 	"github.com/devopsmike2/squadron/internal/connectors"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
 
 // TypeName is the registry key for the Splunk connector. It matches
@@ -163,23 +163,15 @@ func New(cfg connectors.Config, creds connectors.ConnectorCredentials) (connecto
 	}, nil
 }
 
-// newHTTPClient builds the connector's HTTP client. When insecure is false it
-// leaves Transport nil so http.DefaultTransport is used, which honors
-// HTTPS_PROXY / HTTP_PROXY / NO_PROXY via ProxyFromEnvironment. When insecure
-// is true it clones the default transport (preserving proxy support) and only
-// flips InsecureSkipVerify, so nothing else about the default transport
-// changes. The context on each request carries cancellation and the caller's
-// deadline; the client Timeout is a backstop.
+// newHTTPClient builds the connector's HTTP client. ADR 0046: the Splunk
+// endpoint is operator-supplied, so it routes through the shared egress guard
+// (which clones the default transport, preserving HTTPS_PROXY / HTTP_PROXY /
+// NO_PROXY). The per-destination insecure_skip_verify knob is threaded to the
+// guard, which flips InsecureSkipVerify on its cloned transport only when set —
+// nothing else about the transport changes. The context on each request carries
+// cancellation and the caller's deadline; the client Timeout is a backstop.
 func newHTTPClient(timeout time.Duration, insecure bool) *http.Client {
-	if !insecure {
-		return &http.Client{Timeout: timeout}
-	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if tr.TLSClientConfig == nil {
-		tr.TLSClientConfig = &tls.Config{}
-	}
-	tr.TLSClientConfig.InsecureSkipVerify = true
-	return &http.Client{Timeout: timeout, Transport: tr}
+	return egressguard.NewClientInsecure(timeout, insecure)
 }
 
 // Register registers the Splunk connector's Factory under TypeName in reg.

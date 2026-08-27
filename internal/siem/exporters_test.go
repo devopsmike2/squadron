@@ -15,7 +15,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
+
+// TestExporters_UseGuardedClient asserts the SIEM exporters route through the
+// shared SSRF egress guard (ADR 0046).
+func TestExporters_UseGuardedClient(t *testing.T) {
+	if !egressguard.IsGuarded(httpClient) {
+		t.Fatal("siem exporters must use a guarded HTTP client")
+	}
+}
 
 func sampleEvent() Event {
 	return Event{
@@ -63,7 +73,10 @@ func TestSplunkHEC_AuthHeader(t *testing.T) {
 	}
 }
 
-func TestSplunkHEC_SurfaceErrorBody(t *testing.T) {
+// TestSplunkHEC_SanitizesErrorBody verifies ADR 0046: the exporter surfaces the
+// upstream STATUS but never echoes the upstream response body. Echoing the body
+// turned the SIEM /test endpoint into a semi-blind SSRF exfil channel.
+func TestSplunkHEC_SanitizesErrorBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"text":"invalid token","code":4}`))
@@ -74,8 +87,11 @@ func TestSplunkHEC_SurfaceErrorBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from 401, got nil")
 	}
-	if !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "invalid token") {
-		t.Errorf("expected error to surface status + body, got %v", err)
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected error to surface the status, got %v", err)
+	}
+	if strings.Contains(err.Error(), "invalid token") {
+		t.Errorf("error must NOT echo the upstream body (SSRF oracle), got %v", err)
 	}
 }
 

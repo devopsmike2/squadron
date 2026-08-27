@@ -30,6 +30,7 @@ import (
 
 	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/alerts"
+	"github.com/devopsmike2/squadron/internal/egressguard"
 	"github.com/devopsmike2/squadron/internal/events"
 	"github.com/devopsmike2/squadron/internal/metrics"
 	"github.com/devopsmike2/squadron/internal/query"
@@ -97,14 +98,15 @@ func NewEvaluatorWithTracer(
 		telemetryService: telemetryService,
 		auditService:     audit,
 		executor:         query.NewExecutor(telemetryService, logger),
-		httpClient:       &http.Client{Timeout: 10 * time.Second},
-		logger:           logger,
-		metrics:          alertMetrics,
-		broker:           broker,
-		tracer:           tracer,
-		firing:           make(map[string]bool),
-		lastEval:         make(map[string]time.Time),
-		shutdown:         make(chan struct{}),
+		// ADR 0046: alert-rule WebhookURL is user-supplied — guard it.
+		httpClient: egressguard.NewClient(10 * time.Second),
+		logger:     logger,
+		metrics:    alertMetrics,
+		broker:     broker,
+		tracer:     tracer,
+		firing:     make(map[string]bool),
+		lastEval:   make(map[string]time.Time),
+		shutdown:   make(chan struct{}),
 	}
 }
 

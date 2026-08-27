@@ -39,6 +39,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/devopsmike2/squadron/internal/egressguard"
 )
 
 // DestinationType picks the vendor formatter. Empty / "generic"
@@ -133,7 +135,10 @@ type Dispatcher struct {
 // nil to NewDispatcherWith to take the default; otherwise injection
 // for tests.
 func NewDispatcher() *Dispatcher {
-	return &Dispatcher{HTTP: &http.Client{Timeout: 10 * time.Second}}
+	// ADR 0046: webhook destinations are user/config-supplied URLs — route
+	// through the shared egress guard so they can't probe cloud-metadata/
+	// loopback. Tests inject their own *http.Client and so bypass the guard.
+	return &Dispatcher{HTTP: egressguard.NewClient(10 * time.Second)}
 }
 
 // Dispatch formats the event for the destination's vendor and POSTs.
