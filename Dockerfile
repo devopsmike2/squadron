@@ -36,8 +36,14 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -o squadron ./cmd/all-in-one
 # =============================================================================
 FROM node:20-alpine AS frontend-builder
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm. Pinned so image builds are reproducible: an unpinned
+# `npm install -g pnpm` grabs whatever is newest at build time, and
+# pnpm 10 introduced build-script gating that fails the frozen install
+# ("Ignored build scripts" -> ERR_PNPM_IGNORED_BUILDS for esbuild /
+# @tailwindcss/oxide). The lockfile is lockfileVersion 9.0 (pnpm 9),
+# so we pin pnpm 9, which matches the lockfile and runs dep build
+# scripts by default. See knowledge/ci-gotchas.md.
+RUN npm install -g pnpm@9.15.9
 
 # Set working directory
 WORKDIR /app
