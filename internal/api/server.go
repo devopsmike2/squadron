@@ -19,6 +19,7 @@ import (
 
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
+	"github.com/devopsmike2/squadron/internal/aicredstore"
 	"github.com/devopsmike2/squadron/internal/api/handlers"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/billing"
@@ -131,6 +132,15 @@ type Server struct {
 	// "IaC connect not configured" message; the rest of the discovery
 	// surface stays unaffected.
 	iacConnStore iacconnstore.Store
+	// aiCredStore — app-global sealed store for the single AI-assist
+	// provider API key an admin sets through the settings UI/API. Optional
+	// at construction: when nil, the PUT/DELETE /api/v1/ai/credential
+	// routes 503 with a clear "not configured" message (the test_server.go
+	// path and deployments without SQUADRON_SECRETS_KEY). Sealing reuses
+	// s.discoveryCredKey — the AI key is sealed with the same
+	// SQUADRON_SECRETS_KEY the AWS / IaC paths use. NOT tenant-scoped
+	// (ADR 0043 does not apply): the AI key is one app-level setting.
+	aiCredStore aicredstore.Store
 	// v0.89.47 (#667 Stream 67, GCP discovery slice 1 chunk 3) — GCP
 	// discovery substrate. Optional at construction; the
 	// /api/v1/discovery/gcp/* routes 503 when the store is unwired
@@ -1245,6 +1255,20 @@ func (s *Server) SetDiscoveryAIService(svc *ai.Service) {
 // 500ing with a "key not wired" humanized error.
 func (s *Server) SetIaCConnStore(store iacconnstore.Store) {
 	s.iacConnStore = store
+}
+
+// SetAICredentialStore wires the app-global AI-credential substrate onto
+// the API server. Optional in the same posture as SetIaCConnStore: a nil
+// store leaves PUT/DELETE /api/v1/ai/credential 503ing with a clear
+// "not configured" message; GET /api/v1/ai/status stays reachable.
+//
+// The set path reuses the credstore.Key wired by SetDiscoveryCredKey to
+// seal the AI provider key — the same SQUADRON_SECRETS_KEY the AWS / IaC
+// paths use, no second secrets key. Calling SetAICredentialStore without
+// SetDiscoveryCredKey leaves the PUT path 503ing with a "sealing
+// unavailable" message (the DELETE / clear path still works).
+func (s *Server) SetAICredentialStore(store aicredstore.Store) {
+	s.aiCredStore = store
 }
 
 // SetGCPDiscoveryStore wires the v0.89.47 (#667 chunk 3) GCP
@@ -2432,6 +2456,27 @@ func (s *Server) aiTrampoline(fn func(*handlers.AIHandlers, *gin.Context)) gin.H
 	}
 }
 
+// aiCredentialTrampoline late-binds the admin AI-credential handler. The
+// store is wired post-construction (SetAICredentialStore), so a nil
+// store / service means "AI credential management isn't configured here"
+// and the route 503s rather than panicking. The credstore.Key
+// (s.discoveryCredKey) may still be nil even when the store is wired —
+// the handler degrades that case (PUT 503s "sealing unavailable"; the
+// DELETE clear path still works).
+func (s *Server) aiCredentialTrampoline(fn func(*handlers.AICredentialHandlers, *gin.Context)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s.aiService == nil || s.aiCredStore == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error":   "AI credential management is not configured (set SQUADRON_SECRETS_KEY and restart)",
+				"enabled": false,
+			})
+			return
+		}
+		h := handlers.NewAICredentialHandlers(s.aiService, s.aiCredStore, s.discoveryCredKey, s.logger)
+		fn(h, c)
+	}
+}
+
 // askTrampoline late binds the Ask handler so the route table can
 // be wired before the AI service is set. The handler needs the
 // rollout + audit services to build its context bag; both are
@@ -3213,6 +3258,18 @@ func (s *Server) registerRoutes() {
 		v1.GET("/ai/status",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiStatusTrampoline())
+		// AI provider API-key administration. Set (PUT) / clear (DELETE)
+		// the key stored ENCRYPTED in the app-global aicredstore. Gated by
+		// ScopeAIWrite — a higher bar than the agents:read the assist
+		// surfaces run under, so an ordinary operator cannot rotate the
+		// shared provider key. The key is write-only: never returned; only
+		// key_source + key_last4 surface via /ai/status.
+		v1.PUT("/ai/credential",
+			middleware.RequireScope(services.ScopeAIWrite),
+			s.aiCredentialTrampoline(func(h *handlers.AICredentialHandlers, c *gin.Context) { h.HandleSetCredential(c) }))
+		v1.DELETE("/ai/credential",
+			middleware.RequireScope(services.ScopeAIWrite),
+			s.aiCredentialTrampoline(func(h *handlers.AICredentialHandlers, c *gin.Context) { h.HandleClearCredential(c) }))
 		v1.POST("/ai/explain",
 			middleware.RequireScope(services.ScopeAgentsRead),
 			s.aiTrampoline(func(h *handlers.AIHandlers, c *gin.Context) { h.HandleExplainSnippet(c) }))

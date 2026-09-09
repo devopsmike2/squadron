@@ -19,3 +19,10 @@
 #   Ref: docs/security-gates.md (trivy section).
 CVE-2026-56864
 CVE-2026-56865
+
+# 2026-09-09: newly-published transitive Go advisories. govulncheck (reachability
+# gate) reports these as NOT reachable from Squadron code; deferred here rather
+# than force a grpc/x-crypto minor bump that destabilizes the otel/self-tel tree.
+CVE-2026-56854
+CVE-2026-84304
+CVE-2026-84445

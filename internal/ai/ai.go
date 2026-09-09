@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -72,6 +73,17 @@ const (
 
 	apiVersion       = "2023-06-01"
 	defaultUserAgent = "squadron/v0.26 (+https://github.com/devopsmike2/squadron)"
+
+	// KeySource values reported (non-secret) via Capabilities so the UI
+	// can tell the operator WHERE the live API key came from without
+	// ever seeing the key itself:
+	//   - KeySourceEnv:    resolved from env / squadron.yaml at startup.
+	//   - KeySourceStored: set through the UI/API and loaded from the
+	//     encrypted app-global credential store (aicredstore).
+	//   - KeySourceNone:   no key configured (AI assist is disabled).
+	KeySourceEnv    = "env"
+	KeySourceStored = "stored"
+	KeySourceNone   = "none"
 
 	// requestTimeout is the per-call HTTP timeout. The original
 	// 30s was sized for v0.79's small JARVIS cost-spike calls
@@ -116,11 +128,22 @@ type Config struct {
 }
 
 // Service wraps the Anthropic HTTP client + prompt templates.
-// Stateless beyond the config; safe to share across requests.
+// Safe to share across requests. The API key can be rotated at
+// runtime via SetAPIKey (admin UI/API), so cfg + provider are guarded
+// by mu: every read of the key or the provider takes the lock so a
+// concurrent SetAPIKey can never be observed half-applied.
 type Service struct {
+	// mu guards cfg (specifically the mutable APIKey / Enabled fields),
+	// keySource, and provider. The model/base-URL fields of cfg are set
+	// once at NewService and never mutated, so the request path reads
+	// them without the lock; only the key-bearing state is contended.
+	mu     sync.RWMutex
 	cfg    Config
 	client *http.Client
 	logger *zap.Logger
+	// keySource records where the live key came from (env / stored /
+	// none) for the non-secret status surface. Guarded by mu.
+	keySource string
 	// provider is the LLM backend callMessages delegates to. Selected
 	// once at NewService time from cfg.Provider (anthropic by default,
 	// openai when cfg.Provider=="openai"). The provider seam lives
@@ -208,20 +231,70 @@ func NewService(cfg Config, logger *zap.Logger) *Service {
 	}
 	// Select the provider behind callMessages. Default is anthropic so
 	// an empty Provider keeps the exact prior behavior.
-	switch strings.ToLower(cfg.Provider) {
-	case "openai":
-		svc.provider = &openaiProvider{cfg: cfg, client: httpClient, logger: logger}
-	default:
-		svc.provider = &anthropicProvider{cfg: cfg, client: httpClient, logger: logger}
+	svc.provider = buildProvider(cfg, httpClient, logger)
+	// Seed the reported key source. A key present at construction came
+	// from env / squadron.yaml; SetAPIKey later flips this to "stored"
+	// when an operator sets the key through the UI/API.
+	if cfg.APIKey != "" {
+		svc.keySource = KeySourceEnv
+	} else {
+		svc.keySource = KeySourceNone
 	}
 	return svc
+}
+
+// buildProvider selects the LLM backend for a given Config. Kept as a
+// standalone helper so NewService and SetAPIKey construct the provider
+// the exact same way — a key rotation rebuilds the provider through
+// this so the new key actually reaches the provider's by-value cfg.
+func buildProvider(cfg Config, client *http.Client, logger *zap.Logger) Provider {
+	switch strings.ToLower(cfg.Provider) {
+	case "openai":
+		return &openaiProvider{cfg: cfg, client: client, logger: logger}
+	default:
+		return &anthropicProvider{cfg: cfg, client: client, logger: logger}
+	}
+}
+
+// SetAPIKey rotates the live provider API key at runtime — the admin
+// UI/API path (PUT/DELETE /api/v1/ai/credential) calls this after
+// persisting the sealed key to the app-global credential store. Safe
+// for concurrent use with every request-path reader (Enabled,
+// Capabilities, callMessages).
+//
+// A non-empty key marks the source "stored" and enables the service
+// (so setting a key through the UI actually turns AI assist on, matching
+// operator expectation); an empty key clears it back to "none". The
+// provider is rebuilt from the updated cfg so the new key reaches the
+// provider struct (providers hold cfg by value and read APIKey at call
+// time). The provider BACKEND is not switched here — see the credential
+// handler for the provider-change limitation.
+func (s *Service) SetAPIKey(key string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg.APIKey = key
+	if key != "" {
+		s.cfg.Enabled = true
+		s.keySource = KeySourceStored
+	} else {
+		s.keySource = KeySourceNone
+	}
+	s.provider = buildProvider(s.cfg, s.client, s.logger)
 }
 
 // Enabled reports whether the service has a usable API key. The
 // handler trampoline calls this to decide between serving the
 // route and 503'ing with the opt-in message.
 func (s *Service) Enabled() bool {
-	return s != nil && s.cfg.Enabled && s.cfg.APIKey != ""
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg.Enabled && s.cfg.APIKey != ""
 }
 
 // SetDemoMode toggles the keyless demo responder. Wired by the demo
@@ -251,35 +324,64 @@ type Capabilities struct {
 	Provider     string `json:"provider,omitempty"`
 	ExplainModel string `json:"explain_model,omitempty"`
 	MergeModel   string `json:"merge_model,omitempty"`
+	// KeySource + KeyLast4 are NON-SECRET hints for the settings UI: where
+	// the live key came from ("env" | "stored" | "none") and the last 4
+	// characters of the key (or "" when there is no key / it is too short
+	// to safely show). The full key is NEVER exposed here.
+	KeySource string `json:"key_source,omitempty"`
+	KeyLast4  string `json:"key_last4,omitempty"`
 }
 
 // Capabilities returns the public view of the service's
-// configuration. Never includes the API key.
+// configuration. Never includes the API key — only the last-4 hint.
 func (s *Service) Capabilities() Capabilities {
-	if s.Enabled() {
+	s.mu.RLock()
+	enabled := s.cfg.Enabled && s.cfg.APIKey != ""
+	provider := providerName(s.cfg.Provider)
+	explain := s.cfg.ExplainModel
+	merge := s.cfg.MergeModel
+	source := s.keySource
+	last4 := lastFour(s.cfg.APIKey)
+	s.mu.RUnlock()
+
+	if enabled {
 		return Capabilities{
 			Enabled:      true,
-			Provider:     s.providerName(),
-			ExplainModel: s.cfg.ExplainModel,
-			MergeModel:   s.cfg.MergeModel,
+			Provider:     provider,
+			ExplainModel: explain,
+			MergeModel:   merge,
+			KeySource:    source,
+			KeyLast4:     last4,
 		}
 	}
 	// Demo mode reports capable so the UI shows the AI affordances; the
 	// responses come from the canned grounded responder, not a model.
+	// demoActive() re-locks internally, so it runs after RUnlock above.
 	if s.demoActive() {
-		return Capabilities{Enabled: true, Provider: "demo", ExplainModel: "demo", MergeModel: "demo"}
+		return Capabilities{Enabled: true, Provider: "demo", ExplainModel: "demo", MergeModel: "demo", KeySource: source, KeyLast4: last4}
 	}
-	return Capabilities{Enabled: false}
+	return Capabilities{Enabled: false, KeySource: source, KeyLast4: last4}
 }
 
-// providerName normalizes the configured provider for the public
+// providerName normalizes a configured provider for the public
 // Capabilities view: empty/unset resolves to "anthropic" (the
-// default backend), "openai" reports "openai".
-func (s *Service) providerName() string {
-	if strings.EqualFold(s.cfg.Provider, "openai") {
+// default backend), "openai" reports "openai". Pure function so
+// callers pass the (lock-held) cfg.Provider value in.
+func providerName(provider string) string {
+	if strings.EqualFold(provider, "openai") {
 		return "openai"
 	}
 	return "anthropic"
+}
+
+// lastFour returns the last four characters of key, or "" when the key
+// is empty or too short to reveal without effectively leaking it. Used
+// only for the non-secret KeyLast4 status hint — never the full key.
+func lastFour(key string) string {
+	if len(key) <= 4 {
+		return ""
+	}
+	return key[len(key)-4:]
 }
 
 // ----------------------------------------------------------------
@@ -803,7 +905,14 @@ type callResp struct {
 // callOpts -> callResp contract above is unchanged, so every public
 // method, handler, bridge, and prompt keeps working verbatim.
 func (s *Service) callMessages(ctx context.Context, opts callOpts) (*callResp, error) {
-	return s.provider.Complete(ctx, opts)
+	// Grab the provider under the read lock so a concurrent SetAPIKey
+	// (which rebuilds s.provider) is never observed mid-swap. The call
+	// itself runs outside the lock — it's a network round-trip, and the
+	// captured provider holds its own key snapshot.
+	s.mu.RLock()
+	p := s.provider
+	s.mu.RUnlock()
+	return p.Complete(ctx, opts)
 }
 
 // ----------------------------------------------------------------

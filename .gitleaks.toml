@@ -34,6 +34,10 @@ paths = [
   '''internal/proposer/stress_seeds_test\.go''',
   '''internal/discovery/iacconnstore/github_pat_test\.go''',
   '''internal/discovery/scannerfactory/factory_test\.go''',
+  # set_apikey_test.go / ai_credential_routes_test.go: synthetic AI provider-key
+  # fixtures for the admin-set-key feature (never live credentials).
+  '''internal/ai/set_apikey_test\.go''',
+  '''internal/api/ai_credential_routes_test\.go''',
 
   # --- Non-secret source constants / UI example strings ---
   # oci_signing_key.go: the "squadron.oci_signing_key.v1" AAD label constant.
