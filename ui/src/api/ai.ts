@@ -8,12 +8,17 @@
 
 import useSWR from "swr";
 
-import { apiGet, apiPost } from "./base";
+import { apiDelete, apiGet, apiPost, apiPut } from "./base";
 
 export interface AICapabilities {
   enabled: boolean;
+  provider?: string;
   explain_model?: string;
   merge_model?: string;
+  // Non-secret hints for the settings surface: where the live key came
+  // from and its last 4 characters. The full key is NEVER returned.
+  key_source?: "env" | "stored" | "none";
+  key_last4?: string;
 }
 
 export interface ExplainSnippetRequest {
@@ -57,6 +62,31 @@ export interface ExplainConfigResponse {
 
 export function getAICapabilities(): Promise<AICapabilities> {
   return apiGet<AICapabilities>("/ai/status");
+}
+
+// AI provider API-key administration (admin-only; requires the ai:write
+// scope server-side). The key is WRITE-ONLY: it is sent here, sealed +
+// stored server-side, and never returned. The response is the refreshed
+// capabilities (key_source flips to "stored", key_last4 updates).
+
+/**
+ * setAiCredential stores the AI provider API key ENCRYPTED server-side
+ * and applies it to the live service. provider is optional — when set,
+ * it is recorded and takes effect on the next restart.
+ */
+export function setAiCredential(
+  apiKey: string,
+  provider?: string,
+): Promise<AICapabilities> {
+  return apiPut<AICapabilities>("/ai/credential", {
+    api_key: apiKey,
+    ...(provider ? { provider } : {}),
+  });
+}
+
+/** clearAiCredential removes the stored key and disables AI assist. */
+export function clearAiCredential(): Promise<AICapabilities> {
+  return apiDelete<AICapabilities>("/ai/credential");
 }
 
 export function explainSnippet(

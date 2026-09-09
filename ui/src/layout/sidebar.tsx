@@ -332,6 +332,12 @@ export function AppSidebar() {
           url: "/settings/siem",
           icon: ServerCog,
         },
+        {
+          key: "settings-ai",
+          title: "AI assist",
+          url: "/settings/ai",
+          icon: Sparkles,
+        },
       ],
     },
   ];

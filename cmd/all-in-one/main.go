@@ -29,6 +29,7 @@ import (
 	"github.com/devopsmike2/squadron/extension/tracebudget"
 	"github.com/devopsmike2/squadron/internal/actions"
 	"github.com/devopsmike2/squadron/internal/ai"
+	"github.com/devopsmike2/squadron/internal/aicredstore"
 	"github.com/devopsmike2/squadron/internal/alerting"
 	"github.com/devopsmike2/squadron/internal/alerts"
 	"github.com/devopsmike2/squadron/internal/api"
@@ -1412,6 +1413,67 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("Silent-agent watcher disabled (set silent_agents.enabled=true to enable)")
 	}
 
+	// Resolve the credstore key ONCE up front. Both the AI-credential
+	// bootstrap (immediately below, before ai.NewService) and the discovery
+	// substrate (further down) share this single key load — the AI provider
+	// key is sealed with the same SQUADRON_SECRETS_KEY the AWS / IaC paths
+	// use. A missing / malformed key degrades every sealed feature
+	// gracefully; Squadron still boots.
+	credKey, credKeyGenerated, credKeyErr := credstore.LoadOrGenerateKey(filepath.Dir(config.Storage.App.Path))
+	if credKeyErr != nil {
+		logger.Warn("credstore: could not resolve a secrets key; sealed features (discovery, AI key store) disabled",
+			zap.Error(credKeyErr),
+			zap.String("hint", "set a valid base64 32-byte SQUADRON_SECRETS_KEY (head -c 32 /dev/urandom | base64), or ensure the data dir is writable"))
+	}
+
+	// AI provider credential substrate (app-global, sealed — NOT tenant
+	// scoped). Opened next to the AI service so an admin-set key is picked
+	// up as the INITIAL key when env / squadron.yaml didn't supply one. The
+	// stored provider (if any) is applied here, BEFORE ai.NewService, so the
+	// provider's base-URL + model defaults derive correctly on this boot.
+	var aiCredStore aicredstore.Store
+	aiKeyFromStore := false
+	if credKeyErr == nil {
+		switch strings.ToLower(strings.TrimSpace(config.Storage.App.Type)) {
+		case "postgres":
+			if strings.TrimSpace(config.Storage.App.DSN) == "" {
+				logger.Warn("ai credential store: storage.app.type=postgres but storage.app.dsn is empty; AI key management disabled")
+			} else if aiDB, oerr := sql.Open("pgx", config.Storage.App.DSN); oerr != nil {
+				logger.Warn("ai credential store: open postgres failed; AI key management disabled", zap.Error(oerr))
+			} else if store, serr := aicredstore.NewPostgresStore(context.Background(), aiDB, logger); serr != nil {
+				logger.Warn("ai credential store: NewPostgresStore failed; AI key management disabled", zap.Error(serr))
+			} else {
+				aiCredStore = store
+			}
+		default: // sqlite (and the memory/dev default) — own DB file beside the app store.
+			aiCredDBPath := filepath.Join(filepath.Dir(config.Storage.App.Path), "aicredstore.db")
+			if aiDB, oerr := sql.Open("sqlite3", aiCredDBPath); oerr != nil {
+				logger.Warn("ai credential store: open sqlite failed; AI key management disabled", zap.Error(oerr))
+			} else if store, serr := aicredstore.NewSQLiteStore(context.Background(), aiDB, logger); serr != nil {
+				logger.Warn("ai credential store: NewSQLiteStore failed; AI key management disabled", zap.Error(serr))
+			} else {
+				aiCredStore = store
+			}
+		}
+		// Load a previously-stored key only when env / yaml didn't set one.
+		if aiCredStore != nil && config.AI.APIKey == "" {
+			if sealed, nonce, provider, ok, gerr := aiCredStore.Get(context.Background()); gerr != nil {
+				logger.Warn("ai credential store: read failed", zap.Error(gerr))
+			} else if ok {
+				if plaintext, oerr := credKey.Open(sealed, nonce); oerr != nil {
+					// Wrong key (SQUADRON_SECRETS_KEY rotated) or tampered row.
+					logger.Warn("ai credential store: could not decrypt stored AI key (SQUADRON_SECRETS_KEY changed?); ignoring it", zap.Error(oerr))
+				} else {
+					config.AI.APIKey = string(plaintext)
+					if strings.TrimSpace(provider) != "" {
+						config.AI.Provider = provider
+					}
+					aiKeyFromStore = true
+				}
+			}
+		}
+	}
+
 	// v0.26 AI assist — Anthropic Messages API wrapper. The
 	// service is constructed unconditionally so /api/v1/ai/status
 	// always responds; without an API key it just returns
@@ -1428,14 +1490,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		MaxTokens:    config.AI.MaxTokens,
 		Models:       config.AI.Models,
 	}, logger)
+	// When the initial key came from the sealed store, flip the reported
+	// source to "stored" (NewService defaults to "env" for any non-empty
+	// key). SetAPIKey also enables the service so a UI-set key works.
+	if aiKeyFromStore {
+		aiService.SetAPIKey(config.AI.APIKey)
+	}
 	apiServer.SetAIService(aiService)
+	apiServer.SetAICredentialStore(aiCredStore)
 	if aiService.Enabled() {
 		logger.Info("AI assist enabled",
 			zap.String("provider", aiService.Capabilities().Provider),
 			zap.String("explain_model", aiService.Capabilities().ExplainModel),
-			zap.String("merge_model", aiService.Capabilities().MergeModel))
+			zap.String("merge_model", aiService.Capabilities().MergeModel),
+			zap.String("key_source", aiService.Capabilities().KeySource))
 	} else {
-		logger.Info("AI assist not configured (set an AI provider API key + ai.enabled=true to enable)")
+		logger.Info("AI assist not configured (set an AI provider API key + ai.enabled=true to enable, or set one via Settings → AI)")
 	}
 
 	// v0.85 — universal discovery credential substrate. Wires the
@@ -1443,12 +1513,12 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// routes become reachable. Opt-in: if SQUADRON_SECRETS_KEY is
 	// unset, discovery stays 503 and Squadron continues to boot. This
 	// keeps existing deployments working unchanged.
-	if credKey, generated, err := credstore.LoadOrGenerateKey(filepath.Dir(config.Storage.App.Path)); err != nil {
-		logger.Warn("discovery credstore: could not resolve a secrets key; discovery disabled",
-			zap.Error(err),
-			zap.String("hint", "set a valid base64 32-byte SQUADRON_SECRETS_KEY (head -c 32 /dev/urandom | base64), or ensure the data dir is writable"))
+	// Reuse the credstore key resolved once up front (near the AI service).
+	if credKeyErr != nil {
+		// Already warned above; discovery stays disabled and Squadron boots.
+		logger.Info("discovery credstore: no usable secrets key; discovery disabled")
 	} else {
-		if generated {
+		if credKeyGenerated {
 			logger.Info("discovery credstore: no SQUADRON_SECRETS_KEY set — generated one and persisted it to the data dir; discovery is enabled out of the box. Set SQUADRON_SECRETS_KEY to supply your own key or share it across replicas.",
 				zap.String("path", filepath.Join(filepath.Dir(config.Storage.App.Path), credstore.SecretsKeyFileName)))
 		}

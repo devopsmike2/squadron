@@ -207,6 +207,16 @@ const (
 	ScopeBudgetsRead        = "budgets:read"
 	ScopeBudgetsWrite       = "budgets:write"
 	ScopeBudgetsCrossTenant = "budgets:cross_tenant"
+
+	// ai:write gates administration of the AI-assist provider credential —
+	// setting (PUT) or clearing (DELETE) the API key stored ENCRYPTED in the
+	// app-global aicredstore. Kept distinct from the read-only assist scopes
+	// (the explain / merge / ask surfaces run under agents:read) so an ordinary
+	// operator who can use AI assist cannot rotate the shared provider key: only
+	// a smaller admin circle holds ai:write. The key is sealed with
+	// SQUADRON_SECRETS_KEY at rest and is never returned in any response (the
+	// status surface exposes only key_source + a last-4 hint).
+	ScopeAIWrite = "ai:write"
 )
 
 // AllScopes returns every grantable scope, in the canonical order the
@@ -232,6 +242,7 @@ func AllScopes() []string {
 		ScopeSSORead, ScopeSSOWrite, ScopeSSOCrossTenant,
 		ScopeUsageRead, ScopeUsageCrossTenant,
 		ScopeBudgetsRead, ScopeBudgetsWrite, ScopeBudgetsCrossTenant,
+		ScopeAIWrite,
 	}
 }
 
