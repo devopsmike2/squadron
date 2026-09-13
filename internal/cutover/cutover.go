@@ -31,7 +31,7 @@ import (
 type Dimension string
 
 const (
-	DimensionAuth      Dimension = "authentication"    // ADR 0045 — auth.enabled
+	DimensionAuth      Dimension = "authentication"     // ADR 0045 — auth.enabled
 	DimensionOpAMP     Dimension = "opamp_channel_auth" // ADR 0042 — opamp.require_auth
 	DimensionEgress    Dimension = "egress_controls"    // ADR 0046 — egress.enforce
 	DimensionTenanting Dimension = "strict_tenanting"   // ADR 0048 — SQUADRON_STRICT_TENANTING
