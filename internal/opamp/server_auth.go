@@ -37,6 +37,54 @@ const opampEnrollScope = services.ScopeOpAMPEnroll
 type connAuth struct {
 	tenant        string
 	authenticated bool
+	// pinnedFleetID is the fleet identity this connection's enrollment token is
+	// pinned to (ADR 0052), resolved at connect from the token via the optional
+	// IdentityPinResolver. Empty when the token is not pinned or no resolver is
+	// installed (the OSS default — pinning is the enterprise wedge). When set, the
+	// message path uses it as the authoritative fleet id instead of the one
+	// derived from the (spoofable) AgentDescription.
+	pinnedFleetID string
+}
+
+// IdentityPinResolver resolves the fleet identity an authenticated enrollment
+// token is pinned to (ADR 0052). It returns "" when the token carries no pin.
+// OSS installs no resolver, so pinning is inert there; the enterprise wire
+// provides one (reading the pin off the token). Kept as a narrow interface so
+// the OSS connect path stays free of any pin-encoding knowledge.
+type IdentityPinResolver interface {
+	PinnedFleetID(tok *services.APIToken) string
+}
+
+// SetIdentityPinResolver wires the ADR 0052 per-agent identity-pin seam. nil (the
+// default, and every OSS build / test harness) disables pinning: connections
+// keep deriving their fleet id from the reported AgentDescription. When set, an
+// authenticated connection whose token is pinned uses the pinned identity, and a
+// reported identity that disagrees is ignored + logged (relabel-and-log). Call
+// once at startup before Start; not safe for concurrent use with a running server.
+func (s *Server) SetIdentityPinResolver(r IdentityPinResolver) { s.pinResolver = r }
+
+// pinCtxKey is the context key carrying a connection's pinned fleet id from the
+// connect callback (where the token is in scope) to the message path (where
+// SetFleetId runs), mirroring how the connection tenant is threaded via
+// identity.WithTenant.
+type pinCtxKey struct{}
+
+// withPinnedFleetID returns ctx carrying the connection's pinned fleet id (no-op
+// for an empty id, so unpinned connections add nothing to the context).
+func withPinnedFleetID(ctx context.Context, fleetID string) context.Context {
+	if fleetID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, pinCtxKey{}, fleetID)
+}
+
+// pinnedFleetIDFromContext returns the connection's pinned fleet id, or "" if the
+// connection is not pinned.
+func pinnedFleetIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(pinCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 // SetOpAMPAuth wires the ADR 0042 OpAMP channel-authentication seam. auth is the
@@ -101,7 +149,13 @@ func (s *Server) authenticateConn(ctx context.Context, request *http.Request) (c
 			if s.metrics != nil {
 				s.metrics.AuthenticatedConnectionsTotal.Inc(1)
 			}
-			return connAuth{tenant: tenant, authenticated: true}, true
+			// ADR 0052: resolve the token's identity pin (if any). Empty in OSS
+			// (no resolver) and for unpinned tokens.
+			pinned := ""
+			if s.pinResolver != nil {
+				pinned = s.pinResolver.PinnedFleetID(tok)
+			}
+			return connAuth{tenant: tenant, authenticated: true, pinnedFleetID: pinned}, true
 		}
 		// A token was presented but it is invalid / expired / revoked / lacks the
 		// opamp:enroll scope. Under enforcement this is a hard reject; under grace
