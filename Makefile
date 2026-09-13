@@ -1,4 +1,4 @@
-.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify fmt fmt-check install-hooks lint banned-words
+.PHONY: all ui build build-backend build-enterprise build-cli build-cli-all-platforms fleetsim run docker test clean deps docker-build docker-run docker-run-single docker-dev docker-stop docker-clean test-env-up test-env-down test-env-logs test-env-reset test-env-fleetsim webhook-echo demo-seed build-audit-verify build-cutover fmt fmt-check install-hooks lint banned-words
 
 # Variables
 BINARY_NAME=squadron
@@ -327,3 +327,10 @@ build-audit-verify:
 	@echo "Building squadron-audit-verify..."
 	@mkdir -p $(BUILD_DIR)
 	go build -o $(BUILD_DIR)/squadron-audit-verify ./cmd/squadron-audit-verify
+
+# squadron-cutover — the grace->enforce readiness preflight (ADR 0050). Reuses
+# the read-only tenant-commingling audit, so it pulls in the CGO sqlite driver.
+build-cutover:
+	@echo "Building squadron-cutover..."
+	@mkdir -p $(BUILD_DIR)
+	go build -o $(BUILD_DIR)/squadron-cutover ./cmd/squadron-cutover
