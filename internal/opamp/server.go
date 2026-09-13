@@ -117,6 +117,11 @@ type Server struct {
 	requireAuth          bool
 	maxMessageBytes      int
 	maxMessagesPerSecond float64
+
+	// ADR 0052 — per-agent identity pinning. Optional resolver returning the
+	// fleet identity an authenticated connection's token is pinned to; nil (the
+	// OSS default) disables pinning. Wired by the enterprise edition.
+	pinResolver IdentityPinResolver
 }
 
 // SetConnectionRegistry wires the HA S3b connection-registry seam (ADR 0035):
@@ -222,6 +227,9 @@ func (s *Server) Start(port int) error {
 					}
 
 					connTenant := auth.tenant
+					// ADR 0052: the fleet identity this connection's token is pinned
+					// to (empty unless the enterprise pin resolver returned one).
+					connPinnedFleetID := auth.pinnedFleetID
 					// Per-connection rate limiter (ADR 0042 DoS). nil when the
 					// rate cap is disabled (default / tests) → allows everything.
 					limiter := newConnRateLimiter(s.maxMessagesPerSecond)
@@ -236,7 +244,7 @@ func (s *Server) Start(port int) error {
 									s.logger.Warn("dropping OpAMP message: per-connection rate limit exceeded (ADR 0042)")
 									return &protobufs.ServerToAgent{}
 								}
-								return s.onMessage(identity.WithTenant(ctx, connTenant), conn, msg)
+								return s.onMessage(withPinnedFleetID(identity.WithTenant(ctx, connTenant), connPinnedFleetID), conn, msg)
 							},
 							OnConnectionCloseFunc: func(conn types.Connection) {
 								s.onDisconnect(conn, connTenant)
@@ -436,7 +444,7 @@ func (s *Server) onMessage(ctx context.Context, conn types.Connection, msg *prot
 	// keep the current fleet id. Falls back to instance_uid when the agent
 	// reports no usable identity (no regression vs. prior behavior).
 	if msg.AgentDescription != nil {
-		s.agents.SetFleetId(agent, s.deriveFleetId(instanceId, msg.AgentDescription))
+		s.agents.SetFleetId(agent, s.resolveFleetID(ctx, s.deriveFleetId(instanceId, msg.AgentDescription)))
 		// HA S3b (ADR 0035): this instance owns the agent's WebSocket. Record
 		// ownership keyed by the resolved fleet id. Gated on AgentDescription
 		// (present on the OpAMP connect message and on description changes, not
@@ -952,6 +960,40 @@ func (s *Server) deriveFleetId(instanceId uuid.UUID, desc *protobufs.AgentDescri
 		return instanceId
 	}
 	return parsed
+}
+
+// resolveFleetID applies the ADR 0052 per-agent identity pin. derived is the
+// fleet id computed from the (spoofable) AgentDescription. When the connection
+// is pinned (enterprise) and the pin disagrees with the derived id, the PIN
+// wins and the mismatch is logged + counted (relabel-and-log — a legitimate host
+// rename keeps its pinned identity rather than being dropped). Unpinned
+// connections (the OSS default, empty context value) return derived unchanged,
+// so behavior is identical to pre-0052.
+func (s *Server) resolveFleetID(ctx context.Context, derived uuid.UUID) uuid.UUID {
+	pin := pinnedFleetIDFromContext(ctx)
+	if pin == "" {
+		return derived
+	}
+	pinned, err := uuid.Parse(pin)
+	if err != nil {
+		// A malformed pin must never silently drop the agent; fall back to the
+		// derived id and warn (this indicates a bad enrollment-token pin value).
+		s.logger.Warn("OpAMP identity pin is not a valid fleet id; ignoring the pin and using the derived identity (ADR 0052)",
+			zap.String("pin", pin))
+		return derived
+	}
+	if pinned == derived {
+		return derived
+	}
+	// Mismatch: the agent reported a description implying a different identity
+	// than its enrollment token is pinned to. Use the pin, ignore the report.
+	if s.metrics != nil {
+		s.metrics.IdentityMismatchTotal.Inc(1)
+	}
+	s.logger.Warn("OpAMP identity pin mismatch: agent reported a different fleet identity than its enrollment token is pinned to; using the PINNED identity (relabel-and-log, ADR 0052)",
+		zap.String("pinned_fleet_id", pinned.String()),
+		zap.String("reported_fleet_id", derived.String()))
+	return pinned
 }
 
 // fleetIdentityAttrs pulls the identity-bearing attributes agentid.Derive keys

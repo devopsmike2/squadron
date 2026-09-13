@@ -23,6 +23,12 @@ type OpAMPMetrics struct {
 	RejectedConnectionsTotal        Counter `metric:"opamp_rejected_connections_total" tags:"component=opamp" help:"Total OpAMP connections rejected because auth is required and no valid token was presented"`
 	OversizedMessagesTotal          Counter `metric:"opamp_oversized_messages_total" tags:"component=opamp" help:"Total OpAMP messages dropped for exceeding the max message size"`
 	RateLimitedMessagesTotal        Counter `metric:"opamp_rate_limited_messages_total" tags:"component=opamp" help:"Total OpAMP messages dropped by the per-connection rate limit"`
+	// ADR 0052 — per-agent identity pinning. Incremented when a pinned connection
+	// reports an AgentDescription implying a DIFFERENT fleet identity than its
+	// enrollment token is pinned to. The pinned identity is used regardless
+	// (relabel-and-log); this counter surfaces the attempts. Only ever non-zero in
+	// the enterprise edition (OSS installs no pin resolver).
+	IdentityMismatchTotal Counter `metric:"opamp_identity_mismatch_total" tags:"component=opamp" help:"Total OpAMP messages where a pinned connection reported a different fleet identity than its token pin (ADR 0052; pinned identity used)"`
 
 	// Message metrics
 	MessagesReceived       Counter `metric:"opamp_messages_received_total" tags:"component=opamp" help:"Total number of OpAMP messages received"`
