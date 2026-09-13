@@ -116,8 +116,16 @@ const (
 	// tenant; all_tenants sweeps EVERY tenant in one pass (export/review/verify).
 	// Inert in OSS (no fleet routes); the enterprise fleet handlers require it.
 	ScopeAuditAllTenants = "audit:all_tenants"
-	ScopeAuthRead        = "auth:read"
-	ScopeAuthWrite       = "auth:write"
+	// ADR 0051 — Ed25519-signed audit checkpoints (the enterprise wedge of
+	// ADR 0044). audit:sign gates minting an asymmetric-signed head attestation an
+	// auditor verifies with the deployment's PUBLIC key alone (zero-secret,
+	// unforgeable) — kept distinct from audit:verify so the sign/anchor capability
+	// isn't implied by the read-only verify view. Inert in OSS (no route mints a
+	// signature); the enterprise auditverify wire enforces it on the signed-attest
+	// path.
+	ScopeAuditSign = "audit:sign"
+	ScopeAuthRead  = "auth:read"
+	ScopeAuthWrite = "auth:write"
 	// v0.34 deploy integration. Deploy:read shows targets + run
 	// history; deploy:trigger is what's required to actually fire
 	// a workflow on the operator's behalf — guarded narrowly so
@@ -231,7 +239,7 @@ func AllScopes() []string {
 		ScopeAlertsRead, ScopeAlertsWrite,
 		ScopeAutomationsRead, ScopeAutomationsWrite,
 		ScopeRolloutsRead, ScopeRolloutsWrite, ScopeRolloutsApprove,
-		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify, ScopeAuditAllTenants,
+		ScopeAuditRead, ScopeAuditExport, ScopeAuditCrossTenant, ScopeAuditVerify, ScopeAuditAllTenants, ScopeAuditSign,
 		ScopeAuthRead, ScopeAuthWrite,
 		ScopeDeployRead, ScopeDeployTrigger,
 		ScopeSiemRead, ScopeSiemWrite,

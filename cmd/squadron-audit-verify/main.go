@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/devopsmike2/squadron/internal/audit/attest"
 	chain "github.com/devopsmike2/squadron/internal/audit/chain"
 	"github.com/devopsmike2/squadron/internal/discovery/credstore"
 )
@@ -51,6 +52,11 @@ type Attestation struct {
 	Detail        string `json:"detail"`
 	SealedSig     string `json:"sealed_sig"`
 	Envelope      string `json:"envelope"`
+	// Ed25519 asymmetric signature over the canonical head (ADR 0051). Present
+	// when the deployment signs checkpoints; verified with --pubkey (zero-secret,
+	// no ability to forge). Parsed-and-ignored unless --pubkey is supplied.
+	Signature string `json:"signature"`
+	SigKeyID  string `json:"sig_key_id"`
 }
 
 // sealPayload mirrors the enterprise auditverify.SealPayload EXACTLY (field
@@ -269,10 +275,26 @@ func main() {
 	exportPath := flag.String("export", "", "path to the chain-column audit export (CSV or JSON) from ?include_chain=1")
 	attestPath := flag.String("attestation", "", "path to the attestation JSON from /audit-verify/tenants/{t}/attest")
 	tenantFlag := flag.String("tenant", "", "optional expected tenant id to cross-check against the export + attestation")
+	pubkeyFlag := flag.String("pubkey", "", "optional Ed25519 audit public key (base64, or @path/to/key.pub) to verify the attestation's signature (ADR 0051, zero-secret)")
+	keygen := flag.Bool("keygen", false, "generate a fresh Ed25519 audit-signing keypair (prints public + private base64) and exit")
 	flag.Parse()
 
+	if *keygen {
+		pub, priv, err := attest.GenerateKey()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "keygen: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("# Squadron audit-signing keypair (Ed25519, ADR 0051)")
+		fmt.Println("# Keep the PRIVATE key on the deployment (never share); publish the PUBLIC key to auditors.")
+		fmt.Printf("SQUADRON_AUDIT_SIGNING_KEY=%s\n", priv)
+		fmt.Printf("audit_public_key=%s\n", pub)
+		return
+	}
+
 	if *exportPath == "" || *attestPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: squadron-audit-verify -export <path> -attestation <path> [-tenant <id>]")
+		fmt.Fprintln(os.Stderr, "usage: squadron-audit-verify -export <path> -attestation <path> [-tenant <id>] [-pubkey <b64|@path>]")
+		fmt.Fprintln(os.Stderr, "       squadron-audit-verify -keygen")
 		os.Exit(1)
 	}
 
@@ -367,9 +389,62 @@ func main() {
 	// mismatch.
 	runSealCheck(att)
 
+	// Ed25519 signature verification (ADR 0051, zero-secret). Unlike the symmetric
+	// seal check, this uses only the PUBLIC key, so when the auditor explicitly
+	// supplies --pubkey a signature MISMATCH is a hard FAIL (they asked to verify
+	// the deployment actually signed this head). No --pubkey => informational.
+	if sigFailed := runSignatureCheck(att, *pubkeyFlag); sigFailed {
+		failed = true
+	}
+
 	if failed {
 		os.Exit(2)
 	}
+}
+
+// loadPubkey resolves the --pubkey value: an @-prefixed value is a file path
+// (the first whitespace-trimmed line is used), otherwise it is a base64 literal.
+func loadPubkey(v string) (string, error) {
+	if strings.HasPrefix(v, "@") {
+		b, err := os.ReadFile(strings.TrimPrefix(v, "@"))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	return strings.TrimSpace(v), nil
+}
+
+// runSignatureCheck verifies the attestation's Ed25519 signature against the
+// supplied public key. It returns true only when the auditor supplied a pubkey,
+// the attestation carries a signature, and verification FAILS — a hard fail.
+// Every other combination is informational and returns false.
+func runSignatureCheck(att Attestation, pubkeyFlag string) bool {
+	if pubkeyFlag == "" {
+		if att.Signature != "" {
+			fmt.Println("  signature:          present but unverified (pass --pubkey <b64|@path> to verify with the deployment's Ed25519 public key)")
+		}
+		return false
+	}
+	if att.Signature == "" {
+		fmt.Println("  signature:          FAIL (--pubkey supplied but the attestation carries no Ed25519 signature)")
+		return true
+	}
+	pub, err := loadPubkey(pubkeyFlag)
+	if err != nil {
+		fmt.Printf("  signature:          FAIL (could not read --pubkey: %v)\n", err)
+		return true
+	}
+	if err := attest.Verify(pub, att.Signature, att.Tenant, att.HeadSeq, att.HeadRowHash); err != nil {
+		fmt.Printf("  signature:          FAIL (%v)\n", err)
+		return true
+	}
+	kid := ""
+	if att.SigKeyID != "" {
+		kid = " (key " + att.SigKeyID + ")"
+	}
+	fmt.Printf("  signature:          PASS (Ed25519 public key attests this head%s — zero-secret, unforgeable)\n", kid)
+	return false
 }
 
 // runSealCheck is the optional key-backed confirmation. It only runs when both
