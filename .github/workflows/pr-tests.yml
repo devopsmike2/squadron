@@ -63,13 +63,17 @@ jobs:
           
     - name: Install dependencies
       run: go mod download
-      
-    - name: Run Go tests
-      run: make test
-      
-    - name: Run Go tests with coverage
+
+    # Single test pass with coverage. Previously this job ran `make test`
+    # (go test ./...) AND `make test-coverage` (the same go test ./... with
+    # -coverprofile) back to back — two full compiles + two full runs of the
+    # identical suite (neither uses -race, so the plain pass added no signal).
+    # On slow/queued GitHub-hosted runners that doubled the job's wall-clock.
+    # test-coverage runs every test and emits coverage.out, so it fully
+    # subsumes the plain pass. See knowledge/ci-gotchas.md.
+    - name: Run Go tests (with coverage)
       run: make test-coverage
-      
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
@@ -212,8 +216,14 @@ jobs:
   build-test:
     name: Build Test
     runs-on: ubuntu-latest
-    needs: [test-go, test-frontend]
-    
+    # Intentionally NO `needs:`. This job is self-contained (checkout → build →
+    # run --help); it does not consume artifacts from test-go/test-frontend.
+    # It previously gated on `needs: [test-go, test-frontend]`, so on slow/queued
+    # runners it only STARTED after the ~30-45 min Go job, landing dead last on
+    # the critical path. Running it in parallel surfaces a build break sooner and
+    # takes it off the tail. Trade-off: it still runs when tests fail (a few
+    # wasted runner-minutes) — acceptable versus the wall-clock latency it saved.
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
