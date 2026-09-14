@@ -2,6 +2,7 @@ package opamp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"time"
@@ -122,6 +123,13 @@ type Server struct {
 	// fleet identity an authenticated connection's token is pinned to; nil (the
 	// OSS default) disables pinning. Wired by the enterprise edition.
 	pinResolver IdentityPinResolver
+
+	// ADR 0052 slice 2 — mTLS on the OpAMP control channel. Optional TLS config;
+	// nil (the OSS default) leaves the listener plaintext (unchanged). The
+	// enterprise edition builds a BYO-CA mutual-TLS config (ClientAuth =
+	// RequireAndVerifyClientCert against an operator-supplied CA) and installs it
+	// via SetOpAMPTLS. See mtls.go.
+	tlsConfig *tls.Config
 }
 
 // SetConnectionRegistry wires the HA S3b connection-registry seam (ADR 0035):
@@ -262,6 +270,10 @@ func (s *Server) Start(port int) error {
 		// mounts the handler with no middleware.
 		HTTPMiddleware: s.opampBodyLimitMiddleware(),
 		ListenEndpoint: fmt.Sprintf(":%d", port),
+		// ADR 0052 slice 2 — mTLS. nil (OSS default) → plaintext listener,
+		// unchanged. The enterprise edition installs a BYO-CA mutual-TLS config
+		// via SetOpAMPTLS so the OpAMP port requires + verifies client certs.
+		TLSConfig: s.tlsConfig,
 	}
 
 	if err := s.opampServer.Start(settings); err != nil {
