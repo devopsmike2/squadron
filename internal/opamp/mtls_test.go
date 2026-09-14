@@ -74,8 +74,8 @@ func TestBuildMutualTLSConfig_Errors(t *testing.T) {
 	caPEM, _ := selfSignedPEM(t)
 
 	cases := []struct {
-		name              string
-		cert, key, ca     []byte
+		name          string
+		cert, key, ca []byte
 	}{
 		{"no server cert", nil, keyPEM, caPEM},
 		{"no server key", certPEM, nil, caPEM},
