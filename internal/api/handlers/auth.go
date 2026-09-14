@@ -70,6 +70,18 @@ func (h *AuthHandlers) HandleCreateToken(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "label is reserved"})
 		return
 	}
+	// ADR 0052 — some label prefixes are SCOPE-GATED rather than blanket-reserved:
+	// allowed, but only for a caller holding the required scope. The enterprise
+	// wire gates `pin:` on `agents:write` so a pinned OpAMP enrollment token
+	// (which binds an enrollment token to a specific fleet identity) can only be
+	// minted by a principal authorized to manage agent identity, not by any
+	// `auth:write` token-minter. Inert in OSS (no gated prefixes registered).
+	if scope, gated := services.RequiredScopeForTokenLabel(req.Label); gated {
+		if !services.ActorFromContext(c.Request.Context()).HasScope(scope) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "label requires the " + scope + " scope"})
+			return
+		}
+	}
 	token, plaintext, err := h.authService.Issue(c.Request.Context(), req.Label, req.Scopes, req.ExpiresAt)
 	if err != nil {
 		msg := err.Error()

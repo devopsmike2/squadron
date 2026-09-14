@@ -570,6 +570,14 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		logger.Info("OpAMP channel authentication is ENFORCED (opamp.require_auth=true): connections must present a valid opamp:enroll token")
 	}
 
+	// ADR 0052 — install the edition's OpAMP control-channel seams (per-agent
+	// identity pinning + the pinned-token mint guard). OSS is a no-op (fleet id
+	// stays derived from the reported AgentDescription); the enterprise edition
+	// installs a resolver that makes a pinned enrollment token's identity
+	// authoritative (relabel-and-log on a mismatch) and gates minting a `pin:`
+	// token on agents:write. Single call site; behavior differs by build tag.
+	enterpriseOpAMPWiring(opampServer)
+
 	// Create telemetry query service
 	telemetryService := services.NewTelemetryQueryService(telemetryReader, agentService, logger)
 

@@ -83,6 +83,64 @@ func SetReservedTokenLabels(labels []string) {
 	reservedTokenLabels = next
 }
 
+// scopeGatedTokenLabelPrefixes maps a label PREFIX to the scope a caller must
+// hold to mint a token carrying it through the public token-create handler (ADR
+// 0052). Unlike reservedTokenLabelPrefixes (a blanket refuse), a scope-gated
+// prefix is ALLOWED — but only for a caller that holds the required scope. It is
+// EMPTY in OSS (inert). The enterprise wire registers `pin:` -> `agents:write`
+// so a pinned OpAMP enrollment token (label `pin:<fleetid>`, which binds an
+// enrollment token to a specific fleet identity) can only be minted by a
+// principal authorized to manage agent identity — not by any `auth:write`
+// token-minter. No new scope: the pin constrains WHICH identity an opamp:enroll
+// connection may claim, and assigning that identity is an agents:write act.
+var (
+	scopeGatedTokenLabelPrefixesMu sync.RWMutex
+	scopeGatedTokenLabelPrefixes   = map[string]string{}
+)
+
+// SetScopeGatedTokenLabelPrefixes installs the process-wide prefix->required-scope
+// map the public token-create handler consults. Prefixes are matched
+// case-insensitively against the trimmed caller-supplied label. Called once from
+// the enterprise wire at startup; OSS never calls it, leaving the map empty
+// (inert), so the OSS default (any label allowed) is unchanged. Not safe for
+// concurrent use with in-flight requests — call it during startup, before
+// serving traffic. A nil or empty argument clears the map.
+func SetScopeGatedTokenLabelPrefixes(prefixes map[string]string) {
+	scopeGatedTokenLabelPrefixesMu.Lock()
+	defer scopeGatedTokenLabelPrefixesMu.Unlock()
+	next := make(map[string]string, len(prefixes))
+	for p, scope := range prefixes {
+		p = strings.ToLower(strings.TrimSpace(p))
+		scope = strings.TrimSpace(scope)
+		if p == "" || scope == "" {
+			continue
+		}
+		next[p] = scope
+	}
+	scopeGatedTokenLabelPrefixes = next
+}
+
+// RequiredScopeForTokenLabel returns the scope a caller must hold to mint a token
+// with the given label, and whether the label is scope-gated at all. Returns
+// ("", false) when the label matches no gated prefix (the OSS default for every
+// label, since the map is empty) — so the caller imposes no extra check. When it
+// returns (scope, true) the handler must verify the caller holds `scope` before
+// issuing, else refuse (403).
+func RequiredScopeForTokenLabel(label string) (string, bool) {
+	key := strings.ToLower(strings.TrimSpace(label))
+	if key == "" {
+		return "", false
+	}
+	scopeGatedTokenLabelPrefixesMu.RLock()
+	defer scopeGatedTokenLabelPrefixesMu.RUnlock()
+	for p, scope := range scopeGatedTokenLabelPrefixes {
+		if strings.HasPrefix(key, p) {
+			return scope, true
+		}
+	}
+	return "", false
+}
+
 // IsReservedTokenLabel reports whether the given label (trimmed,
 // case-insensitive) is in the reserved set. Returns false when the set is empty
 // (OSS default), so the check is inert unless the enterprise wire populated it.
