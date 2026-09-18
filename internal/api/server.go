@@ -2943,6 +2943,7 @@ func (s *Server) registerRoutes() {
 		{
 			agents.GET("", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgents)
 			agents.GET("/stats", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgentStats)
+			agents.GET("/facets", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgentFacets)
 			agents.GET("/:id", middleware.RequireScope(services.ScopeAgentsRead), agentHandlers.HandleGetAgent)
 			agents.PATCH("/:id/group", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleUpdateAgentGroup)
 			agents.POST("/:id/config", middleware.RequireScope(services.ScopeAgentsWrite), agentHandlers.HandleSendConfigToAgent)

@@ -27,7 +27,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import useSWR, { mutate } from "swr";
 
-import { getAgents } from "@/api/agents";
+import { getAgents, getAgentFacets } from "@/api/agents";
 import { getConfigs, type Config } from "@/api/configs";
 import { getGroups, type Group } from "@/api/groups";
 import {
@@ -65,6 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { applyScope, selectorValueFor } from "@/lib/rolloutSelectors";
 import type { Agent } from "@/types/agent";
 import type {
   AbortCriteriaRecipe,
@@ -1218,6 +1219,25 @@ function StageEditor({
     <span>pick a group above to preview matches</span>
   );
 
+  // Facet-backed quick scope: pick an environment/cluster and it fills the
+  // label selector below (the engine matches label-mode stages by AND'd
+  // key=value against agent labels — same values the fleet facet shows).
+  const ENV_KEY = "deployment.environment";
+  const CLUSTER_KEY = "k8s.cluster.name";
+  const { data: facetData } = useSWR("agent-facets", () => getAgentFacets(), {
+    revalidateOnFocus: false,
+  });
+  const envValues = facetData?.facets?.[ENV_KEY] ?? [];
+  const clusterValues = facetData?.facets?.[CLUSTER_KEY] ?? [];
+  const scopeValueFor = (key: string) =>
+    selectorValueFor(stage.selector_rows, key);
+  const setScope = (key: string, value: string) => {
+    onChange({
+      ...stage,
+      selector_rows: applyScope(stage.selector_rows, key, value),
+    });
+  };
+
   return (
     <div className="rounded-md border p-3 space-y-3">
       <div className="flex items-center justify-between">
@@ -1296,6 +1316,53 @@ function StageEditor({
         </div>
       ) : (
         <div className="space-y-2">
+          {(envValues.length > 0 || clusterValues.length > 0) && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Quick scope</Label>
+              <div className="flex flex-wrap gap-2">
+                {envValues.length > 0 && (
+                  <Select
+                    value={scopeValueFor(ENV_KEY) || "__all__"}
+                    onValueChange={(v) =>
+                      setScope(ENV_KEY, v === "__all__" ? "" : v)
+                    }
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Environment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Any environment</SelectItem>
+                      {envValues.map((f) => (
+                        <SelectItem key={f.value} value={f.value}>
+                          {f.value} ({f.count})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {clusterValues.length > 0 && (
+                  <Select
+                    value={scopeValueFor(CLUSTER_KEY) || "__all__"}
+                    onValueChange={(v) =>
+                      setScope(CLUSTER_KEY, v === "__all__" ? "" : v)
+                    }
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Cluster" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Any cluster</SelectItem>
+                      {clusterValues.map((f) => (
+                        <SelectItem key={f.value} value={f.value}>
+                          {f.value} ({f.count})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+          )}
           <Label className="text-xs">
             Label selector (all keys AND-matched)
           </Label>

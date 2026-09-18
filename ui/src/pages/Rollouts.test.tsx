@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 
 import { RolloutCard } from "./Rollouts";
 
+import { applyScope, selectorValueFor } from "@/lib/rolloutSelectors";
 import type { Rollout } from "@/types/rollout";
 
 // ADR 0029 — the rollout card must render N-of-M approval progress (k/N)
@@ -78,5 +79,53 @@ describe("RolloutCard — N-of-M approval progress (ADR 0029)", () => {
     expect(
       screen.getByText(/Waiting on a second approver/i),
     ).toBeInTheDocument();
+  });
+});
+
+// Slice 3 — the facet quick-pick (Environment/Cluster) upserts into a
+// label-mode stage's selector rows via the pure applyScope/selectorValueFor
+// helpers. AND semantics: env and cluster coexist as separate rows.
+describe("label-mode facet quick-pick (applyScope / selectorValueFor)", () => {
+  const ENV = "deployment.environment";
+  const CLUSTER = "k8s.cluster.name";
+
+  it("replaces the blank placeholder with the picked env row", () => {
+    const rows = applyScope([{ key: "", value: "" }], ENV, "prod");
+    expect(rows).toEqual([{ key: ENV, value: "prod" }]);
+  });
+
+  it("keeps env and cluster as distinct AND'd rows", () => {
+    let rows = applyScope([{ key: "", value: "" }], ENV, "prod");
+    rows = applyScope(rows, CLUSTER, "us-east-1");
+    expect(rows).toEqual([
+      { key: ENV, value: "prod" },
+      { key: CLUSTER, value: "us-east-1" },
+    ]);
+    expect(selectorValueFor(rows, ENV)).toBe("prod");
+    expect(selectorValueFor(rows, CLUSTER)).toBe("us-east-1");
+  });
+
+  it("re-picking a key overwrites its value rather than duplicating", () => {
+    let rows = applyScope([{ key: "", value: "" }], ENV, "prod");
+    rows = applyScope(rows, ENV, "staging");
+    expect(rows).toEqual([{ key: ENV, value: "staging" }]);
+  });
+
+  it("clearing a key removes its row but preserves hand-typed rows", () => {
+    let rows: { key: string; value: string }[] = [
+      { key: ENV, value: "prod" },
+      { key: "host.name", value: "canary-1" },
+    ];
+    rows = applyScope(rows, ENV, "");
+    expect(rows).toEqual([{ key: "host.name", value: "canary-1" }]);
+  });
+
+  it("clearing the last remaining row leaves one blank placeholder", () => {
+    const rows = applyScope([{ key: ENV, value: "prod" }], ENV, "");
+    expect(rows).toEqual([{ key: "", value: "" }]);
+  });
+
+  it("selectorValueFor returns '' for an unset key", () => {
+    expect(selectorValueFor([{ key: "", value: "" }], ENV)).toBe("");
   });
 });

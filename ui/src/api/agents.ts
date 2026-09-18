@@ -30,23 +30,58 @@ export interface GetAgentsParams {
   status?: string;
   group_id?: string;
   q?: string;
+  // Structured label filters, each "key=value". Repeated as ?label=…&label=…
+  // on the wire (AND semantics, exact match) — the primitive behind the
+  // cluster/environment facet.
+  labels?: string[];
 }
 
 /**
  * Build a query string from the params. Empty / undefined values
  * are skipped so the URL stays clean (and the server's "any"
- * branches don't get tickled with an empty string).
+ * branches don't get tickled with an empty string). `labels` is
+ * special-cased: each entry becomes its own repeated `label` param.
  */
 function buildAgentsQuery(params?: GetAgentsParams): string {
   if (!params) return "";
   const usp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === "" || v === null) continue;
+    if (k === "labels") {
+      for (const pair of v as string[]) {
+        if (pair) usp.append("label", pair);
+      }
+      continue;
+    }
     usp.set(k, String(v));
   }
   const q = usp.toString();
   return q ? `?${q}` : "";
 }
+
+/** One distinct label value and how many agents carry it. */
+export interface AgentFacetValue {
+  value: string;
+  count: number;
+}
+
+/** GET /api/v1/agents/facets response: label key -> distinct values + counts. */
+export interface GetAgentFacetsResponse {
+  facets: Record<string, AgentFacetValue[]>;
+}
+
+// Get distinct label values (with counts) across the whole fleet, for the
+// given keys (default server-side: deployment.environment + k8s.cluster.name).
+// Powers the cluster/environment facet dropdowns.
+export const getAgentFacets = (
+  keys?: string[],
+): Promise<GetAgentFacetsResponse> => {
+  const q =
+    keys && keys.length > 0
+      ? `?keys=${encodeURIComponent(keys.join(","))}`
+      : "";
+  return apiGet<GetAgentFacetsResponse>(`/agents/facets${q}`);
+};
 
 // Get a (paginated, filtered) page of agents. Default page size
 // matches the server's defaultAgentsLimit.

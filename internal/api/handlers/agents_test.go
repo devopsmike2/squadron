@@ -171,6 +171,108 @@ func TestHandleGetAgents_DriftStatusFilter(t *testing.T) {
 	assert.Contains(t, errResp, "allowed")
 }
 
+// TestHandleGetAgents_LabelFilter pins structured ?label=key=value filtering:
+// exact match, repeatable with AND semantics, malformed pair -> 400. This is the
+// primitive behind cluster/environment views and scoped rollout targeting.
+func TestHandleGetAgents_LabelFilter(t *testing.T) {
+	handlers, mockService := setupAgentHandlersTest()
+
+	mk := func(name string, labels map[string]string) *services.Agent {
+		a := testutils.MakeTestAgentWithStatus(uuid.New(), services.AgentStatusOnline)
+		a.Name = name
+		a.Labels = labels
+		return a
+	}
+	prodEast := mk("prod-east", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-east-1"})
+	prodWest := mk("prod-west", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-west-2"})
+	stagingEast := mk("staging-east", map[string]string{"deployment.environment": "staging", "k8s.cluster.name": "us-east-1"})
+	for _, a := range []*services.Agent{prodEast, prodWest, stagingEast} {
+		require.NoError(t, mockService.CreateAgent(context.TODO(), a))
+	}
+
+	doReq := func(query string) (*httptest.ResponseRecorder, GetAgentsResponse) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/api/v1/agents"+query, nil)
+		handlers.HandleGetAgents(c)
+		var resp GetAgentsResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w, resp
+	}
+
+	// Single label: environment=prod -> 2 agents.
+	w, resp := doReq("?label=deployment.environment=prod")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 2, resp.TotalCount, "environment=prod should match two agents")
+
+	// AND of two labels: prod AND us-east-1 -> exactly prod-east.
+	w, resp = doReq("?label=deployment.environment=prod&label=k8s.cluster.name=us-east-1")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, resp.TotalCount, "prod AND us-east-1 should match exactly one agent")
+	require.Contains(t, resp.Agents, prodEast.ID.String())
+
+	// Value that matches nothing -> 0.
+	_, resp = doReq("?label=deployment.environment=qa")
+	assert.Equal(t, 0, resp.TotalCount, "no agent is in qa")
+
+	// Malformed pair (no '=') -> 400.
+	w, _ = doReq("?label=deployment.environment")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "label without '=' must 400")
+}
+
+// TestHandleGetAgentFacets pins the facets endpoint: distinct label values with
+// counts across the whole fleet, default keys, custom ?keys=, and empty lists
+// for keys no agent carries.
+func TestHandleGetAgentFacets(t *testing.T) {
+	handlers, mockService := setupAgentHandlersTest()
+
+	mk := func(name string, labels map[string]string) *services.Agent {
+		a := testutils.MakeTestAgentWithStatus(uuid.New(), services.AgentStatusOnline)
+		a.Name = name
+		a.Labels = labels
+		return a
+	}
+	for _, a := range []*services.Agent{
+		mk("a", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-east-1"}),
+		mk("b", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-west-2"}),
+		mk("c", map[string]string{"deployment.environment": "staging", "k8s.cluster.name": "us-east-1"}),
+		mk("d", map[string]string{}), // no facet labels — contributes to nothing
+	} {
+		require.NoError(t, mockService.CreateAgent(context.TODO(), a))
+	}
+
+	doReq := func(query string) (*httptest.ResponseRecorder, GetAgentFacetsResponse) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/api/v1/agents/facets"+query, nil)
+		handlers.HandleGetAgentFacets(c)
+		var resp GetAgentFacetsResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w, resp
+	}
+
+	// Default keys.
+	w, resp := doReq("")
+	require.Equal(t, http.StatusOK, w.Code)
+	env := resp.Facets["deployment.environment"]
+	require.Len(t, env, 2, "two distinct environments")
+	assert.Equal(t, "prod", env[0].Value) // prod (2) sorts before staging (1) by count desc
+	assert.Equal(t, 2, env[0].Count)
+	assert.Equal(t, "staging", env[1].Value)
+	assert.Equal(t, 1, env[1].Count)
+	cluster := resp.Facets["k8s.cluster.name"]
+	require.Len(t, cluster, 2, "two distinct clusters")
+	assert.Equal(t, "us-east-1", cluster[0].Value) // count 2
+
+	// Custom keys: only the requested key comes back; unknown key -> empty list.
+	_, resp = doReq("?keys=deployment.environment,region")
+	assert.Len(t, resp.Facets["deployment.environment"], 2)
+	assert.NotNil(t, resp.Facets["region"])
+	assert.Len(t, resp.Facets["region"], 0, "no agent carries region")
+	_, hasCluster := resp.Facets["k8s.cluster.name"]
+	assert.False(t, hasCluster, "cluster not requested, should be absent")
+}
+
 // TestHandleGetAgents_Pagination pins the v0.23 pagination
 // envelope: items array sorted stably by ID, total reflects the
 // pre-pagination filtered count, and offset+limit slice correctly
