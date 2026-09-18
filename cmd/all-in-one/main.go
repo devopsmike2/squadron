@@ -472,6 +472,22 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 	// the historical RequireScope — while the enterprise edition installs a
 	// role-based one. Set once here, during startup, before the server serves.
 	middleware.SetAuthorizer(idSeam.Authorizer)
+	// ADR 0053 — let the scope middleware enrich an agent-typed Resource with
+	// the target agent's server-observed env/cluster labels, so the enterprise
+	// Authorizer can apply a cluster/env least-privilege filter. INERT in OSS
+	// (the flat-scope authorizer ignores those fields); a lookup miss leaves
+	// them empty. The :id on agent routes is the agent UUID (HandleGetAgent).
+	middleware.SetAgentLabelResolver(func(ctx context.Context, agentID string) (string, string) {
+		aid, err := uuid.Parse(agentID)
+		if err != nil {
+			return "", ""
+		}
+		a, err := agentService.GetAgent(ctx, aid)
+		if err != nil || a == nil {
+			return "", ""
+		}
+		return a.Labels["deployment.environment"], a.Labels["k8s.cluster.name"]
+	})
 	// Install the wired tenant resolver the ResolveTenant middleware consults
 	// (ADR 0006 slice 3). OSS resolves the single implicit "default" tenant;
 	// the enterprise edition derives a real tenant from the principal.

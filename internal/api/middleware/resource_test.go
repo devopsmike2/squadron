@@ -139,6 +139,63 @@ func TestRequireScope_UnmappedRouteYieldsZeroResource(t *testing.T) {
 	assert.Equal(t, identity.Resource{}, cap.got, "unmapped route must yield a zero Resource")
 }
 
+// TestRequireScope_PopulatesAgentEnvCluster pins ADR 0053: when an agent-label
+// resolver is wired, an agent-typed route's Resource carries the target agent's
+// server-observed env/cluster labels, so the enterprise Authorizer can apply a
+// cluster/env least-privilege filter.
+func TestRequireScope_PopulatesAgentEnvCluster(t *testing.T) {
+	cap := &capturingAuthorizer{inner: identity.ScopeAuthorizer{}}
+	SetAuthorizer(cap)
+	defer SetAuthorizer(identity.ScopeAuthorizer{})
+
+	SetAgentLabelResolver(func(_ context.Context, agentID string) (string, string) {
+		if agentID == "a-1" {
+			return "prod", "us-east-1"
+		}
+		return "", ""
+	})
+	defer SetAgentLabelResolver(nil)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := routerFor(svc, "/api/v1/agents/:id", services.ScopeAgentsRead)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/a-1", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, identity.Resource{Type: "agent", ID: "a-1", Env: "prod", Cluster: "us-east-1"}, cap.got,
+		"agent route must carry the resolved env/cluster labels")
+}
+
+// TestRequireScope_AgentEnvClusterEmptyWithoutResolver pins the inert default:
+// with no resolver wired (OSS), an agent route yields a Resource with empty
+// Env/Cluster — the pre-0053 shape. Also covers a resolver miss (unknown id).
+func TestRequireScope_AgentEnvClusterEmptyWithoutResolver(t *testing.T) {
+	cap := &capturingAuthorizer{inner: identity.ScopeAuthorizer{}}
+	SetAuthorizer(cap)
+	defer SetAuthorizer(identity.ScopeAuthorizer{})
+	// Ensure no resolver is installed (defensive: a prior test may have set one).
+	SetAgentLabelResolver(nil)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := routerFor(svc, "/api/v1/agents/:id", services.ScopeAgentsRead)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/a-1", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, identity.Resource{Type: "agent", ID: "a-1"}, cap.got,
+		"without a resolver, env/cluster stay empty (inert, pre-0053 shape)")
+}
+
 // TestRequireScope_ResourcePlumbingInertUnderOSS is the editions-contract for
 // slice 2a: even though the middleware now hands the OSS ScopeAuthorizer a
 // populated Resource, the OSS decision is unchanged — a matching scope still
