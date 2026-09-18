@@ -583,6 +583,84 @@ func (h *AgentHandlers) HandleGetAgentStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// AgentFacetValue is one distinct label value and how many agents carry it.
+type AgentFacetValue struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// GetAgentFacetsResponse maps each requested label key to its distinct values
+// (with counts), computed across the WHOLE fleet — not one page. It's what a
+// cluster/environment facet UI reads to populate its filter dropdowns before
+// narrowing the list with ?label=key=value.
+type GetAgentFacetsResponse struct {
+	Facets map[string][]AgentFacetValue `json:"facets"`
+}
+
+// defaultAgentFacetKeys are the label keys faceted when ?keys= is omitted —
+// the two that make cluster/environment a first-class fleet dimension.
+var defaultAgentFacetKeys = []string{"deployment.environment", "k8s.cluster.name"}
+
+// HandleGetAgentFacets handles GET /api/v1/agents/facets.
+//
+// Query params:
+//   - keys = comma-separated label keys to facet (default:
+//     deployment.environment,k8s.cluster.name)
+//
+// For each key it returns the distinct label values present across the fleet
+// and the agent count for each, sorted by count desc then value asc. Agents
+// missing a key simply don't contribute to that key's values.
+func (h *AgentHandlers) HandleGetAgentFacets(c *gin.Context) {
+	keys := defaultAgentFacetKeys
+	if raw := strings.TrimSpace(c.Query("keys")); raw != "" {
+		keys = nil
+		for _, k := range strings.Split(raw, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				keys = append(keys, k)
+			}
+		}
+	}
+
+	agents, err := h.agentService.ListAgents(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to get agents for facets", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch agent facets"})
+		return
+	}
+
+	// counts[key][value] = number of agents. Seed every requested key so a key
+	// with no matching agents comes back as an empty list, not a missing entry.
+	counts := make(map[string]map[string]int, len(keys))
+	for _, k := range keys {
+		if _, seen := counts[k]; !seen {
+			counts[k] = make(map[string]int)
+		}
+	}
+	for _, a := range agents {
+		for k := range counts {
+			if v, ok := a.Labels[k]; ok && v != "" {
+				counts[k][v]++
+			}
+		}
+	}
+
+	resp := GetAgentFacetsResponse{Facets: make(map[string][]AgentFacetValue, len(counts))}
+	for k, vm := range counts {
+		list := make([]AgentFacetValue, 0, len(vm))
+		for v, n := range vm {
+			list = append(list, AgentFacetValue{Value: v, Count: n})
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].Count != list[j].Count {
+				return list[i].Count > list[j].Count
+			}
+			return list[i].Value < list[j].Value
+		})
+		resp.Facets[k] = list
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // SendConfigRequest represents the request to send config to an agent
 type SendConfigRequest struct {
 	Content string `json:"content" binding:"required"`
