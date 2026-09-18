@@ -40,6 +40,7 @@ import useSWRInfinite from "swr/infinite";
 
 import {
   getAgents,
+  getAgentFacets,
   type GetAgentsParams,
   type GetAgentsResponse,
 } from "@/api/agents";
@@ -109,6 +110,12 @@ const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "error", label: "Error" },
 ];
 
+// Label keys behind the cluster/environment facet. Server-side these are the
+// default faceted keys; the UI shows a dropdown per key only when the fleet
+// actually reports values for it.
+const ENV_LABEL_KEY = "deployment.environment";
+const CLUSTER_LABEL_KEY = "k8s.cluster.name";
+
 // ============================================================
 // Paginated fetch hook
 // ============================================================
@@ -132,6 +139,7 @@ function useAgentsPaginated(params: GetAgentsParams) {
       params.status ?? "",
       params.group_id ?? "",
       params.q ?? "",
+      (params.labels ?? []).join(""),
     ];
   };
 
@@ -145,6 +153,7 @@ function useAgentsPaginated(params: GetAgentsParams) {
         status: status || undefined,
         group_id: group_id || undefined,
         q: q || undefined,
+        labels: params.labels && params.labels.length ? params.labels : undefined,
       }),
     {
       // Keep already-fetched pages in cache while a new filter is
@@ -207,6 +216,16 @@ export default function AgentsPage() {
 
   const [status, setStatus] = useState<StatusFilter>("any");
   const [groupId, setGroupId] = useState<string>("any");
+  // Cluster/environment facet. "" = no filter for that key.
+  const [envFilter, setEnvFilter] = useState<string>("");
+  const [clusterFilter, setClusterFilter] = useState<string>("");
+  // Distinct env/cluster values across the whole fleet (not just this page),
+  // used to populate the facet dropdowns.
+  const { data: facetData } = useSWR("agent-facets", () => getAgentFacets(), {
+    revalidateOnFocus: false,
+  });
+  const envValues = facetData?.facets?.[ENV_LABEL_KEY] ?? [];
+  const clusterValues = facetData?.facets?.[CLUSTER_LABEL_KEY] ?? [];
   // Debounce search so we don't fire a query on every keystroke at
   // the API. 200ms is the sweet spot between "feels live" and "not
   // hammering the server while the operator types a long string".
@@ -238,8 +257,12 @@ export default function AgentsPage() {
       // server-side.
       group_id: groupId !== "any" && groupId !== "none" ? groupId : undefined,
       q: search.trim() || undefined,
+      labels: [
+        ...(envFilter ? [`${ENV_LABEL_KEY}=${envFilter}`] : []),
+        ...(clusterFilter ? [`${CLUSTER_LABEL_KEY}=${clusterFilter}`] : []),
+      ],
     }),
-    [drift, status, groupId, search],
+    [drift, status, groupId, search, envFilter, clusterFilter],
   );
 
   const {
@@ -330,11 +353,15 @@ export default function AgentsPage() {
     drift !== "any" ||
     status !== "any" ||
     groupId !== "any" ||
+    envFilter !== "" ||
+    clusterFilter !== "" ||
     search.trim() !== "";
   const clearAll = () => {
     setDrift("any");
     setStatus("any");
     setGroupId("any");
+    setEnvFilter("");
+    setClusterFilter("");
     setSearchInput("");
     setSearch("");
   };
@@ -539,6 +566,44 @@ export default function AgentsPage() {
             ))}
           </SelectContent>
         </Select>
+
+        {envValues.length > 0 && (
+          <Select
+            value={envFilter || "any"}
+            onValueChange={(v) => setEnvFilter(v === "any" ? "" : v)}
+          >
+            <SelectTrigger className="h-8 w-44 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="any">Environment: All</SelectItem>
+              {envValues.map((f) => (
+                <SelectItem key={f.value} value={f.value}>
+                  Env: {f.value} ({f.count})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {clusterValues.length > 0 && (
+          <Select
+            value={clusterFilter || "any"}
+            onValueChange={(v) => setClusterFilter(v === "any" ? "" : v)}
+          >
+            <SelectTrigger className="h-8 w-48 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="any">Cluster: All</SelectItem>
+              {clusterValues.map((f) => (
+                <SelectItem key={f.value} value={f.value}>
+                  Cluster: {f.value} ({f.count})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         {hasAnyFilter && (
           <button
