@@ -35,10 +35,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -72,6 +75,24 @@ type config struct {
 	labelPrefix string
 	healthEvery time.Duration
 	verbose     bool
+
+	// Authenticated / secured connect (ADR 0042 OpAMP auth + ADR 0052 BYO-CA
+	// mTLS). Empty = the pre-existing plaintext, unauthenticated behavior, so
+	// existing load-test invocations are unchanged.
+	token   string // Authorization: Bearer <token> (an opamp:enroll API token)
+	tenant  string // x-squadron-tenant header (display hint; token binds the real tenant)
+	tlsCA   string // PEM: CA that signed the server cert (verify the server)
+	tlsCert string // PEM: client cert Squadron's mTLS listener requires
+	tlsKey  string // PEM: client private key
+
+	// Identity spoof knobs (ADR 0052 pinning proof). When set, they override
+	// the identity-bearing attributes in the AgentDescription so the fleet id
+	// the server DERIVES differs from the one an enrollment token is pinned to
+	// — letting us prove the pin wins over a spoofed report. Empty = the normal
+	// generated identity.
+	spoofInstance string // service.instance.id
+	spoofHost     string // host.name
+	spoofService  string // service.name
 }
 
 // stats is the shared progress counter all agents update. Reads are
@@ -164,9 +185,18 @@ func runAgent(ctx context.Context, cfg config, st *stats, idx int) {
 
 	desc := agentDescription(idx, cfg)
 
+	header, tlsConfig, err := connSecurity(cfg)
+	if err != nil {
+		log.Printf("agent#%d: connection security setup failed: %v", idx, err)
+		st.failed.Add(1)
+		return
+	}
+
 	connectedOnce := false
 	settings := types.StartSettings{
 		OpAMPServerURL: cfg.target,
+		Header:         header,
+		TLSConfig:      tlsConfig,
 		InstanceUid:    instanceUid,
 		Capabilities: protobufs.AgentCapabilities_AgentCapabilities_ReportsStatus |
 			protobufs.AgentCapabilities_AgentCapabilities_ReportsEffectiveConfig |
@@ -257,6 +287,52 @@ func runAgent(ctx context.Context, cfg config, st *stats, idx int) {
 	}
 }
 
+// connSecurity builds the optional HTTP header (bearer auth + tenant hint) and
+// TLS config (BYO-CA mTLS: verify the server against --tls-ca, present the
+// client cert Squadron's mTLS listener requires). All fields are opt-in: with
+// none set it returns (nil, nil, nil) and the client connects exactly as before
+// — plaintext ws:// and unauthenticated — so existing load-test invocations are
+// unchanged.
+func connSecurity(cfg config) (http.Header, *tls.Config, error) {
+	var header http.Header
+	if cfg.token != "" || cfg.tenant != "" {
+		header = http.Header{}
+		if cfg.token != "" {
+			header.Set("Authorization", "Bearer "+cfg.token)
+		}
+		if cfg.tenant != "" {
+			header.Set("x-squadron-tenant", cfg.tenant)
+		}
+	}
+
+	var tlsConfig *tls.Config
+	if cfg.tlsCA != "" || cfg.tlsCert != "" || cfg.tlsKey != "" {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		if cfg.tlsCA != "" {
+			caPEM, err := os.ReadFile(cfg.tlsCA)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read --tls-ca: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caPEM) {
+				return nil, nil, fmt.Errorf("--tls-ca %q contained no valid certificates", cfg.tlsCA)
+			}
+			tlsConfig.RootCAs = pool
+		}
+		if cfg.tlsCert != "" || cfg.tlsKey != "" {
+			if cfg.tlsCert == "" || cfg.tlsKey == "" {
+				return nil, nil, fmt.Errorf("mTLS needs both --tls-cert and --tls-key")
+			}
+			pair, err := tls.LoadX509KeyPair(cfg.tlsCert, cfg.tlsKey)
+			if err != nil {
+				return nil, nil, fmt.Errorf("load client keypair: %w", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{pair}
+		}
+	}
+	return header, tlsConfig, nil
+}
+
 // agentDescription builds a believable AgentDescription with both
 // identifying attributes (service.name, version, instance) and
 // non-identifying ones (deployment.environment, host.arch, the
@@ -267,10 +343,25 @@ func agentDescription(idx int, cfg config) *protobufs.AgentDescription {
 	hostname, _ := os.Hostname()
 	hostName := fmt.Sprintf("%s-sim-%d-%d", hostname, pid, idx)
 
+	// Identity-bearing attributes. The spoof knobs (ADR 0052 pinning proof)
+	// override them so the fleet id the server derives can be made to disagree
+	// with a token's pin — proving the pin, not the reported description, wins.
+	serviceName := "synthetic-collector"
+	instanceID := deterministicUUID(idx).String()
+	if cfg.spoofService != "" {
+		serviceName = cfg.spoofService
+	}
+	if cfg.spoofInstance != "" {
+		instanceID = cfg.spoofInstance
+	}
+	if cfg.spoofHost != "" {
+		hostName = cfg.spoofHost
+	}
+
 	identifying := []*protobufs.KeyValue{
-		stringKV("service.name", "synthetic-collector"),
+		stringKV("service.name", serviceName),
 		stringKV("service.version", cfg.version),
-		stringKV("service.instance.id", deterministicUUID(idx).String()),
+		stringKV("service.instance.id", instanceID),
 	}
 	nonIdentifying := []*protobufs.KeyValue{
 		stringKV("host.name", hostName),
@@ -368,6 +459,22 @@ func parseFlags() config {
 		"How often each agent sends a health ping")
 	flag.BoolVar(&cfg.verbose, "v", false,
 		"Verbose per-agent logging (off by default to keep the status line readable)")
+	flag.StringVar(&cfg.token, "token", "",
+		"Authorization bearer token (an opamp:enroll API token) sent on connect (ADR 0042)")
+	flag.StringVar(&cfg.tenant, "tenant", "",
+		"x-squadron-tenant header value (display hint; the token binds the real tenant)")
+	flag.StringVar(&cfg.tlsCA, "tls-ca", "",
+		"PEM file: CA that signed the server cert, used to verify the OpAMP server (wss://)")
+	flag.StringVar(&cfg.tlsCert, "tls-cert", "",
+		"PEM file: client certificate to present for BYO-CA mTLS (ADR 0052)")
+	flag.StringVar(&cfg.tlsKey, "tls-key", "",
+		"PEM file: client private key for --tls-cert")
+	flag.StringVar(&cfg.spoofInstance, "spoof-instance", "",
+		"Override service.instance.id in the AgentDescription (identity-pin proof)")
+	flag.StringVar(&cfg.spoofHost, "spoof-host", "",
+		"Override host.name in the AgentDescription (identity-pin proof)")
+	flag.StringVar(&cfg.spoofService, "spoof-service", "",
+		"Override service.name in the AgentDescription (identity-pin proof)")
 	flag.Parse()
 
 	if cfg.count <= 0 {
