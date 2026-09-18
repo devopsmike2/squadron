@@ -171,6 +171,55 @@ func TestHandleGetAgents_DriftStatusFilter(t *testing.T) {
 	assert.Contains(t, errResp, "allowed")
 }
 
+// TestHandleGetAgents_LabelFilter pins structured ?label=key=value filtering:
+// exact match, repeatable with AND semantics, malformed pair -> 400. This is the
+// primitive behind cluster/environment views and scoped rollout targeting.
+func TestHandleGetAgents_LabelFilter(t *testing.T) {
+	handlers, mockService := setupAgentHandlersTest()
+
+	mk := func(name string, labels map[string]string) *services.Agent {
+		a := testutils.MakeTestAgentWithStatus(uuid.New(), services.AgentStatusOnline)
+		a.Name = name
+		a.Labels = labels
+		return a
+	}
+	prodEast := mk("prod-east", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-east-1"})
+	prodWest := mk("prod-west", map[string]string{"deployment.environment": "prod", "k8s.cluster.name": "us-west-2"})
+	stagingEast := mk("staging-east", map[string]string{"deployment.environment": "staging", "k8s.cluster.name": "us-east-1"})
+	for _, a := range []*services.Agent{prodEast, prodWest, stagingEast} {
+		require.NoError(t, mockService.CreateAgent(context.TODO(), a))
+	}
+
+	doReq := func(query string) (*httptest.ResponseRecorder, GetAgentsResponse) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/api/v1/agents"+query, nil)
+		handlers.HandleGetAgents(c)
+		var resp GetAgentsResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return w, resp
+	}
+
+	// Single label: environment=prod -> 2 agents.
+	w, resp := doReq("?label=deployment.environment=prod")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 2, resp.TotalCount, "environment=prod should match two agents")
+
+	// AND of two labels: prod AND us-east-1 -> exactly prod-east.
+	w, resp = doReq("?label=deployment.environment=prod&label=k8s.cluster.name=us-east-1")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, resp.TotalCount, "prod AND us-east-1 should match exactly one agent")
+	require.Contains(t, resp.Agents, prodEast.ID.String())
+
+	// Value that matches nothing -> 0.
+	_, resp = doReq("?label=deployment.environment=qa")
+	assert.Equal(t, 0, resp.TotalCount, "no agent is in qa")
+
+	// Malformed pair (no '=') -> 400.
+	w, _ = doReq("?label=deployment.environment")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "label without '=' must 400")
+}
+
 // TestHandleGetAgents_Pagination pins the v0.23 pagination
 // envelope: items array sorted stably by ID, total reflects the
 // pre-pagination filtered count, and offset+limit slice correctly

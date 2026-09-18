@@ -168,6 +168,11 @@ var validDriftFilters = map[string]services.ConfigDriftStatus{
 //   - group_id     = UUID — agents with this exact group_id
 //   - q            = free-text — substring match against name + label
 //     key=value pairs (case-insensitive)
+//   - label        = key=value — exact label match, repeatable; multiple
+//     ?label= params AND together (e.g. ?label=deployment.environment=prod
+//     &label=k8s.cluster.name=us-east-1). This is the structured counterpart
+//     to free-text q and the primitive behind cluster/environment views and
+//     scoped rollout targeting.
 //   - offset       = integer >= 0, default 0
 //   - limit        = integer 1..500, default 100
 //
@@ -230,6 +235,28 @@ func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 	// match converts on the fly so we avoid copying agent strings.
 	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
 
+	// Structured label filters: repeatable ?label=key=value, AND semantics,
+	// exact match against agent.Labels. Same equality rule the rollout label
+	// selector uses, so "what does this filter select" reads the same in the
+	// fleet view and in a rollout stage. A malformed pair is a 400.
+	labelFilters := make(map[string]string)
+	for _, raw := range c.QueryArray("label") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(raw, "=")
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid label filter; expected key=value",
+				"example": "deployment.environment=prod",
+			})
+			return
+		}
+		labelFilters[k] = strings.TrimSpace(v)
+	}
+
 	filtered := make([]*services.Agent, 0, len(agents))
 	for _, a := range agents {
 		if driftSet && a.DriftStatus != driftFilter {
@@ -244,6 +271,9 @@ func (h *AgentHandlers) HandleGetAgents(c *gin.Context) {
 			}
 		}
 		if q != "" && !agentMatchesSearch(a, q) {
+			continue
+		}
+		if len(labelFilters) > 0 && !agentMatchesLabels(a, labelFilters) {
 			continue
 		}
 		filtered = append(filtered, a)
@@ -316,6 +346,20 @@ func agentMatchesSearch(a *services.Agent, q string) bool {
 		}
 	}
 	return false
+}
+
+// agentMatchesLabels reports whether the agent's labels satisfy EVERY
+// key=value pair in want (AND semantics, exact match). An agent missing a
+// required key, or holding a different value for it, is excluded. Empty want
+// matches everything (the caller guards len>0 before calling).
+func agentMatchesLabels(a *services.Agent, want map[string]string) bool {
+	for k, v := range want {
+		got, ok := a.Labels[k]
+		if !ok || got != v {
+			return false
+		}
+	}
+	return true
 }
 
 // parsePagination resolves the offset/limit query params with
