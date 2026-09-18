@@ -9,6 +9,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -166,6 +167,25 @@ func SetAuthorizer(a identity.Authorizer) {
 	if a != nil {
 		authorizer = a
 	}
+}
+
+// agentLabelResolver, when set, maps an agent resource id to its
+// server-observed deployment.environment / k8s.cluster.name labels, so
+// resolveResource can populate identity.Resource.Env/Cluster on agent routes
+// (ADR 0053). nil in OSS by default; main.go wires it from the agent service.
+// INERT under the OSS ScopeAuthorizer (which ignores those fields); the
+// enterprise Authorizer consumes them for cluster/env-scoped decisions. The
+// resolver returns empty strings on any miss so authorization degrades to the
+// class-wide (action-level) decision — monotonic, per ADR 0010.
+var agentLabelResolver func(ctx context.Context, agentID string) (env, cluster string)
+
+// SetAgentLabelResolver installs the agent-label lookup resolveResource uses to
+// populate Resource.Env/Cluster on agent routes (ADR 0053). A nil resolver (the
+// OSS default) leaves those fields empty — fully inert. Call once at startup,
+// before the server accepts traffic; not safe for concurrent use with in-flight
+// requests. Mirrors SetAuthorizer.
+func SetAgentLabelResolver(r func(ctx context.Context, agentID string) (env, cluster string)) {
+	agentLabelResolver = r
 }
 
 // authEnabled reports whether the server mounts bearer authentication (ADR

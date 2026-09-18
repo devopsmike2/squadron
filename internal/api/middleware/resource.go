@@ -135,5 +135,16 @@ func resolveResource(c *gin.Context) identity.Resource {
 	if id == "" {
 		id = c.Param("hostname")
 	}
-	return identity.Resource{Type: typ, ID: id}
+	res := identity.Resource{Type: typ, ID: id}
+	// ADR 0053: for agent-typed resources, enrich with the target agent's
+	// server-observed deployment.environment / k8s.cluster.name labels so the
+	// enterprise Authorizer can apply a cluster/env least-privilege filter.
+	// Best-effort + INERT: a nil resolver (OSS) or a lookup miss leaves the
+	// fields empty, degrading to the class-wide decision (monotonic, per ADR
+	// 0010). These labels are advisory within the authenticated tenant, never a
+	// spoofing boundary (ADR 0042/0053).
+	if typ == "agent" && id != "" && agentLabelResolver != nil {
+		res.Env, res.Cluster = agentLabelResolver(c.Request.Context(), id)
+	}
+	return res
 }

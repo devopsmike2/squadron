@@ -70,6 +70,18 @@ type Resource struct {
 	// ID is the resource identifier; "" when the action is not
 	// resource-scoped.
 	ID string
+	// Env and Cluster are the target's server-observed deployment
+	// environment / kubernetes cluster labels (ADR 0053), when the resource
+	// is (or targets) an agent that reports them; "" otherwise. They let the
+	// enterprise RBAC Authorizer scope a decision to a cluster/environment
+	// as an operator-side least-privilege filter WITHIN the authenticated
+	// tenant. They are NOT an authenticated boundary: they derive from the
+	// agent's client-asserted labels (ADR 0042), so they must never be used
+	// to defend against an agent spoofing its own label — tenant remains the
+	// authenticated isolation boundary. The OSS ScopeAuthorizer ignores
+	// them, exactly as it ignores Type/ID.
+	Env     string
+	Cluster string
 }
 
 // Decision is the outcome of an authorization check.
