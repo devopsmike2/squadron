@@ -153,7 +153,8 @@ function useAgentsPaginated(params: GetAgentsParams) {
         status: status || undefined,
         group_id: group_id || undefined,
         q: q || undefined,
-        labels: params.labels && params.labels.length ? params.labels : undefined,
+        labels:
+          params.labels && params.labels.length ? params.labels : undefined,
       }),
     {
       // Keep already-fetched pages in cache while a new filter is

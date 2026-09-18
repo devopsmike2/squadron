@@ -66,8 +66,6 @@ describe("getAgentFacets", () => {
     const fetchMock = stubJSON({ facets: {} });
     await getAgentFacets(["deployment.environment", "k8s.cluster.name"]);
     const params = new URL(calledUrl(fetchMock)).searchParams;
-    expect(params.get("keys")).toBe(
-      "deployment.environment,k8s.cluster.name",
-    );
+    expect(params.get("keys")).toBe("deployment.environment,k8s.cluster.name");
   });
 });
