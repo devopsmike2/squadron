@@ -488,6 +488,30 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		}
 		return a.Labels["deployment.environment"], a.Labels["k8s.cluster.name"]
 	})
+	// ADR 0053 slice 4b-2 — populate Resource.Env/Cluster on rollout :id routes
+	// from the rollout's label-mode stage selectors, so a cluster/env-scoped
+	// role authorizes only rollouts targeting its env/cluster. INERT in OSS
+	// (the flat-scope authorizer ignores those fields); a lookup miss or a
+	// percent/group-targeted rollout (no label selector) leaves them empty.
+	middleware.SetRolloutLabelResolver(func(ctx context.Context, rolloutID string) (string, string) {
+		r, err := rolloutService.Get(ctx, rolloutID)
+		if err != nil || r == nil {
+			return "", ""
+		}
+		var env, cluster string
+		for _, st := range r.Stages {
+			if st.Mode != services.RolloutStageModeLabel || st.LabelSelector == nil {
+				continue
+			}
+			if env == "" {
+				env = st.LabelSelector["deployment.environment"]
+			}
+			if cluster == "" {
+				cluster = st.LabelSelector["k8s.cluster.name"]
+			}
+		}
+		return env, cluster
+	})
 	// Install the wired tenant resolver the ResolveTenant middleware consults
 	// (ADR 0006 slice 3). OSS resolves the single implicit "default" tenant;
 	// the enterprise edition derives a real tenant from the principal.

@@ -146,5 +146,11 @@ func resolveResource(c *gin.Context) identity.Resource {
 	if typ == "agent" && id != "" && agentLabelResolver != nil {
 		res.Env, res.Cluster = agentLabelResolver(c.Request.Context(), id)
 	}
+	// ADR 0053 slice 4b-2: rollout :id routes carry the env/cluster the
+	// rollout's label-mode stages target, so a cluster/env-scoped role bites on
+	// rollout actions. Same best-effort/inert contract as the agent resolver.
+	if typ == "rollout" && id != "" && rolloutLabelResolver != nil {
+		res.Env, res.Cluster = rolloutLabelResolver(c.Request.Context(), id)
+	}
 	return res
 }

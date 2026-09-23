@@ -188,6 +188,27 @@ func SetAgentLabelResolver(r func(ctx context.Context, agentID string) (env, clu
 	agentLabelResolver = r
 }
 
+// rolloutLabelResolver, when set, maps a rollout resource id to the
+// deployment.environment / k8s.cluster.name its label-mode stages target, so
+// resolveResource can populate identity.Resource.Env/Cluster on rollout :id
+// routes (ADR 0053 slice 4b-2). This is what makes a cluster/env-scoped role
+// bite on rollout actions (abort/approve/pause/…): a role scoped to env=prod
+// authorizes only rollouts whose selector targets prod. nil in OSS by default;
+// main.go wires it from the rollout service. INERT under the OSS
+// ScopeAuthorizer. Best-effort/monotonic: a nil resolver, a lookup miss, or a
+// percent/group-targeted rollout (no label selector) leaves the fields empty —
+// which, for a LabelMatch role, fails closed (deny), and for any non-scoped
+// role is the unchanged class/instance decision.
+var rolloutLabelResolver func(ctx context.Context, rolloutID string) (env, cluster string)
+
+// SetRolloutLabelResolver installs the rollout-label lookup resolveResource uses
+// to populate Resource.Env/Cluster on rollout :id routes (ADR 0053 slice 4b-2).
+// A nil resolver (the OSS default) leaves those fields empty — fully inert.
+// Call once at startup, before serving. Mirrors SetAgentLabelResolver.
+func SetRolloutLabelResolver(r func(ctx context.Context, rolloutID string) (env, cluster string)) {
+	rolloutLabelResolver = r
+}
+
 // authEnabled reports whether the server mounts bearer authentication (ADR
 // 0045). It governs the zero-actor path in RequireScope / AuthorizeScope:
 //
