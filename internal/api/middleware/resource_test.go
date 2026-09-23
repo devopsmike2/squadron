@@ -196,6 +196,58 @@ func TestRequireScope_AgentEnvClusterEmptyWithoutResolver(t *testing.T) {
 		"without a resolver, env/cluster stay empty (inert, pre-0053 shape)")
 }
 
+// TestRequireScope_PopulatesRolloutEnvCluster pins ADR 0053 slice 4b-2: a
+// rollout :id route carries the env/cluster the rollout's label-mode stages
+// target, so a cluster/env-scoped role bites on rollout actions.
+func TestRequireScope_PopulatesRolloutEnvCluster(t *testing.T) {
+	cap := &capturingAuthorizer{inner: identity.ScopeAuthorizer{}}
+	SetAuthorizer(cap)
+	defer SetAuthorizer(identity.ScopeAuthorizer{})
+
+	SetRolloutLabelResolver(func(_ context.Context, rolloutID string) (string, string) {
+		if rolloutID == "ro-prod" {
+			return "prod", "us-east-1"
+		}
+		return "", ""
+	})
+	defer SetRolloutLabelResolver(nil)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := routerFor(svc, "/api/v1/rollouts/:id/approve", services.ScopeRolloutsApprove)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rollouts/ro-prod/approve", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, identity.Resource{Type: "rollout", ID: "ro-prod", Env: "prod", Cluster: "us-east-1"}, cap.got,
+		"rollout route must carry the resolved env/cluster from its label stages")
+}
+
+func TestRequireScope_RolloutEnvClusterEmptyWithoutResolver(t *testing.T) {
+	cap := &capturingAuthorizer{inner: identity.ScopeAuthorizer{}}
+	SetAuthorizer(cap)
+	defer SetAuthorizer(identity.ScopeAuthorizer{})
+	SetRolloutLabelResolver(nil)
+
+	svc := services.NewAuthService(memory.NewStore(), zap.NewNop())
+	_, plaintext, err := svc.Issue(t.Context(), "wildcard", []string{services.ScopeWildcard}, nil)
+	require.NoError(t, err)
+
+	r := routerFor(svc, "/api/v1/rollouts/:id/approve", services.ScopeRolloutsApprove)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rollouts/ro-1/approve", nil)
+	req.Header.Set("Authorization", "Bearer "+plaintext)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, identity.Resource{Type: "rollout", ID: "ro-1"}, cap.got,
+		"without a resolver, rollout env/cluster stay empty (inert)")
+}
+
 // TestRequireScope_ResourcePlumbingInertUnderOSS is the editions-contract for
 // slice 2a: even though the middleware now hands the OSS ScopeAuthorizer a
 // populated Resource, the OSS decision is unchanged — a matching scope still
