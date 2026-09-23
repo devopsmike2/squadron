@@ -1,5 +1,14 @@
 # golangci-lint configuration (consumed by CI's `make lint`).
 #
+# run.timeout raises the lint budget above the 1m0s default. CI runs a bare
+# `golangci-lint run` after a `go install` of the pinned linter; on a cold
+# module cache the install eats ~35s, leaving the lint itself racing the 60s
+# default and intermittently tripping "Timeout exceeded" (a recurring flaky
+# red with no real finding). 5m is comfortably above the observed ~90s worst
+# case. Honored by both the Makefile target and CI's direct invocation.
+run:
+  timeout: 5m
+#
 # The `unused` linter is disabled deliberately. This codebase
 # intentionally carries build-ahead scaffolding — per-cloud metric/cost
 # substrate that is plumbed and tested before its production
