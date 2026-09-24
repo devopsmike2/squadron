@@ -1174,6 +1174,16 @@ type AuditEvent struct {
 	Payload    map[string]any `json:"payload,omitempty"`   // freeform JSON metadata
 	CreatedAt  time.Time      `json:"created_at"`          // when the row was inserted
 
+	// ADR 0053 slice 4b-3 — the target's server-observed deployment.environment
+	// / k8s.cluster.name at append time, for cluster/environment-scoped audit
+	// views. Populated best-effort for agent-targeted events (empty otherwise).
+	// DESCRIPTIVE columns only: they are NOT part of the tamper-evident hash
+	// chain (ADR 0044/0051) — adding them would break the chain format — and
+	// they are advisory (client-asserted labels, ADR 0042), never an
+	// authorization boundary on their own.
+	Env     string `json:"env,omitempty"`
+	Cluster string `json:"cluster,omitempty"`
+
 	// v0.57 — cached AI explanation of this audit row. Populated lazily
 	// the first time an operator clicks "Explain" on the row in the UI.
 	// Audit rows are immutable so a cached explanation never goes stale
@@ -1241,6 +1251,13 @@ type AuditEventFilter struct {
 	Since      time.Time // events with Timestamp >= Since; zero value disables the filter
 	Until      time.Time // events with Timestamp < Until; zero value disables. Symmetric with Since; backs newest→oldest cursor pagination (ADR 0020 export streaming).
 	Limit      int       // default 100 if zero; capped at 1000 by the storage layer
+
+	// ADR 0053 slice 4b-3 — exact-match on the descriptive env / cluster
+	// columns; empty disables. The primitive behind cluster/environment-scoped
+	// audit views (OSS breadth; the enterprise auditreview handler enforces
+	// which scopes an operator may read).
+	Env     string
+	Cluster string
 }
 
 // DiscoveryVerdict — v0.89.36 (#655 Stream 53, #531 slice 2 chunk 3)

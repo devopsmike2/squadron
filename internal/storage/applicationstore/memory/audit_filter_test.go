@@ -56,3 +56,40 @@ func TestListAuditEvents_ActorAndTimeWindow(t *testing.T) {
 	assert.Equal(t, "e1", got[0].ID)
 	assert.Equal(t, "e0", got[1].ID)
 }
+
+// TestListAuditEvents_EnvAndCluster pins the ADR 0053 slice 4b exact-match
+// Env / Cluster filters: two agent-targeted events with distinct env/cluster
+// labels round-trip through Create and are isolated by ListAuditEvents.
+func TestListAuditEvents_EnvAndCluster(t *testing.T) {
+	s := NewStore()
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	seed := func(id, env, cluster string, ts time.Time) {
+		require.NoError(t, s.CreateAuditEvent(ctx, &types.AuditEvent{
+			ID: id, Timestamp: ts, Actor: "operator:alice", EventType: "x.y",
+			TargetType: "agent", TargetID: id, Action: "z", Env: env, Cluster: cluster,
+		}))
+	}
+	seed("e0", "prod", "us-east-1", base)                     // prod / us-east-1
+	seed("e1", "staging", "us-west-2", base.Add(1*time.Hour)) // staging / us-west-2
+
+	// Env filter isolates the prod row.
+	got, err := s.ListAuditEvents(ctx, types.AuditEventFilter{Env: "prod"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "e0", got[0].ID)
+	assert.Equal(t, "prod", got[0].Env)
+	assert.Equal(t, "us-east-1", got[0].Cluster)
+
+	// Cluster filter isolates the staging row.
+	got, err = s.ListAuditEvents(ctx, types.AuditEventFilter{Cluster: "us-west-2"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "e1", got[0].ID)
+
+	// A non-matching env returns nothing.
+	got, err = s.ListAuditEvents(ctx, types.AuditEventFilter{Env: "dev"})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

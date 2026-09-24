@@ -34,6 +34,23 @@ type AuditServiceImpl struct {
 	// explicitly so the field is never nil at runtime.
 	siem   siem.Dispatcher
 	logger *zap.Logger
+
+	// labelResolver, when set, resolves the descriptive cluster/environment
+	// labels for an agent-targeted audit event at append time (ADR 0053 slice
+	// 4b). It is best-effort and OPTIONAL: nil by default (the OSS wire only
+	// installs it in cmd/all-in-one), so the append path stays byte-for-byte
+	// unchanged until it is wired. The resolved env/cluster are DESCRIPTIVE,
+	// UNhashed columns — they are never folded into the tamper-evident hash
+	// chain (internal/audit/chain).
+	labelResolver func(ctx context.Context, agentID string) (env, cluster string)
+}
+
+// SetAgentLabelResolver installs the optional best-effort resolver that stamps
+// env/cluster on agent-targeted audit events at append time (ADR 0053 slice
+// 4b). Passing nil disables it. Inert until wired; the resolved labels are
+// descriptive and never enter the hash chain.
+func (s *AuditServiceImpl) SetAgentLabelResolver(f func(ctx context.Context, agentID string) (env, cluster string)) {
+	s.labelResolver = f
 }
 
 // SetSiemDispatcher swaps the SIEM fan-out target post-construction.
@@ -127,6 +144,13 @@ func (s *AuditServiceImpl) Record(ctx context.Context, entry AuditEntry) error {
 		Payload:    entry.Payload,
 		CreatedAt:  now,
 	}
+	// ADR 0053 slice 4b — best-effort stamp of descriptive cluster/environment
+	// labels on agent-targeted events. Only when a resolver is wired and the
+	// caller did not already supply them. Purely additive/descriptive: these
+	// columns are NOT part of the tamper-evident hash chain.
+	if s.labelResolver != nil && stored.TargetType == "agent" && stored.TargetID != "" && stored.Env == "" && stored.Cluster == "" {
+		stored.Env, stored.Cluster = s.labelResolver(ctx, stored.TargetID)
+	}
 	if err := s.appStore.CreateAuditEvent(ctx, stored); err != nil {
 		s.logger.Warn("failed to record audit event",
 			zap.String("event_type", entry.EventType),
@@ -189,6 +213,8 @@ func (s *AuditServiceImpl) List(ctx context.Context, filter AuditEventFilter) ([
 		TargetType: filter.TargetType,
 		TargetID:   filter.TargetID,
 		Actor:      filter.Actor,
+		Env:        filter.Env,
+		Cluster:    filter.Cluster,
 		Since:      filter.Since,
 		Until:      filter.Until,
 		Limit:      filter.Limit,
