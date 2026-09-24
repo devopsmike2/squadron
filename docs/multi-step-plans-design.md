@@ -1,4 +1,4 @@
-# Multi step plans — design
+# Multi step plans, design
 
 **Status:** design + storage shipped in v0.69. Engine sequencing and UI
 follow in subsequent releases. This doc captures the protocol so the
@@ -24,7 +24,7 @@ Today, each of those becomes a separate rollout. The approver
 approves three things instead of one. The audit timeline shows three
 unrelated arcs. A rollback halfway through requires three manual
 abort + rollback clicks. The cognitive load defeats the JARVIS
-framing — "the deputy proposed one fix" is the right shape; "the
+framing, "the deputy proposed one fix" is the right shape; "the
 deputy proposed three rollouts that you have to babysit" is not.
 
 Multi step plans give the proposer a way to package N sequenced
@@ -36,7 +36,7 @@ audit, and roll them back as a unit.
 A **plan** is a sequence of rollouts grouped by a shared `plan_id`.
 
 - `plan_id` is a string. Empty means "this rollout is standalone,"
-  exactly as v0.4–v0.68 behaved. Backwards compatible by design.
+  exactly as v0.4, v0.68 behaved. Backwards compatible by design.
 - `plan_step_index` is a 0 based int. Step 0 is the first rollout in
   the plan; step 1 follows step 0; etc.
 
@@ -66,7 +66,7 @@ A plan is approved or rejected as a unit. The approval gate sits on
   the same way it would a standalone rollout.
 - When step 0 reaches `succeeded`, the engine looks for the next step
   in the plan (`plan_id = ? AND plan_step_index = ? + 1`) and starts
-  it. Subsequent steps don't reapprove — the operator already approved
+  it. Subsequent steps don't reapprove, the operator already approved
   the plan when they approved step 0.
 - If the approver rejects step 0, the engine marks every step in the
   plan as `rejected`. The audit timeline shows one rejection event
@@ -81,7 +81,7 @@ the rest of the plan inherits the gate transitively.
 A plan that fails mid sequence rolls back as a unit.
 
 - If step N fails (aborts or transitions to `rolled_back`), the engine
-  marks steps N+1..end as `cancelled` — they never run, because the
+  marks steps N+1..end as `cancelled`, they never run, because the
   plan's prerequisite chain broke.
 - The engine also walks backwards through steps 0..N-1 (the steps
   that already succeeded) and creates rollback rollouts for each, in
@@ -99,7 +99,7 @@ aborted, rollback of step 1 ok, rollback of step 0 ok."
 If the operator clicks Roll back on a plan step that succeeded, the
 engine treats the click as "roll back the whole plan starting from
 this step." The single click triggers the same backwards walk as an
-automatic failure. The v0.60 RolledBackFromID field still applies —
+automatic failure. The v0.60 RolledBackFromID field still applies,
 each generated rollback rollout points back at the forward step it
 undoes.
 
@@ -112,17 +112,17 @@ all continue to fire per step.
 
 New plan level events:
 
-- `plan.created` — fires once when the proposer creates a plan. Payload
+- `plan.created`, fires once when the proposer creates a plan. Payload
   carries the `plan_id`, the step count, and the AI reasoning if the
   plan came from the proposer.
-- `plan.approved` — fires when step 0 transitions out of
+- `plan.approved`, fires when step 0 transitions out of
   `pending_approval`. Payload mirrors `rollout.approved` plus the
   `plan_id`.
-- `plan.rejected` — fires when step 0 is rejected. Payload carries
+- `plan.rejected`, fires when step 0 is rejected. Payload carries
   the rejection notes and the list of cancelled step ids.
-- `plan.completed` — fires when the final step reaches `succeeded`.
+- `plan.completed`, fires when the final step reaches `succeeded`.
   Payload carries the plan's total duration.
-- `plan.rolled_back` — fires when the backwards rollback walk
+- `plan.rolled_back`, fires when the backwards rollback walk
   completes, either from a mid sequence failure or an operator click.
   Payload carries the failing step's id and the list of rolled back
   step ids.
@@ -135,12 +135,12 @@ so SIEM rules that don't care about plans don't change.
 
 The engine work in subsequent releases will add:
 
-- `POST /api/v1/rollouts/plans` — creates a plan from a list of step
+- `POST /api/v1/rollouts/plans`, creates a plan from a list of step
   inputs. Wraps the existing `POST /api/v1/rollouts` Create logic
   N times under one transaction with the shared `plan_id` assigned.
-- `GET /api/v1/rollouts/plans/:id` — returns the plan envelope:
+- `GET /api/v1/rollouts/plans/:id`, returns the plan envelope:
   metadata plus the ordered list of rollouts.
-- `POST /api/v1/rollouts/plans/:id/approve` and `/reject` — convenience
+- `POST /api/v1/rollouts/plans/:id/approve` and `/reject`, convenience
   wrappers around the step 0 approval routes that the UI uses so it
   doesn't have to figure out which step is the gate.
 
@@ -152,8 +152,8 @@ routes; no new scope.
 
 The `rollouts` table gains two columns:
 
-- `plan_id TEXT` — nullable.
-- `plan_step_index INTEGER NOT NULL DEFAULT 0` — defaults to 0 so
+- `plan_id TEXT`, nullable.
+- `plan_step_index INTEGER NOT NULL DEFAULT 0`, defaults to 0 so
   existing rows migrate cleanly. The combination of empty `plan_id`
   + step 0 is the standalone rollout shape.
 
@@ -164,7 +164,7 @@ the service layer (`services.Rollout`, `toStorageRollout`,
 No engine logic uses these fields yet. A v0.69 Squadron stores a
 plan id if a future client populates it, and surfaces it back through
 the API, but no advancement happens between steps and no plan level
-events fire. That's deliberate — the engine work needs the storage
+events fire. That's deliberate, the engine work needs the storage
 contract stable first, and shipping the storage as its own release
 gives the design doc time to bake before the engine commits to a
 behavior that's hard to change later.
@@ -180,7 +180,7 @@ The wire shape on `RolloutInput` gains one optional field:
 
 ```json
 {
-  "name": "Step 1 — drop noisy attribute",
+  "name": "Step 1, drop noisy attribute",
   "group_id": "web-prod",
   "inline_config_snippet": "receivers: ...\nprocessors: ...\n",
   "stages": [{"mode": "percent", "percentage": 100}]
@@ -208,15 +208,15 @@ Rules:
   in the payload so SIEM consumers can correlate config creates
   to plan creates.
 
-Standalone rollout `Create` ignores the field — only `CreatePlan`
-interprets it. This keeps the v0.4–v0.77 single-rollout contract
+Standalone rollout `Create` ignores the field, only `CreatePlan`
+interprets it. This keeps the v0.4, v0.77 single-rollout contract
 byte-identical.
 
 Failure mode: if a snippet's materialization fails mid-plan
 (after K-1 steps were already created), the existing
 `CancelPlanFollowers` cleanup runs the same way as the v0.73
 partial-failure path. Orphan configs from earlier successful
-materializations stay in storage — they're cheap and a future GC
+materializations stay in storage, they're cheap and a future GC
 pass can clean them up. The audit trail tells the story.
 
 ## Out of scope for v0.69
@@ -229,12 +229,12 @@ pass can clean them up. The audit trail tells the story.
 
 Each of those is its own follow on release. The cleanest order:
 
-1. **v0.70 — engine sequencing.** The advancement logic + the
+1. **v0.70, engine sequencing.** The advancement logic + the
    `plan.*` audit events. Tests prove a 3 step plan auto advances and
    a mid plan failure walks rollbacks correctly.
-2. **v0.71 — API.** The plan create + approve endpoints. The UI gets
+2. **v0.71, API.** The plan create + approve endpoints. The UI gets
    a Plans tab on the Rollouts page.
-3. **v0.72 — Proposer plan output.** The AI proposer learns to emit
+3. **v0.72, Proposer plan output.** The AI proposer learns to emit
    multi step plans for cost spikes that need more than one fix. This
    is the JARVIS payoff: the deputy proposes a plan, the operator
    approves once, the engine handles the rest.
@@ -247,7 +247,7 @@ The grouping field approach beats the alternatives:
   requires the engine to do a join on every advancement check. The
   grouping field lets the engine answer "is there a next step?" with
   a single index lookup.
-- **A linked list (next_rollout_id on each rollout)** is fragile — a
+- **A linked list (next_rollout_id on each rollout)** is fragile, a
   broken link is silent, and reordering means rewriting pointers. The
   step index is order preserving by design and survives partial
   inserts.
@@ -263,24 +263,24 @@ the workflow. "These three rollouts are the cost spike fix"
 naturally maps to "these three rollouts share a plan id." No
 mental model upgrade required.
 
-## Action runner steps in plans — v0.80+ candidate arc
+## Action runner steps in plans, v0.80+ candidate arc
 
-As of v0.79 every plan step is a rollout — a config push. Plans
+As of v0.79 every plan step is a rollout, a config push. Plans
 cannot include action-runner calls (verify, notify, page on-call,
 integrity check). The dropped seeds from v0.79's stress corpus
 reframe are the natural seed corpus for this arc when it ships:
 
-- **drop_attribute_then_verify** — drop the attribute + action
+- **drop_attribute_then_verify**, drop the attribute + action
   runner verifies cost dropped >50% within 5 minutes
-- **rotate_exporter_then_observe** — switch destination + action
+- **rotate_exporter_then_observe**, switch destination + action
   runner verifies error rate stays below threshold
-- **enable_tail_sampling_with_fallback** — enable tail sampling +
+- **enable_tail_sampling_with_fallback**, enable tail sampling +
   action runner pages on-call if metrics-for-tail-sampled-count
   doesn't appear within 5 minutes
-- **multi_attribute_drop_with_integrity_check** — drop attributes +
+- **multi_attribute_drop_with_integrity_check**, drop attributes +
   action runner verifies metric integrity stays above threshold;
   failure triggers automatic Abort + backwards rollback
-- **cleanup_with_downstream_notification** — drop redundant log
+- **cleanup_with_downstream_notification**, drop redundant log
   lines + action runner notifies dependent team Slack channel
 
 Rough scope notes for the engine work:
@@ -302,10 +302,10 @@ Rough scope notes for the engine work:
 
 Best estimate: 4-6 release arc (engine + storage + audit + UI +
 proposer schema + bridge). The v0.79 design philosophy carries
-forward — sequence small slices, fail honestly when something
+forward, sequence small slices, fail honestly when something
 doesn't fit.
 
-## v0.89.14 (#630) — action steps in plans, slice 1
+## v0.89.14 (#630), action steps in plans, slice 1
 
 Plan steps gained a third kind alongside the v0.69 default `rollout`
 and the v0.79 nested `plan`: `action`. An action step dispatches a
@@ -371,9 +371,9 @@ The existing `action.dispatched` / `action.executed` / `action.failed`
 / `action.denied` event types are reused. Plan-embedded payloads
 gain three fields:
 
-- `plan_id` — the plan the dispatched action belongs to.
-- `plan_step_index` — the action's position within the plan.
-- `plan_step_origin` — `"plan_embedded"` for plan-embedded
+- `plan_id`, the plan the dispatched action belongs to.
+- `plan_step_index`, the action's position within the plan.
+- `plan_step_origin`, `"plan_embedded"` for plan-embedded
   requests, `"standalone"` for the existing v0.53 dispatch path.
 
 No new event types; no new audit targets. Filtering on
@@ -382,12 +382,12 @@ without joining tables.
 
 ### Cross-references
 
-- [#530 — Action runner steps in plans](./proposals/530-action-runner-steps-in-plans.md)
-  — the locked design this section promotes.
-- [Action runner design](./action-runner-design.md) — the signed-
+- [#530, Action runner steps in plans](./proposals/530-action-runner-steps-in-plans.md),
+the locked design this section promotes.
+- [Action runner design](./action-runner-design.md), the signed-
   action protocol the plan engine reuses.
-- [Action runner steps in plans — operator runbook](./action-runner-steps-in-plans.md)
-  — v0.89.16 operator-facing companion to this design section.
+- [Action runner steps in plans, operator runbook](./action-runner-steps-in-plans.md),
+v0.89.16 operator-facing companion to this design section.
   Covers prerequisites, the plan-author shape, the engine state
   machine, the failure walks, audit interpretation, and a worked
   example. Read this if you're the operator authoring a plan with
@@ -395,10 +395,10 @@ without joining tables.
 
 ## See also
 
-- [Rollouts](./rollouts.md) — the single rollout protocol plans build
+- [Rollouts](./rollouts.md), the single rollout protocol plans build
   on.
-- [Action runner design](./action-runner-design.md) — the parallel
+- [Action runner design](./action-runner-design.md), the parallel
   protocol for execution side actions; plans don't subsume action
   runs (those stay separate), but the audit grouping pattern is
   reused.
-- [Roadmap post v0.52](./roadmap-post-v0.52.md) — Move 3 framing.
+- [Roadmap post v0.52](./roadmap-post-v0.52.md), Move 3 framing.

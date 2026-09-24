@@ -1,4 +1,4 @@
-# Azure discovery — slice 1 design
+# Azure discovery, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. Second
 non-AWS discovery arc, following the GCP slice 1 close in v0.89.49.
@@ -36,7 +36,7 @@ in the GCP arc:
   arbitrary credential bytes (PAT, webhook secret, GCP SA JSON).
 - The audit payload carries provider-agnostic scope_id with the
   provider discriminator routing it to `account_id` (AWS) or
-  `project_id` (GCP) or — adding to that pattern — `subscription_id`
+  `project_id` (GCP) or, adding to that pattern, `subscription_id`
   (Azure).
 - The branch encoding `squadron/rec/<kind>/<scope>/<region>/<id>`
   works identically for any cloud. The `vm-` prefix on the
@@ -74,7 +74,7 @@ implementation instead of GCP's 6 chunks.
 Azure authentication has four real options. Reasoning parallels
 GCP's three options choice (gcp-discovery-slice1.md §3):
 
-### Option A — Service Principal with client_secret
+### Option A, Service Principal with client_secret
 
 Operator creates an Azure AD app registration, generates a client
 secret, grants the SP `Reader` role at the subscription level.
@@ -88,7 +88,7 @@ Credstore substrate exists. Wizard is straightforward: paste
 three strings + grant one role. Operators familiar with the GCP
 flow will recognize the shape.
 
-### Option B — Workload Identity Federation (WIF)
+### Option B, Workload Identity Federation (WIF)
 
 Operator configures a federated credential in the Azure AD app
 registration pointing at Squadron's deployment identity (OIDC
@@ -101,7 +101,7 @@ complexity, deployment-identity requirements, operators with
 sandbox subscriptions don't need it day one. Slice 2 ships it for
 production posture.
 
-### Option C — Managed Identity (if Squadron runs on Azure)
+### Option C, Managed Identity (if Squadron runs on Azure)
 
 Squadron running on an Azure VM / App Service / AKS pod can use
 its system-assigned or user-assigned managed identity to
@@ -113,7 +113,7 @@ option.
 Squadron to one specific deployment platform. Squadron's value
 is platform-agnostic.
 
-### Option D — Service Principal with certificate
+### Option D, Service Principal with certificate
 
 Instead of a client_secret, use a certificate as the SP
 credential. Better posture (private key never travels in
@@ -121,7 +121,7 @@ plaintext). More complex wizard (operator generates a cert,
 uploads to Azure AD, pastes the private key into Squadron).
 
 **Deferred to slice 2.** Same reasoning as deferring GCP keys
-vs WIF — security posture upgrade that doesn't fit slice 1
+vs WIF, security posture upgrade that doesn't fit slice 1
 operator simplicity.
 
 ## 4. Scanner interface
@@ -225,7 +225,7 @@ The wizard has 5 steps:
 
 **Step 1: Connect an Azure subscription**
 - Display name
-- Tenant ID (Azure AD tenant — UUID format validated)
+- Tenant ID (Azure AD tenant, UUID format validated)
 - Subscription ID (UUID format)
 - Location (optional, e.g. "eastus")
 
@@ -274,7 +274,7 @@ Each VM projects to `ComputeInstanceSnapshot`:
 
 The OS family detection bonus is worth noting: Azure exposes it
 in the same response as the VM listing, so we get it for free.
-AWS and GCP slice 1 leave OSFamily="unknown" — Azure does not.
+AWS and GCP slice 1 leave OSFamily="unknown", Azure does not.
 
 Recommendation kind: `vm-otel-tag`.
 
@@ -302,7 +302,7 @@ func (c *DiscoveryScanContext) ScopeID() string {
 System prompt extension lists the new `vm-otel-tag` kind targeting
 the `azurerm_virtual_machine` Terraform resource (or
 `azurerm_linux_virtual_machine` / `azurerm_windows_virtual_machine`
-for the newer split resources — pick based on the OSFamily field).
+for the newer split resources, pick based on the OSFamily field).
 
 Branch encoding stays the same shape. `vm-` prefix on the kind
 indicates Azure. Webhook handler payload composition:
@@ -354,7 +354,7 @@ rotation safer than GCP SA keys (no SA-without-key gap during
 rotation). Document this in the runbook as an advantage.
 
 **Reader role scope.** The wizard creates the SP with `Reader`
-at the subscription level — read access to ALL resources in the
+at the subscription level, read access to ALL resources in the
 subscription, not just VMs. Slice 1 accepts this for simplicity;
 slice 2 can document creating a custom role with only
 `Microsoft.Compute/virtualMachines/read` and
@@ -409,7 +409,7 @@ SP was scoped to a different subscription, validate returns
    ships this discrimination since Azure gives us OS for free.
 2. **Tag key normalization.** Azure tag keys are case-sensitive
    in storage but case-insensitive in comparison contexts. The
-   otel* detection rule uses lowercase comparison — confirm in
+   otel* detection rule uses lowercase comparison, confirm in
    testing that mixed-case keys round-trip cleanly.
 3. **Pagination cap.** A subscription with 10000+ VMs takes a
    while to enumerate. Slice 1 walks the full pager with no
@@ -452,19 +452,19 @@ SP was scoped to a different subscription, validate returns
 
 Tighter than GCP because the substrate is now twice-proven:
 
-- **Chunk 1: Foundation** — storage type + azureconnstore + SP
+- **Chunk 1: Foundation**, storage type + azureconnstore + SP
   sealing + audit constants. ~600-800 lines. v0.89.51.
-- **Chunk 2: Scanner** — internal/discovery/azure package +
+- **Chunk 2: Scanner**, internal/discovery/azure package +
   VM scanner + tests against mocked REST API. ~600-800 lines.
   v0.89.52.
-- **Chunk 3: API handlers** — HTTP endpoints + validate +
+- **Chunk 3: API handlers**, HTTP endpoints + validate +
   scan + tests. ~700-900 lines. v0.89.52 (parallel with chunk 2).
-- **Chunk 4: UI page + wizard** — DiscoveryAzure.tsx + wizard
+- **Chunk 4: UI page + wizard**, DiscoveryAzure.tsx + wizard
   data + tests. ~800-1000 lines. v0.89.53.
-- **Chunk 5: Proposer integration** — Provider="azure" path +
+- **Chunk 5: Proposer integration**, Provider="azure" path +
   vm-otel-tag kind + branch encoding refresh + ListDiscoveryVerdicts
   third OR-match. ~500-700 lines. v0.89.53 (parallel with chunk 4).
-- **Chunk 6: Runbook** — discovery-azure-first-time-setup.md.
+- **Chunk 6: Runbook**, discovery-azure-first-time-setup.md.
   ~400-600 lines. v0.89.54.
 
 Total estimated 4-5 release tags across 6 chunks (chunks 2+3 and

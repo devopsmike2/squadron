@@ -1,4 +1,4 @@
-# Event source tier slice 2 — per-message propagation
+# Event source tier slice 2, per-message propagation
 
 **Status:** design doc, locked for slice 2 implementation.
 Builds directly on event source tier slice 1 (v0.89.99
@@ -17,7 +17,7 @@ context actually propagates through the event payload.
 ## 1. Problem
 
 Slice 1 of event source tier ships detection at the SOURCE
-level — does this EventBridge bus / Pub/Sub topic / Service
+level, does this EventBridge bus / Pub/Sub topic / Service
 Bus namespace / OCI Stream have the cloud-native trace
 primitive enabled? That's good, but it's incomplete.
 
@@ -25,7 +25,7 @@ A topic with `tracingConfig.samplingRatio = 1.0` set tells
 you GCP Pub/Sub is sampling publish operations into Cloud
 Trace. It does NOT tell you whether every message published
 to that topic carries `googclient_OpenTelemetryTraceparent`
-in its attributes — without that header, the downstream
+in its attributes, without that header, the downstream
 consumer's spans look like fresh-trace orphans even though
 the publish-side primitive is on.
 
@@ -92,7 +92,7 @@ orphans.
 
 ## 3. Per-cloud detection surfaces
 
-### 3.1 AWS EventBridge — per-rule propagation config
+### 3.1 AWS EventBridge, per-rule propagation config
 
 API: `events:DescribeRule` (already in slice 1's required
 actions). The rule's `EventPattern` + per-target
@@ -105,7 +105,7 @@ Detection logic:
   full event flows through to the target including the X-Ray
   trace header in `detail` (when present). PROPAGATION
   PRESERVED.
-- **Rule has `InputPath = "$"`**: same as no path —
+- **Rule has `InputPath = "$"`**: same as no path,
   full event. PROPAGATION PRESERVED.
 - **Rule has `InputPath = "$.detail"` (or similar narrow
   path)**: only the `detail` field flows, but the X-Ray
@@ -126,7 +126,7 @@ when ALL its rules have propagation preserved (or there are
 no rules). False if any rule breaks propagation. The
 recommendation kind targets the bus + offending rule names.
 
-### 3.2 GCP Pub/Sub — topic schema + subscription delivery
+### 3.2 GCP Pub/Sub, topic schema + subscription delivery
 
 APIs: `pubsub.googleapis.com/v1/projects/*/topics/*`
 (already), plus `pubsub.googleapis.com/v1/projects/*/schemas/*`
@@ -134,7 +134,7 @@ to fetch attached schemas, plus
 `pubsub.googleapis.com/v1/projects/*/subscriptions` to
 inspect subscription configs.
 
-Detection logic — **topic schema axis:**
+Detection logic, **topic schema axis:**
 
 - **Topic has no `schemaSettings`**: no schema enforcement,
   publisher controls attribute presence. PROPAGATION
@@ -149,7 +149,7 @@ Detection logic — **topic schema axis:**
     POTENTIALLY BROKEN. Recommendation:
     `pubsub-schema-includes-traceparent`.
 
-Detection logic — **subscription delivery axis:**
+Detection logic, **subscription delivery axis:**
 
 - For each subscription on the topic, check
   `pushConfig.attributes` and `bigqueryConfig` /
@@ -162,7 +162,7 @@ This is a per-topic detection that may emit two recommendation
 kinds. The HasPropagationConfig axis is true when both
 sub-axes are satisfied.
 
-### 3.3 Azure Service Bus — namespace shared access policy
+### 3.3 Azure Service Bus, namespace shared access policy
 
 API: `Microsoft.ServiceBus/namespaces/{name}/authorizationRules`
 via Resource Manager (no new IAM beyond the existing Reader
@@ -190,7 +190,7 @@ least one `Send`-capable rule AND no property-restricting
 RBAC role, PROPAGATION PRESERVED. Otherwise emit the
 `servicebus-policy-preserves-traceparent` recommendation.
 
-### 3.4 OCI Streaming — retention + Kafka header config
+### 3.4 OCI Streaming, retention + Kafka header config
 
 API: `streaming.GetStream` (already in slice 1's calls).
 OCI Streaming uses Kafka protocol on the wire; Kafka
@@ -208,7 +208,7 @@ Detection logic:
   PROPAGATION POTENTIALLY BROKEN. Recommendation:
   `streaming-config-preserves-headers`.
 
-For slice 2 this is the simplest detection — a single
+For slice 2 this is the simplest detection, a single
 threshold check. Slice 3 may add consumer-group-level
 detection.
 
@@ -286,7 +286,7 @@ flow through the existing JSON marshalling. No new endpoints.
 ```
 
 The trace_coverage endpoint gains a `propagation_pct` field
-on the per-provider response — % of event sources whose
+on the per-provider response, % of event sources whose
 HasPropagationConfig is true.
 
 ## 7. UI
@@ -298,7 +298,7 @@ seen" columns:
 - ✓ if `has_propagation_config` is true
 - ✗ if false (the row is also flagged with a small hover
   tooltip showing the first `propagation_notes` entry)
-- — (em dash) if there are no rules / no schema / no
+-, (em dash) if there are no rules / no schema / no
   subscriptions to evaluate
 
 Clicking the ✗ opens a side panel showing all
@@ -326,7 +326,7 @@ eventbridge-rule-preserves-trace          pubsub-schema-includes-traceparent    
 ```
 
 Webhook routing extends the existing prefix matchers from
-slice 1 — no new prefixes; the new kinds match the existing
+slice 1, no new prefixes; the new kinds match the existing
 `eventbridge-` / `pubsub-` / `servicebus-` / `streaming-`
 prefixes already in place.
 
@@ -425,7 +425,7 @@ Total: 3 release tags. Parallel scanner fan-out for chunks
 **No new external surface.** Slice 2 reuses the existing
 slice 1 API calls. EventBridge `DescribeRule` is already
 in the IAM template. Pub/Sub `schemas.get` requires
-`pubsub.schemas.get` — slight permission expansion. Service
+`pubsub.schemas.get`, slight permission expansion. Service
 Bus `authorizationRules` listing requires the existing
 Reader role. OCI Streaming retention is read on the same
 GetStream call.
@@ -481,7 +481,7 @@ holds:
   (diagnosis, propagation gaps) → slice 3 (consumer-side
   correlation, deferred).
 
-The universal claim doesn't grow a new tier or new verb —
+The universal claim doesn't grow a new tier or new verb,
 slice 2 makes the EXISTING claim more rigorous. Operators
 who run Squadron's discovery against a fleet now get an
 honest answer at TWO levels:
@@ -502,7 +502,7 @@ concrete answer:
 > let the full event through."
 
 This is exactly the diagnosis operators struggle to find
-themselves — buried in EventBridge rule configs, hidden in
+themselves, buried in EventBridge rule configs, hidden in
 schema definitions, never surfaced by the cloud console's
 default views. Slice 2 makes Squadron the place where this
 diagnosis happens.

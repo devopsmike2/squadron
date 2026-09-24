@@ -1,4 +1,4 @@
-# Serverless tier slice 1 — fourth tier across all four clouds
+# Serverless tier slice 1, fourth tier across all four clouds
 
 **Status:** design doc, locked for slice 1 implementation. Builds
 on the existing compute / database / kubernetes tier work
@@ -40,7 +40,7 @@ matters because:
   Cloud all have first-class serverless integration, but they
   ship as SaaS pricing per-span. Squadron's OSS positioning
   is "the four-cloud control plane that respects the
-  ephemerality" — that requires shipping the serverless
+  ephemerality", that requires shipping the serverless
   surface natively.
 
 Slice 1 of serverless tier adds a fourth tier to Squadron's
@@ -87,16 +87,16 @@ and kubernetes tier slice 2 arcs.
   control plane lists as serverless; non-native deployments
   are slice 3+.
 - **Step Functions / Workflows / Logic Apps / OCI
-  Resource Manager** — orchestration tier. Slice 2+.
+  Resource Manager**, orchestration tier. Slice 2+.
 - **EventBridge / Cloud Tasks / Azure Service Bus / OCI
-  Streams** — event source tier. Slice 2+.
+  Streams**, event source tier. Slice 2+.
 
 ## 3. Per-cloud detection surfaces
 
 Five serverless surfaces total. Each gets a per-cloud
 serverless detection axis enumerated below. The recommendation
 kinds follow the same `{primitive}-otel-{tier}` pattern as the
-existing compute/db/k8s kinds — except for the serverless tier
+existing compute/db/k8s kinds, except for the serverless tier
 the kind value is `{primitive}-otel-serverless` (e.g.
 `lambda-otel-layer`, `cloudrun-otel-sidecar`).
 
@@ -116,7 +116,7 @@ Detection axes:
 
 Coverage caveat: a Lambda function with X-Ray active tracing
 but no ADOT layer emits X-Ray segments (visible in AWS console)
-but NO OTel spans — Squadron's traceindex would see zero.
+but NO OTel spans, Squadron's traceindex would see zero.
 Slice 1's last_seen_at column accurately reflects "no OTel
 spans seen" even when X-Ray is active. The runbook explains
 this.
@@ -202,7 +202,7 @@ CREATE INDEX IF NOT EXISTS idx_serverless_conn ON serverless_instance(connection
 ```
 
 Schema version bumps to v11. Migration adds the table without
-backfilling — pre-slice-1 scans don't have serverless data.
+backfilling, pre-slice-1 scans don't have serverless data.
 
 ## 5. Scanner contract
 
@@ -278,7 +278,7 @@ aggregation from v0.89.61) extends the per-provider shape:
       "database_count": N,
       "cluster_count": N,
       "serverless_count": N,  // new
-      "instrumented_count": N,  // unchanged — sums across tiers
+      "instrumented_count": N,  // unchanged, sums across tiers
       ...
     },
     ...
@@ -353,7 +353,7 @@ v0.89.66 (database tier slice 2 chunk 5) and v0.89.71
 1. Storage schema v10 → v11 with serverless_instance table.
 2. ServerlessInstanceSnapshot struct on scanner package.
 3. ScanServerless methods on all 4 provider scanners (5
-   surfaces total — Lambda + Cloud Run + Cloud Functions +
+   surfaces total, Lambda + Cloud Run + Cloud Functions +
    Azure Functions + OCI Functions).
 4. Existing per-provider scan/inventory endpoints extended.
 5. Discovery summary + trace_coverage endpoints extended.
@@ -404,28 +404,28 @@ composes cleanly here.
 
 ## 11. Acceptance tests
 
-1. **AWS Lambda scanner — function with X-Ray Active and
+1. **AWS Lambda scanner, function with X-Ray Active and
    ADOT layer.** Mock Lambda API returning a function with
    `tracing_config.mode = "Active"` and a layer ARN starting
    with the ADOT prefix. Assert: snapshot has
    HasTraceAxis=true AND HasOTelDistro=true.
-2. **AWS Lambda scanner — function with X-Ray Active only,
+2. **AWS Lambda scanner, function with X-Ray Active only,
    no ADOT.** Same but no ADOT layer. Assert: HasTraceAxis=true
    AND HasOTelDistro=false.
-3. **AWS Lambda scanner — function with neither.** Assert:
+3. **AWS Lambda scanner, function with neither.** Assert:
    both false.
-4. **GCP Cloud Run scanner — service with Cloud Trace
+4. **GCP Cloud Run scanner, service with Cloud Trace
    annotation.** Assert: HasTraceAxis=true.
-5. **GCP Cloud Run scanner — service with OTel sidecar.**
+5. **GCP Cloud Run scanner, service with OTel sidecar.**
    Container list includes `otel-collector` name. Assert:
    HasOTelDistro=true.
-6. **GCP Cloud Functions scanner — function with OTel layer.**
+6. **GCP Cloud Functions scanner, function with OTel layer.**
    Assert: HasOTelDistro=true.
-7. **Azure Functions scanner — function with App Insights.**
+7. **Azure Functions scanner, function with App Insights.**
    Assert: HasTraceAxis=true.
-8. **Azure Functions scanner — function with OTel distro env.**
+8. **Azure Functions scanner, function with OTel distro env.**
    Assert: HasOTelDistro=true.
-9. **OCI Functions scanner — function with APM enabled.**
+9. **OCI Functions scanner, function with APM enabled.**
    Assert: HasTraceAxis=true.
 10. **Storage migration v10→v11 idempotent.** Run migration
     twice. Assert: no error, table exists, no data loss on
@@ -457,7 +457,7 @@ the new APIs). The new threat surface is:
 template grows to cover the new serverless API calls. For
 AWS that's `lambda:ListFunctions` +
 `lambda:GetFunctionConfiguration`. These are read-only and
-sit on the existing IAM upgrade flow (#590) — operators get
+sit on the existing IAM upgrade flow (#590), operators get
 the in-product upgrade path documentation.
 
 **Lambda layer ARN whitelist drift.** Slice 1 detects the
@@ -511,5 +511,5 @@ Serverless is the canonical "where did my trace go" surface;
 the trace integration arc + span quality arc already in place
 make this the natural next step. The Tuesday LinkedIn drumbeat
 narrative now has a concrete answer to the question every
-serverless team asks: "did my Lambda cold-start eat the span?"
-— Squadron checks, surfaces, and drafts the fix.
+serverless team asks: "did my Lambda cold-start eat the span?",
+Squadron checks, surfaces, and drafts the fix.

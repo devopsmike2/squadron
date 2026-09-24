@@ -41,7 +41,7 @@ since their last evaluation:
 3. If the comparison is true, the rule is **firing**:
    - The first firing dispatches the webhook (if `webhook_url` is set).
    - Subsequent firings while the rule stays in the firing state are
-     suppressed — no duplicate webhooks per evaluation.
+     suppressed, no duplicate webhooks per evaluation.
 4. If the comparison is false and the rule was previously firing, the
    rule **resolves**: an `alert.resolved` audit event is recorded and a
    resolve payload is dispatched to the webhook.
@@ -94,7 +94,7 @@ curl -X POST http://localhost:8080/api/v1/alerts/rules \
 ```
 
 Fires when more than 5 agents are in the drifted state. Useful as a fleet
-health alarm — drift count climbing usually means a rollout went wrong or
+health alarm, drift count climbing usually means a rollout went wrong or
 a deployment pipeline is fighting Squadron.
 
 ### Offline agents

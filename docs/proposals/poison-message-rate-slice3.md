@@ -1,4 +1,4 @@
-# Poison-message rate analysis slice 3 — Queue tier per-axis depth (post-lag)
+# Poison-message rate analysis slice 3, Queue tier per-axis depth (post-lag)
 
 **Status:** SHIPPED at v0.89.172 (this doc).
 **Implementation chunks queued:** v0.89.173 through v0.89.176.
@@ -15,7 +15,7 @@ reaching the DLQ? A queue can have:
 - DLQ configured (slice 1 axis: green).
 - Consumer lag in band (slice 2 axis: green).
 - BUT a continuously high poison-message rate that drains
-  hours of consumer-side processing budget into the DLQ —
+  hours of consumer-side processing budget into the DLQ,
   the operator never sees the leading indicator unless
   Squadron surfaces the poison-message rate explicitly.
 
@@ -50,7 +50,7 @@ Slice 3 ships ONE detection rule with two-band semantics:
 A queue with poison-message rate over the rolling 1-hour
 window exceeding the heuristic band high threshold is in
 a poison-message-surge state. The signal is substrate-
-dependent — Squadron needs the per-queue DLQ depth delta
+dependent, Squadron needs the per-queue DLQ depth delta
 over time, which is only available via cloud-specific
 metrics APIs (CloudWatch / Cloud Monitoring / Azure
 Monitor / OCI Monitoring).
@@ -61,7 +61,7 @@ MetricQuerier integration is a future slice 4+ chunk that
 explicitly extends each cloud scanner.
 
 Slice 3 therefore ships chunks 1-4 as HONEST FRAMING
-across ALL FOUR CLOUDS — the §3.1 managed-primitive-
+across ALL FOUR CLOUDS, the §3.1 managed-primitive-
 absence pattern variant where Squadron CAN detect the
 DLQ configuration (slice 1) but CANNOT compute the rate
 from the scanner-pass scope alone.
@@ -74,13 +74,13 @@ NOT yet compute the rate ourselves." This is the THIRD
 variant in the honest-framing taxonomy:
 
 - §3.1 (DLQ slice 1 chunk 2; lag slice 2 chunk 2):
-  managed-primitive-absence — the cloud has no managed
+  managed-primitive-absence, the cloud has no managed
   primitive for the axis.
 - §3.2 (DLQ slice 1 chunk 3; lag slice 2 chunk 3):
-  scanner-coverage-gap — the field exists but at an
+  scanner-coverage-gap, the field exists but at an
   unwalked sub-resource.
 - **§3.3 (NEW, slice 3 all chunks):** substrate-metric-
-  dependence — the field is queryable from cloud
+  dependence, the field is queryable from cloud
   metrics, but slice 3 does not yet integrate with the
   per-cloud MetricQuerier substrate.
 
@@ -97,11 +97,11 @@ NO migration. The existing `event_source_instance` table
 has the right shape. Slice 3 records the per-queue poison
 rate axis as informational Detail bag entries:
 
-- `poison_rate_per_hour` (int) — the per-cloud poison-
+- `poison_rate_per_hour` (int), the per-cloud poison-
   message rate over the rolling 1-hour window when
   readable; -1 sentinel when honest framing applies
   (slice 3 is always -1).
-- `poison_rate_high_band` (bool) — true when
+- `poison_rate_high_band` (bool), true when
   `poison_rate_per_hour` exceeds the heuristic threshold
   `PoisonRatePerHourHighThreshold = 60` (1 per minute);
   false when honest framing applies.
@@ -141,7 +141,7 @@ servicebus-poison-rate-monitor-add (§3.3 honest framing)
 queues-poison-rate-monitor-add     (§3.3 honest framing)
 ```
 
-Webhook routing extends THE EXISTING per-cloud prefixes —
+Webhook routing extends THE EXISTING per-cloud prefixes,
 NO new prefixes needed.
 
 Reasoning template for `sqs-poison-rate-monitor-add`:
@@ -150,11 +150,11 @@ Reasoning template for `sqs-poison-rate-monitor-add`:
 > (slice 1 axis: green). The poison-message RATE over time
 > is a leading indicator for schema drift, downstream
 > dependency outages, and code regressions on a specific
-> message shape — high rates exhaust consumer-side
+> message shape, high rates exhaust consumer-side
 > processing budget before reaching the DLQ.
 >
 > SQUADRON CANNOT YET COMPUTE THIS RATE FROM THE SCANNER
-> PASS — the per-queue ApproximateNumberOfMessages on the
+> PASS, the per-queue ApproximateNumberOfMessages on the
 > DLQ over time requires a CloudWatch GetMetricStatistics
 > integration that a future slice will add.
 >
@@ -232,18 +232,18 @@ Per-cloud acceptance tests ride in each chunk:
 
 6. **All 4 clouds' poison axes surface generically via
    the existing event_source_count + Detail bag**.
-7. **Cold-start parity preserved** — proposer prompts
+7. **Cold-start parity preserved**, proposer prompts
    byte-identical to v0.89.171 when no poison rows trigger
    recommendations.
 
 ## 12. Cross-references
 
-- [DLQ configuration analysis slice 1](./dlq-configuration-analysis-slice1.md) —
+- [DLQ configuration analysis slice 1](./dlq-configuration-analysis-slice1.md),
   the first per-axis depth slice.
-- [Consumer lag detection slice 2](./consumer-lag-detection-slice2.md) —
+- [Consumer lag detection slice 2](./consumer-lag-detection-slice2.md),
   the second per-axis depth slice.
-- [Cold-start latency slice 1 design doc](./cold-start-latency-analysis-slice1.md) —
+- [Cold-start latency slice 1 design doc](./cold-start-latency-analysis-slice1.md),
   the substrate MetricQuerier work that slice 4+ will
   reuse for closing the §3.3 honest framing.
-- [Event source tier — operator guide](../event-source-tier-operator-guide.md) —
+- [Event source tier, operator guide](../event-source-tier-operator-guide.md),
   the runbook this slice extends.

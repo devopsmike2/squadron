@@ -1,11 +1,11 @@
-# Async discovery recommendations — design (Fix #3)
+# Async discovery recommendations, design (Fix #3)
 
 ## Problem
 
 `POST /discovery/{cloud}/connections/:id/recommendations` calls the AI
 proposer (Anthropic, `claude-sonnet-4-6`, `max_tokens=8192`) **inline** and
 holds the HTTP request open until it returns. For discovery-sized plans the
-model takes 30s–120s+ (measured: a direct probe ran >2 min). The request
+model takes 30s, 120s+ (measured: a direct probe ran >2 min). The request
 times out (`Client.Timeout exceeded while awaiting headers`) and the operator
 sees a failure even though the model is working. Confirmed in the real-AWS
 e2e; the synchronous design is the root cause, not any single timeout value.
@@ -24,13 +24,13 @@ until the job is `succeeded` (carries the recommendations payload) or
 |--------|---------|
 | **Explicit poll (chosen)** | Robust behind any reverse proxy; no long-held connections; trivially testable; works with any client. Standard REST async. |
 | SSE / streaming | Nicer "live" feel but adds proxy-buffering failure modes, a long-held connection (the exact thing we're removing), and harder tests. The model gives no real progress signal to stream anyway. |
-| Long-poll | Just a fragile middle ground — still holds the connection. |
+| Long-poll | Just a fragile middle ground, still holds the connection. |
 
 ### UX: honest "pending" state, not a fake progress bar
 
 The model exposes no progress percentage, so a progress bar would be
 invented. The UI shows a **spinner + "Generating recommendations… this can
-take up to ~2 minutes"** and **auto-polls** (~2s interval) — no manual
+take up to ~2 minutes"** and **auto-polls** (~2s interval), no manual
 refresh button, no fabricated progress. When the job lands it swaps to the
 Recommendations view. On failure it shows the humanized error with retry.
 (This is the more honest of the two options the brief flagged, so it ships
@@ -56,7 +56,7 @@ multi-replica deployment without sticky routing, the poll may `404` and the
 client re-submits. That is acceptable: the propose call is **idempotent and
 read-only** (it writes no cloud state; it only drafts Terraform), and Squadron
 OSS runs single-replica by default. Persisting jobs to the app DB is a
-straightforward future extension if multi-replica becomes common — called out,
+straightforward future extension if multi-replica becomes common, called out,
 not built, to keep this change scoped.
 
 ## Chunks

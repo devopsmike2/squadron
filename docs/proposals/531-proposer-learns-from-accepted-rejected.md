@@ -1,4 +1,4 @@
-# #531 — Proposer learns from accepted/rejected proposals
+# #531, Proposer learns from accepted/rejected proposals
 
 **Status:** slice 1 SHIPPED across v0.89.17 (engine + storage +
 prompt + audit), v0.89.18 (API + UI surface for the per-group
@@ -30,7 +30,7 @@ The cost-spike proposer
 rollout/plan, the operator approves/rejects it via
 `RolloutService.Approve`/`Reject`
 ([`rollout_service_impl.go:1242,1264`](../../internal/services/rollout_service_impl.go)),
-audit records `rollout.approved`/`rollout.rejected` — and the next
+audit records `rollout.approved`/`rollout.rejected`, and the next
 call to the proposer for the same group makes the same mistakes
 again. Signal evaporates. Slice 1 closes the loop by feeding prior
 verdicts back as in-context few-shot examples on the next call.
@@ -40,7 +40,7 @@ verdicts back as in-context few-shot examples on the next call.
 - Fine-tuning, distillation, RAG / embedding stores. Prompt-only.
 - Automatic prompt evolution / self-edit of the system prompt.
 - Cross-tenant / cross-Squadron learning. Examples stay local.
-- Cross-group sharing (slice 1: same-group only — see §5).
+- Cross-group sharing (slice 1: same-group only, see §5).
 - RL-style reward weighting.
 - Discovery proposer integration (follow-on, separate spec).
 - "Preferences" UI editor. Ground truth = past verdicts, nothing
@@ -48,22 +48,22 @@ verdicts back as in-context few-shot examples on the next call.
 
 ## 3. Signal source
 
-Every datum is on the existing `Rollout` row — no new persistence
+Every datum is on the existing `Rollout` row, no new persistence
 for the signal itself.
 
 - **Verdict fields**: `ApprovedBy/ApprovedAt`, `RejectedBy/RejectedAt`,
   `ApprovalNotes`
-  ([`rollout_service.go:312–316`](../../internal/services/rollout_service.go)),
+  ([`rollout_service.go:312-316`](../../internal/services/rollout_service.go)),
   set by `Approve`/`Reject`
   ([`rollout_service_impl.go:1242,1264`](../../internal/services/rollout_service_impl.go)).
 - **Provenance**: `ProposedBy="ai"` filter
   ([`rollout_service.go:377`](../../internal/services/rollout_service.go)),
   `ProposalReasoning`, `EvidenceRefs`
-  ([`rollout_service.go:338–340`](../../internal/services/rollout_service.go)).
+  ([`rollout_service.go:338-340`](../../internal/services/rollout_service.go)).
 - **Audit**: `proposal.created`
   ([`bridge.go:326`](../../internal/proposer/bridge.go)),
   `rollout.approved`/`rollout.rejected`
-  ([`audit_service.go:135–137`](../../internal/services/audit_service.go),
+  ([`audit_service.go:135-137`](../../internal/services/audit_service.go),
   [`rollout_service_impl.go:1248,1294`](../../internal/services/rollout_service_impl.go)).
 
 ## 4. Storage
@@ -97,7 +97,7 @@ deterministic given `(group_id, now)`:
 - **Scope**: same `group_id` only.
 - **Recency**: `since = now - 30d`.
 - **Mix**: ≤2 approved + ≤2 rejected, newest first within each
-  bucket. Rejections weighted higher — denser "don't do this again"
+  bucket. Rejections weighted higher, denser "don't do this again"
   signal.
 - **Cold start**: zero rows → empty block, prompt identical to v0.79.
 - **Cap**: each example's reasoning passes through
@@ -121,7 +121,7 @@ Prior verdicts for this group (operator decisions on past AI proposals):
 
 [REJECTED] rollout_id=rlt_7q12
   reasoning: dropped k8s.pod.uid plus k8s.namespace in one step.
-  rejecter_notes: "too aggressive — split into a plan, drop one attr per step"
+  rejecter_notes: "too aggressive, split into a plan, drop one attr per step"
 
 [REJECTED] rollout_id=rlt_6m08
   reasoning: 100% rollout in a single stage, no canary.
@@ -129,7 +129,7 @@ Prior verdicts for this group (operator decisions on past AI proposals):
 
 Use these as preference signal. Match the shape of approved
 proposals; avoid the shape of rejected ones. Do NOT cite these
-rollout_ids in your evidence — they're operator history, not
+rollout_ids in your evidence, they're operator history, not
 evidence for this spike.
 ```
 
@@ -146,13 +146,13 @@ Pick: **per-group flag**, not per-rollout.
   ([`internal/ai/redact.go`](../../internal/ai/redact.go)) before
   hitting the prompt.
 - Inline config snippets from rejected plans are deliberately
-  excluded — only reasoning + notes ship. Config bodies are where
+  excluded, only reasoning + notes ship. Config bodies are where
   the sensitive material lives.
 
 ## 8. Audit trail
 
 Extend the `proposal.created` payload
-([`bridge.go:332–343`](../../internal/proposer/bridge.go)) with:
+([`bridge.go:332-343`](../../internal/proposer/bridge.go)) with:
 
 ```go
 "verdict_examples_used": []string{"rlt_8ax9", "rlt_7q12", "rlt_6m08"},
@@ -190,7 +190,7 @@ the field.
 2. **Empty approval notes.** Most operators won't type a reason on
    approve. Include unannotated approvals (signal: "shape was
    fine") or only annotated rejections?
-3. **Per-rollout suppression** — slice 2, or cheap enough to fold
+3. **Per-rollout suppression**, slice 2, or cheap enough to fold
    in? `Rollout.ExcludeFromLearning` is one column.
 4. **Plan-kind rejections**: include per-step reasoning or just the
    top-level `ProposalReasoning`? Slice 1 says top-level; revisit

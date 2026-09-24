@@ -1,4 +1,4 @@
-# Span quality — operator guide
+# Span quality, operator guide
 
 This is the operator-facing runbook for the v0.89.84 through
 v0.89.88 span quality slice 1 arc. Squadron's traceindex now
@@ -9,14 +9,14 @@ spans with placeholder values in required attributes.
 
 The strategic frame: trace integration slice 1 shipped
 **visibility** (Discovery dashboard panel + Last seen column).
-Slice 2 shipped **action** for case (a) — SDK not deployed.
-Span quality slice 1 ships **action** for cases (b) — exporter
-misconfigured — and (c) — attribute mismatch. After this arc,
+Slice 2 shipped **action** for case (a), SDK not deployed.
+Span quality slice 1 ships **action** for cases (b), exporter
+misconfigured, and (c), attribute mismatch. After this arc,
 Squadron can detect all three failure modes the trace-emission
 recommendations reasoning text described, and draft the IaC
 PR for each.
 
-For a first test, the walkthrough takes about 15 minutes —
+For a first test, the walkthrough takes about 15 minutes,
 most of it spent confirming your OTel collectors are emitting
 spans that Squadron receives. For a production deployment with
 high-volume OTel coverage already in place, the SPAN QUALITY
@@ -71,7 +71,7 @@ narrow:
 
 ## The three pathologies
 
-### Orphan spans (case b — exporter misconfigured)
+### Orphan spans (case b, exporter misconfigured)
 
 A span is **orphan** when its `parent_span_id` is non-zero but
 no span with that span_id has been observed in the same trace
@@ -80,7 +80,7 @@ within the last 5 minutes. Common causes:
 - **Broken HTTP context propagation.** The calling service
   emitted a span. The called service's library didn't read
   the W3C traceparent header. The called service's span has
-  a parent_span_id pointing at the caller's span — but the
+  a parent_span_id pointing at the caller's span, but the
   called service is in a fresh trace_id, so the parent never
   resolves.
 - **Queue header stripping.** SQS without
@@ -93,7 +93,7 @@ within the last 5 minutes. Common causes:
 A resource with > 10% of its spans orphaned in the last hour
 fires a `span-quality-orphan-trace` recommendation.
 
-### Missing required attributes (case c — attribute mismatch)
+### Missing required attributes (case c, attribute mismatch)
 
 Each tier has a fixed set of required attributes the
 recommendation logic depends on:
@@ -123,7 +123,7 @@ A resource with > 25% of its spans missing required attributes
 in the last hour fires a `span-quality-missing-resource-attrs`
 recommendation.
 
-### Attribute placeholder/mismatch (case c — different flavor)
+### Attribute placeholder/mismatch (case c, different flavor)
 
 A static list of known placeholder values per attribute:
 
@@ -147,7 +147,7 @@ listed placeholder values. The most common causes:
 
 A resource with > 5% of its spans matching a placeholder in
 the last hour fires a `span-quality-attribute-mismatch`
-recommendation. The 5% threshold is intentionally low — even
+recommendation. The 5% threshold is intentionally low, even
 small fractions of placeholders indicate the SDK is doing
 something wrong.
 
@@ -159,7 +159,7 @@ noisy recommendations on low-traffic resources (the resource
 that emitted 4 spans this hour, all orphan, would otherwise
 trigger a recommendation despite being statistical noise).
 
-Slice 2 may tune this threshold per tier — a database tier
+Slice 2 may tune this threshold per tier, a database tier
 sees fewer spans than a compute tier, so the floor may need
 to be lower for db.
 
@@ -220,7 +220,7 @@ per-cloud pattern the operator can merge:
 ## The Discovery dashboard SPAN QUALITY panel
 
 Below the existing TRACE COVERAGE panel, slice 1 adds a SPAN
-QUALITY panel — a 3-column health grid showing:
+QUALITY panel, a 3-column health grid showing:
 
 ```
   Orphan trace      Missing attrs    Attribute mismatch
@@ -242,7 +242,7 @@ Each Inventory row across the existing 12 surfaces (4 clouds ×
 - **Yellow dot:** 1 issue class triggering (orphan OR missing
   attrs OR mismatch).
 - **Red dot:** 2+ issue classes triggering.
-- **Gray dot:** no spans observed in the window — not enough
+- **Gray dot:** no spans observed in the window, not enough
   data to evaluate.
 
 Hovering shows a tooltip with the specific percentages:
@@ -250,7 +250,7 @@ Hovering shows a tooltip with the specific percentages:
 > Orphan 3.2%, Missing attrs 6.3%, Mismatch 2.0%
 
 The dot color thresholds are NOT the same as the recommendation
-firing thresholds — a 4% orphan rate would render a yellow dot
+firing thresholds, a 4% orphan rate would render a yellow dot
 even though it doesn't fire a recommendation (the threshold for
 a recommendation is 10%). The dot is your "early warning";
 the recommendation is your "fix it" signal.
@@ -262,7 +262,7 @@ gains a sibling on the AWS Recommendations tab:
 
 > [ Show only span-quality ]
 
-Same toggle behavior — yellow when active, slate otherwise.
+Same toggle behavior, yellow when active, slate otherwise.
 Clicking filters the recommendations list to only
 `span-quality-*` kinds.
 
@@ -270,7 +270,7 @@ The GCP / Azure / OCI Recommendations tabs are stubs awaiting
 their own chunk-5 follow-on (same deferral as the slice 2
 trace-emission chip).
 
-## Workflow — first span-quality recommendation
+## Workflow, first span-quality recommendation
 
 1. Open the Discovery dashboard at `/discovery`. Confirm
    both the TRACE COVERAGE panel and the new SPAN QUALITY
@@ -299,7 +299,7 @@ trace-emission chip).
 
 Slice 1 adds one new audit event type:
 
-- `span_quality.requested` — emitted on a cache miss when
+- `span_quality.requested`, emitted on a cache miss when
   the dashboard or proposer pulls fresh data from the
   Quality index. Payload includes the cache age, the
   per-provider counts. Audit-only; no side effects.
@@ -315,7 +315,7 @@ recommendation_kind ~= "^span-quality-"
 PR open / merge / close fires the existing webhook events
 with the corresponding kind values. The webhook router
 extends the kind-prefix detection to route `span-quality-*`
-to the correct provider — since the kind doesn't carry a
+to the correct provider, since the kind doesn't carry a
 provider segment, the router falls back to looking up the
 resource the recommendation targets, then extracting the
 provider from there.
@@ -331,7 +331,7 @@ provider from there.
   Squadron.
 - **The SPAN QUALITY panel shows non-zero counts but no
   recommendation drafts appear.** Check the per-resource
-  span counts — recommendations only fire after 100 spans
+  span counts, recommendations only fire after 100 spans
   in the window. Run a load test against the resource to
   push it over the threshold, OR wait for natural traffic.
 - **A `span-quality-orphan-trace` recommendation fires but
@@ -361,7 +361,7 @@ Slice 2 closes the explicit slice 1 deferral above
 (W3C trace context header parsing). The full design doc is
 at [proposals/span-quality-slice2.md](./proposals/span-quality-slice2.md).
 
-# Slice 2 — W3C trace context parsing (v0.89.108-v0.89.111)
+# Slice 2, W3C trace context parsing (v0.89.108-v0.89.111)
 
 Slice 1 shipped three pathology detectors at the OTLP receiver
 hot path: orphan spans, missing required resource attributes,
@@ -386,7 +386,7 @@ Detection rule:
 - 2-char trace_flags segment: hex
 
 Threshold: > 1% of spans with a traceparent attribute. The 1%
-is intentionally low — ANY malformed traceparent is unusual.
+is intentionally low, ANY malformed traceparent is unusual.
 A correctly-instrumented fleet either has 0% malformed or
 ~100% malformed depending on whether the upstream SDK is
 broken.
@@ -404,7 +404,7 @@ context where child spans are intra-process and never
 received an inbound traceparent.
 
 Threshold: > 5% of CHILD spans. The 5% is between the slice 1
-orphan (10%) and the slice 2 malformed (1%) thresholds — SDK
+orphan (10%) and the slice 2 malformed (1%) thresholds, SDK
 propagation is mostly all-or-nothing but some legitimate cases
 (pure internal spans) lack traceparent.
 
@@ -455,7 +455,7 @@ the PR records the actual cause for the verdict learning loop.
 This catches operators reading the dashboard percentages.
 
 The slice 1 percentages (orphan / missing attrs / mismatch)
-use `total_spans` as denominator — every span is eligible.
+use `total_spans` as denominator, every span is eligible.
 
 The slice 2 percentages use HONEST denominators:
 
@@ -521,10 +521,10 @@ malformed → 26.7% malformed_pct) does NOT fire the
 recommendation. Wait for more traffic OR run a load test to
 push the sample size over the threshold.
 
-## Workflow — first traceparent recommendation
+## Workflow, first traceparent recommendation
 
 1. Open the Discovery dashboard at `/discovery`.
-2. Look at the SPAN QUALITY panel — it now has 5 columns.
+2. Look at the SPAN QUALITY panel, it now has 5 columns.
 3. If "Malformed traceparent" or "Missing on child" shows a
    non-zero percentage, click the column.
 4. You're deep-linked to the AWS Recommendations tab with the
@@ -554,7 +554,7 @@ recommendation_kind ~= "^span-quality-traceparent-"
 ## Slice 2 troubleshooting
 
 - **Malformed traceparent shows 100% but my SDK should be
-  W3C-compliant.** Check the SDK version — some 2022-era OTel
+  W3C-compliant.** Check the SDK version, some 2022-era OTel
   SDK releases ship a non-W3C compliant traceparent format on
   certain HTTP frameworks. Pin to the latest SDK release.
 - **Missing traceparent on child shows 100% on a worker pod
@@ -571,7 +571,7 @@ recommendation_kind ~= "^span-quality-traceparent-"
   upstream resource.
 - **Malformed traceparent percentage is high but the
   recommendation doesn't fire.** Check the `spans_with_traceparent`
-  count in the per-resource detail endpoint — if it's < 50,
+  count in the per-resource detail endpoint, if it's < 50,
   the minimum-sample-size guard suppresses the recommendation.
 - **My team uses B3 propagation (not W3C).** Slice 2 currently
   treats B3-only fleets as 100% missing-traceparent-on-child.
@@ -579,7 +579,7 @@ recommendation_kind ~= "^span-quality-traceparent-"
   slice 3 may add format-agnostic detection.
 - **A specific kind shows up in the recommendation list but
   the SPAN QUALITY dashboard shows 0% for that kind.** Check
-  the cache — the dashboard endpoint has a 30s cache; the
+  the cache, the dashboard endpoint has a 30s cache; the
   recommendation may have fired from a more recent in-memory
   observation. Refresh the dashboard.
 
@@ -599,7 +599,7 @@ Per §13 of the slice 2 design doc:
 
 ## Slice 2 strategic frame
 
-Slice 2 doesn't grow Squadron's universal claim — it makes
+Slice 2 doesn't grow Squadron's universal claim, it makes
 the existing span quality claim more rigorous. After this
 arc, the "where did my trace go?" diagnostic surface has
 three layers:
@@ -610,7 +610,7 @@ three layers:
    end-to-end?** (event source slice 2)
 3. **Does the trace context that DOES arrive at Squadron's
    OTLP receiver conform to the W3C spec?** (span quality
-   slice 2 — this arc)
+   slice 2, this arc)
 
 These three diagnostic layers cover the full "request →
 orchestration → execution" chain. An operator who sees
@@ -630,7 +630,7 @@ verdict learning loop teaches the proposer from every decline.
 
 ## What slice 3+ may add (slice 1 deferrals re-stated)
 
-The slice 1 deferral list above stays accurate — slice 2
+The slice 1 deferral list above stays accurate, slice 2
 covered W3C trace context parsing. The remaining deferrals
 include sampling rate analysis, per-language semantic
 convention validation, span event content quality, span
@@ -647,7 +647,7 @@ After span quality slice 1, Squadron's positioning reads:
 > close the gaps it finds.
 
 Four verbs. One control plane. The recommendation surface is
-no longer about turning on the primitive — it's about
+no longer about turning on the primitive, it's about
 turning on the primitive, watching whether telemetry flows,
 inspecting the telemetry that does flow for quality, and
 drafting the PR that fixes whichever layer broke. The
@@ -656,17 +656,17 @@ promised compounds another iteration.
 
 ## Cross-references
 
-- [Span quality slice 1 design doc](./proposals/span-quality-slice1.md) —
+- [Span quality slice 1 design doc](./proposals/span-quality-slice1.md),
   the locked spec this runbook operationalizes.
-- [Trace integration slice 1](./proposals/trace-integration-slice1.md) —
+- [Trace integration slice 1](./proposals/trace-integration-slice1.md),
   the foundation that shipped the traceindex package + OTLP
   receiver wiring.
-- [Trace integration slice 2](./proposals/trace-integration-slice2.md) —
+- [Trace integration slice 2](./proposals/trace-integration-slice2.md),
   the slice that shipped the 12 trace-emission-* kinds + the
   iacpicker package this arc reuses for span-quality kinds.
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   the runbook for trace integration slices 1+2.
-- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md) —
+- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md),
   the dashboard the SPAN QUALITY panel sits on.
-- [Audit log](./audit-log.md) — full catalog of event types
+- [Audit log](./audit-log.md), full catalog of event types
   including `span_quality.requested`.

@@ -7,7 +7,7 @@ report so an operator (or a scheduled CI job) can spot regressions
 across releases.
 
 As of v0.86 the bench is **bi-modal**: it exercises both proposer
-entry points — `ProposeFromCostSpike` and `ProposeFromDiscoveryScan` —
+entry points, `ProposeFromCostSpike` and `ProposeFromDiscoveryScan`,
 in the same run. The same metrics surface across both arcs, and
 regression detection works the same way on each: a bucket count
 moving in the wrong direction (a `discovery` seed flipping from
@@ -18,7 +18,7 @@ It is the runtime sibling of `internal/proposer/stress_live_test.go`:
 the live stress test gates on pass/fail; the bench reports
 distributions an operator can compare release-over-release. They
 both exist because the failure modes the proposer can land in are
-not a single bit — `truncated` is a different bug class from
+not a single bit, `truncated` is a different bug class from
 `parse_failed_preamble`, and a regression in one shouldn't be
 hidden by the other staying green.
 
@@ -26,16 +26,16 @@ hidden by the other staying green.
 
 Per scenario:
 
-  - **outcome bucket** — one of `succeeded`, `declined`, `truncated`,
+  - **outcome bucket**, one of `succeeded`, `declined`, `truncated`,
     `parse_failed_preamble`, `parse_failed_other`, `llm_error`. The
     buckets are deliberately separable so a regression in one class
     of bug is visible in the report.
-  - **tokens in / out** — gives the operator the headroom signal.
+  - **tokens in / out**, gives the operator the headroom signal.
     `tokens_out_max` against `proposer_max_tokens` is the column to
     watch. The v0.82 #550 truncation would have been visible here as
     `tokens_out_max ≈ 1090` against the old `cap = 1024`.
-  - **latency_ms** — wall clock per scenario.
-  - **estimated_usd** — Sonnet 4.6 pricing applied to the actual
+  - **latency_ms**, wall clock per scenario.
+  - **estimated_usd**, Sonnet 4.6 pricing applied to the actual
     token counts the API returned.
 
 Aggregated:
@@ -48,17 +48,17 @@ Aggregated:
 ## Cost ceiling
 
 At the v0.89 corpus size (18 seeds: 8 cost-spike + 10 discovery) and
-typical token sizes, expect roughly **\$0.20–\$0.34 per run**. The
+typical token sizes, expect roughly **\$0.20-\$0.34 per run**. The
 bench prints `total cost` on every run so the operator sees the
 number after each invocation. Discovery seeds run at a similar token
-profile to cost-spike seeds — the per-seed cost is comparable, so
+profile to cost-spike seeds, the per-seed cost is comparable, so
 adding 10 discovery seeds on top of 8 cost-spike seeds keeps the
 total inside the same envelope. The v0.87 RDS seed
 (`discovery_rds_mixed_coverage`), the v0.88 S3 + ALB seeds
 (`discovery_s3_mixed_coverage`, `discovery_alb_mixed_coverage`),
 and the v0.89 EKS seed (`discovery_eks_mixed_coverage`) carry
-larger inventory lists than the slice-1 discovery seeds (5–10 rows
-per category instead of 2–3); the per-seed cost stays inside the
+larger inventory lists than the slice-1 discovery seeds (5-10 rows
+per category instead of 2-3); the per-seed cost stays inside the
 discovery-arc range.
 
 For scheduled CI: a daily run for thirty days is ~\$5-7. Costs scale
@@ -90,12 +90,12 @@ ANTHROPIC_API_KEY=sk-ant-...   \
 
 CI: schedule the same invocation as a cron job. Publish the report
 artifact somewhere the team can see. A release-blocker regression
-shows up as a bucket count moving in the wrong direction —
+shows up as a bucket count moving in the wrong direction,
 `succeeded` going down, or `parse_failed_preamble` going non-zero.
 
 ## Corpus
 
-Eighteen hand-curated scenarios at v0.89 — split across the two
+Eighteen hand-curated scenarios at v0.89, split across the two
 proposer arcs.
 
 ### Cost-spike arc (8 seeds, drives `ProposeFromCostSpike`)
@@ -104,7 +104,7 @@ proposer arcs.
 | ----------------------------- | ------------------------------------------------------------- |
 | `rollout_clean_single_attr`   | Baseline rollout-kind happy path                              |
 | `plan_two_indep_attrs`        | Plan-kind, two-step (the v0.82 #550 reproducer)               |
-| `plan_three_related_attrs`    | Plan-kind, three-step — pushes the token budget               |
+| `plan_three_related_attrs`    | Plan-kind, three-step, pushes the token budget               |
 | `declined_zero_spike`         | Baseline = peak; should decline                               |
 | `declined_no_attribution`     | Empty `TopAttributes`; should decline                         |
 | `adversarial_prompt_injection`| Injected instruction inside an attribute name                 |
@@ -115,16 +115,16 @@ proposer arcs.
 
 | Seed                                   | What it tests                                                                                       |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `discovery_small_fleet_uninstrumented` | 3 EC2 + 2 Lambda, all uncovered — minimal plan happy path                                           |
+| `discovery_small_fleet_uninstrumented` | 3 EC2 + 2 Lambda, all uncovered, minimal plan happy path                                           |
 | `discovery_mixed_coverage`             | 10 EC2 (4 covered) + 8 Lambda (3 covered); plan must skip the covered                               |
 | `discovery_zero_resources`             | Empty inventory; should decline (`declined` bucket through discovery)                               |
 | `discovery_fully_instrumented`         | 8 EC2 + 5 Lambda, all covered; should decline                                                       |
-| `discovery_windows_heavy`              | 6 Windows EC2, 0 Lambda — exercises OS-family reasoning                                             |
+| `discovery_windows_heavy`              | 6 Windows EC2, 0 Lambda, exercises OS-family reasoning                                             |
 | `discovery_lambda_runtime_variety`     | 12 Lambda across 5 runtimes; exercises per-runtime OTel layer batching                              |
 | `discovery_rds_mixed_coverage`         | 5 RDS across 4 engines (PI/EM mixed) + 3 EC2 + 2 Lambda; exercises slice 2 RDS PI/EM independent-levers reasoning |
 | `discovery_s3_mixed_coverage`          | 8 S3 buckets (3 logging-enabled, 5 not) + 3 EC2 + 2 Lambda; exercises slice 3a S3 Server Access Logging single-axis recommendation with operator-fill-in target |
 | `discovery_alb_mixed_coverage`         | 5 ALBs (2 covered to different S3 buckets, 3 uncovered) + 2 instrumented S3 buckets + 4 EC2 + 3 Lambda; exercises slice 3a ALB Access Logs single-axis recommendation with the ALB→S3 cross-reference rule (target bucket should be one Squadron already sees) |
-| `discovery_eks_mixed_coverage`         | 3 EKS clusters exercising the composite-rule corners (1 covered, 2 uncovered for different reasons — logs-only and addon-only with a non-observability addon); exercises slice 3b EKS recommendation with the BOTH-axes-must-hold framing and ADOT-as-preferred-addon guidance |
+| `discovery_eks_mixed_coverage`         | 3 EKS clusters exercising the composite-rule corners (1 covered, 2 uncovered for different reasons, logs-only and addon-only with a non-observability addon); exercises slice 3b EKS recommendation with the BOTH-axes-must-hold framing and ADOT-as-preferred-addon guidance |
 
 The list is intentionally small. v0.84 will refactor the
 `internal/proposer` stress corpus into a shared module so the bench
@@ -133,13 +133,13 @@ the list in `cmd/squadron-proposer-bench/main.go` directly.
 
 ### Bi-modal posture
 
-Outcome bucketing is shared across arcs — `succeeded`, `declined`,
+Outcome bucketing is shared across arcs, `succeeded`, `declined`,
 `truncated`, `parse_failed_preamble`, `parse_failed_other`,
 `llm_error` apply cleanly to both `ProposeFromCostSpike` and
 `ProposeFromDiscoveryScan`. The report's `by kind:` summary line
 splits the bucket counts per arc so an operator can see at a glance
 that, say, the cost-spike arc is green while the discovery arc has
-a `truncated` regression — without that split a single global
+a `truncated` regression, without that split a single global
 counter would hide which prompt drifted. Same calibration discipline
 v0.83 established for the cost-spike proposer now covers the
 discovery path; the next regression that would have shipped as a
@@ -147,7 +147,7 @@ viral failure story gets caught here for the discovery prompt
 before it hits production.
 
 The discovery arc has 10 seeds at v0.89 (up from 9 at v0.88, 7 at
-v0.87, and 6 at v0.86) — slice 3a (S3 + ALB) added two seeds and
+v0.87, and 6 at v0.86), slice 3a (S3 + ALB) added two seeds and
 slice 3b (EKS) added one more at the same discipline. Each new scanner category that lands in production
 gets a paired bench seed so the proposer's prompt extension
 surface stays calibrated.

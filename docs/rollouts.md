@@ -67,16 +67,16 @@ curl -X POST http://localhost:8080/api/v1/rollouts \
                   └────── (final stage done) ──► succeeded
 ```
 
-- **pending** — created, engine hasn't picked it up yet (usually <5s).
-- **in_progress** — actively advancing through stages. The engine watches
+- **pending**, created, engine hasn't picked it up yet (usually <5s).
+- **in_progress**, actively advancing through stages. The engine watches
   drift + error rate every tick.
-- **paused** — operator pressed Pause. Engine no-ops, no stage advance,
+- **paused**, operator pressed Pause. Engine no-ops, no stage advance,
   no auto-abort. Resume restarts the dwell clock.
-- **succeeded** — final stage cleared its dwell. Terminal.
-- **aborted** — operator clicked Abort, or an abort criterion fired.
+- **succeeded**, final stage cleared its dwell. Terminal.
+- **aborted**, operator clicked Abort, or an abort criterion fired.
   Engine picks this up and performs the actual rollback push on its next
   tick.
-- **rolled_back** — previous config was pushed back to every canary. Terminal.
+- **rolled_back**, previous config was pushed back to every canary. Terminal.
 
 ## Stages: percent vs label mode
 
@@ -105,7 +105,7 @@ Pick the first N% of the group's agents, sorted deterministically by ID.
 Pick agents whose labels AND-match the selector.
 
 - Selector is `{key: value}` pairs; every pair must match exactly.
-- Re-evaluated on every engine tick — agents that gain or lose matching
+- Re-evaluated on every engine tick, agents that gain or lose matching
   labels join or leave the canary live.
 - No "must reach 100%" constraint. The final stage is whatever the
   operator decided is "everyone we care about".
@@ -140,17 +140,17 @@ and Squadron pushes the previous config back to the canary set.
 
 The criteria today:
 
-- `max_drifted_agents` — if more than N canary agents go drifted during
+- `max_drifted_agents`, if more than N canary agents go drifted during
   the dwell, abort. `0` means "any drift aborts".
-- `max_error_logs_per_minute` — if the canary collectively emits more
+- `max_error_logs_per_minute`, if the canary collectively emits more
   than N ERROR-or-higher log records per minute (averaged over the dwell
   window so far), abort. `0` disables the check.
-- `min_dwell_seconds_before_abort` — warmup window. The error-rate check
+- `min_dwell_seconds_before_abort`, warmup window. The error-rate check
   won't fire until this many seconds have elapsed since the stage started.
   Gives newly-pushed agents time to flush startup noise without false-
   positiving the abort.
 
-All criteria fire independently — drift OR error rate, not AND.
+All criteria fire independently, drift OR error rate, not AND.
 
 ## Cookbook: pre-tuned criteria recipes
 
@@ -166,7 +166,7 @@ accessible at `/api/v1/rollout-recipes/abort-criteria`.
 | `drift-only`            | 0     | disabled   | 30s    | When error rates aren't a reliable signal.     |
 | `manual-abort-only`     | ∞     | disabled   | 0s     | Experimental rollouts; operator is the safety net. |
 
-Operators can hand-tune any field after picking a recipe — the recipe is
+Operators can hand-tune any field after picking a recipe, the recipe is
 just a starting point.
 
 ## Templates: pre-built rollout shapes
@@ -213,7 +213,7 @@ different config.
   stage's pushed agents stay on the new config. No stage advance, no
   abort-criteria evaluation. Useful when you want to think.
 - **Resume** flips back to in_progress and restarts the stage's dwell
-  clock fresh — the engine treats the stage as if it just started, so the
+  clock fresh, the engine treats the stage as if it just started, so the
   warmup window applies again. This is the safer default than picking up
   mid-dwell with stale criteria state.
 - **Abort** flips to aborted with a reason string (recorded in the audit
@@ -260,7 +260,7 @@ Constraints:
 - The source must have a `previous_config_id`. Brand-new groups
   whose first rollout succeeded have nowhere to roll back to.
 - The rollback inherits `require_approval` from the source. If the
-  source needed two person approval, so does the rollback — the
+  source needed two person approval, so does the rollback, the
   policy applies to the group, not the direction of the change.
 - The rollback fires as a single 100% stage with zero dwell because
   the caller is asking for an emergency undo. Operators who want a
@@ -292,7 +292,7 @@ lifecycle so SIEM rules can alert on the full undo cycle:
   lifecycle events.
 - `rollout.rollback_completed` fires on the new rollout when it
   reaches `succeeded`. Payload carries `rolled_back_from_id`. This
-  is the "undo actually landed" signal — distinct from a generic
+  is the "undo actually landed" signal, distinct from a generic
   `rollout.succeeded` so a SIEM rule can score rollback completions
   separately. Added in v0.61.
 
@@ -320,7 +320,7 @@ every state transition:
 ```
 
 Webhook failures (5xx, timeout, DNS) are logged but don't block engine
-progress — the audit log captures the durable record.
+progress, the audit log captures the durable record.
 
 ## Audit trail
 
@@ -332,14 +332,14 @@ Every rollout state transition is recorded in the audit log under
 | `rollout.created`      | Create succeeded              | name, stage_count, **diff_added_lines, diff_removed_lines, previous_config_id** |
 | `rollout.stage_applied`| Engine pushed a stage         | stage, mode, canary_size, **agent_ids[]**, percentage or label_selector |
 | `rollout.empty_canary` | Stage resolved to 0 agents    | (informational; rollout still proceeds)   |
-| `rollout.paused`       | Operator clicked Pause        | —                                         |
-| `rollout.resumed`      | Operator clicked Resume       | —                                         |
+| `rollout.paused`       | Operator clicked Pause        |, |
+| `rollout.resumed`      | Operator clicked Resume       |, |
 | `rollout.aborted`      | Auto-abort or manual abort    | reason                                    |
-| `rollout.rolled_back`  | Rollback push completed       | —                                         |
-| `rollout.succeeded`    | Final stage cleared dwell     | —                                         |
+| `rollout.rolled_back`  | Rollback push completed       |, |
+| `rollout.succeeded`    | Final stage cleared dwell     |, |
 
 The UI's per-rollout history (click **Show history** on a rollout card)
-mounts an [AuditTimeline](./audit-log.md) filtered to the rollout —
+mounts an [AuditTimeline](./audit-log.md) filtered to the rollout,
 operators get the full transcript in one view.
 
 ## API reference
@@ -355,7 +355,7 @@ operators get the full transcript in one view.
 | GET    | `/api/v1/rollout-preview?group_id=&target_config_id=` | Diff + lint preview          |
 | GET    | `/api/v1/rollout-recipes/abort-criteria`        | List recipe cookbook                 |
 | GET    | `/api/v1/rollout-recipes/templates`             | List template gallery                |
-| POST   | `/api/v1/rollouts/plans`                        | Create plan (v0.73). Body = `{steps: [RolloutInput, ...]}` |
+| POST   | `/api/v1/rollouts/plans`                        | Create plan (v0.73). Body = `{steps: [RolloutInput...]}` |
 | GET    | `/api/v1/rollouts/plans/:id`                    | Get plan envelope (v0.74)            |
 | GET    | `/api/v1/rollouts?plan_id=`                     | Filter rollouts by plan id (v0.74)   |
 
@@ -367,7 +367,7 @@ on success; on failure, every succeeded forward step gets
 automatically rolled back via the v0.72 backwards walk.
 
 See [multi step plans design](./multi-step-plans-design.md) for the
-full protocol — engine semantics, approval rules, audit events,
+full protocol, engine semantics, approval rules, audit events,
 inline config snippet shape (v0.78).
 
 ### AI emitted plans (v0.79)
@@ -382,25 +382,25 @@ server side.
 
 Common plan shapes the proposer emits today:
 
-- **Progressive attribute drop** — staged drops with observation
+- **Progressive attribute drop**, staged drops with observation
   windows between steps. If step 1 regresses cost or signal
   integrity, Abort rolls back step 0 too.
-- **Sample rate ratchet** — staged sampling rate reduction
+- **Sample rate ratchet**, staged sampling rate reduction
   (100% → 50% → 25% → 10%) so operators observe between levels.
-- **Pipeline split for high-volume signal** — add a secondary
+- **Pipeline split for high-volume signal**, add a secondary
   pipeline, route a hot signal to a cheaper destination, remove
   the filter from the main path.
-- **Dual write then cut destination** — add a backup exporter,
+- **Dual write then cut destination**, add a backup exporter,
   validate, then cut the failing primary.
 
 What plans don't include yet: action-runner calls. Verification,
-notification, paging, integrity checks — all require an action
+notification, paging, integrity checks, all require an action
 runner integration that's queued as a separate v0.80+ arc. See the
 design doc for the roadmap.
 
 ## Diagram: rollout lifecycle
 
-The state diagram below shows the full lifecycle — including the
+The state diagram below shows the full lifecycle, including the
 `pending_approval` gate for approval-required groups, the per-stage dwell with
 its abort check, and the auto-rollback path when an abort criterion fires.
 

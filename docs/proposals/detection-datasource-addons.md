@@ -1,4 +1,4 @@
-# Detection data-source add-ons — recommend enabling them (arc)
+# Detection data-source add-ons, recommend enabling them (arc)
 
 Status: building v0.89.258 (slice 1). Author: autonomous session. Decisions by
 Michael (this session).
@@ -13,15 +13,15 @@ Michael (this session).
    and the COST (paid add-on). For AWS, also offer the cheaper CloudWatch Logs
    metric-filter alternative.
 2. **Queue poison-rate (#156 AWS SQS, #159 OCI).** No native "moved to DLQ"
-   counter. Decision (operator's recommendation): depth/presence-based detection
-   — honest "N messages in the DLQ", never a fabricated rate; for OCI derive a
+   counter. Decision (operator's recommendation): depth/presence-based detection,
+honest "N messages in the DLQ", never a fabricated rate; for OCI derive a
    rate from `deadLetterQueueDeliveryCount` deltas across the now-persisted scan
    history.
 
 ## Key finding (shapes the serverless approach)
 
 The deterministic cold-start/error RECOMMENDATION branches in
-internal/proposer/cold_start.go + error_rate.go are **dormant** — defined +
+internal/proposer/cold_start.go + error_rate.go are **dormant**, defined +
 unit-tested but never called from the live recs flow. Only the per-row
 ANNOTATION pass (AnnotateServerlessWithColdStart) is wired, and it just
 populates inventory-row fields when data already exists.
@@ -34,31 +34,31 @@ dormant deterministic branch.
 
 ## Slice plan
 
-- **Slice 1 (this) — serverless add-on enablement in the proposer prompt.**
+- **Slice 1 (this), serverless add-on enablement in the proposer prompt.**
   Add a high-priority "detection-prerequisite add-ons" framing to the serverless
   section; add the missing AWS **lambda-insights-enable** kind (the Lambda
   cold-start/error prerequisite, with the Logs-metric-filter alternative); enrich
   the existing **azfunc-appinsights-enable** kind to state the cold-start/error
   rationale + cost. Layer ARNs are framed as "resolve the current published ARN"
   (not hardcoded) per the #109/#111 freshness fix.
-- **Slice 2 (shipped v0.89.259) — AWS SQS DLQ depth detection (#156):** the
+- **Slice 2 (shipped v0.89.259), AWS SQS DLQ depth detection (#156):** the
   source queue reads its DLQ's current ApproximateNumberOfMessages directly from
   the scan's attribute walk (no extra call, no CloudWatch; same-account/region
   DLQs). Surfaces poison_dlq_depth + poison_dlq_nonempty. Honest proxy: a
   drained DLQ reads empty.
-- **Slice 3 — OCI queue poison (#159): premise corrected.** The original plan
-  (deadLetterQueueDeliveryCount delta over scan history) is NOT viable —
+- **Slice 3, OCI queue poison (#159): premise corrected.** The original plan
+  (deadLetterQueueDeliveryCount delta over scan history) is NOT viable,
   verified that field is a CONFIG threshold (delivery attempts before
   dead-lettering), not a poison counter. Also verified the OCI Monitoring
   oci_queue namespace has NO dead-letter metric (QueueSize / MessagesInQueueCount
   / MessagesCount / RequestSuccess / RequestsLatency / RequestsThroughput /
   ConsumerLag / DroppedMessagesCount only). The REAL signal is DLQ DEPTH from the
   data-plane GetStats call ({messagesEndpoint}/20210201/queues/{id}/stats), whose
-  response carries `stats` (queue) + `dlqStats` (DLQ), each with visibleMessages
-  — so `dlqStats.visibleMessages` is the honest poison-present signal, mirroring
+  response carries `stats` (queue) + `dlqStats` (DLQ), each with visibleMessages,
+so `dlqStats.visibleMessages` is the honest poison-present signal, mirroring
   AWS DLQ-depth (#156). v0.89.260 corrects the false OCI-Monitoring claim in the
   code + docs and records this verified design; IMPLEMENTATION requires wiring
-  the OCI Queue data-plane endpoint (new — the scanner uses only the control
+  the OCI Queue data-plane endpoint (new, the scanner uses only the control
   plane today) and is best done with live OCI verification (failure mode is safe:
   honest-absent, never a fabricated number).
 
@@ -66,6 +66,6 @@ dormant deterministic branch.
 
 - Slice 1 makes the proposer RECOMMEND the add-on; it does not itself enable it
   (the operator merges the IaC PR). Detection still can't fire until the add-on
-  is on — which is exactly why recommending it is the unblock.
+  is on, which is exactly why recommending it is the unblock.
 - Depth/presence (slice 2/3) is a proxy: a drained DLQ reads empty, so it can
   under-report. Documented as such.

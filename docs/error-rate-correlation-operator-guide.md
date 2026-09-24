@@ -1,4 +1,4 @@
-# Error rate correlation — operator guide
+# Error rate correlation, operator guide
 
 This is the operator-facing runbook for the v0.89.126 through
 v0.89.130 error rate correlation arc. Squadron now compares
@@ -8,7 +8,7 @@ operator attention.
 
 The strategic frame: this is the THIRD diagnostic running on
 the cold-start latency substrate (v0.89.113 + v0.89.118). The
-substrate has now paid for itself three times over —
+substrate has now paid for itself three times over,
 cold-start latency, sampling rate, error rate, all sitting on
 the same `MetricQuerier` interface with shared rate limiters
 and storage patterns. The architectural bet that the
@@ -79,7 +79,7 @@ Per serverless resource, per scan:
 1. Squadron queries the cloud-native error count metric for
    the resource over the last 24h (`current_error_count`).
 2. Squadron queries the invocation count over the same 24h
-   window (`current_invocation_count`) — reused from
+   window (`current_invocation_count`), reused from
    sampling rate slice 1's substrate.
 3. Squadron queries the baseline 168h (7-day) error count
    AND invocation count.
@@ -112,26 +112,26 @@ Error rate gets the looser threshold.
 ### Why 1000 invocation minimum?
 
 A function invoked 50 times in 24h with 2 errors gives a 4%
-rate — looks aggressive but is statistical noise. 1000
-invocations corresponds to roughly 40/hour sustained — a
+rate, looks aggressive but is statistical noise. 1000
+invocations corresponds to roughly 40/hour sustained, a
 meaningful traffic level where percentages are reliable.
 
 ### Why 50 absolute error count minimum?
 
 A function with baseline of 1 error/day that has 3 errors
-today shows a 3x ratio — but the absolute count is so low
+today shows a 3x ratio, but the absolute count is so low
 that the ratio is statistical noise. The 50-error floor
 ensures recommendations fire only when the error count is
 large enough to be operationally meaningful.
 
-50 errors in 24h corresponds to roughly 2/hour sustained —
+50 errors in 24h corresponds to roughly 2/hour sustained,
 a real signal worth surfacing.
 
 ### Why the near-zero baseline guard?
 
 Without the guard, a function with `baseline_error_rate =
 0.0001%` (essentially zero) and `current_error_rate = 0.5%`
-would show a 5000x ratio — meaningless because the baseline
+would show a 5000x ratio, meaningless because the baseline
 is at the noise floor.
 
 The guard substitutes 0.01% as the comparison baseline when
@@ -145,14 +145,14 @@ Mirrors cold-start latency for consistency. Long enough to
 smooth weekly cycles (Monday vs Saturday); short enough that
 gradual rollouts can shift the baseline within a quarter.
 
-## The five serverless surfaces — per-cloud error metrics
+## The five serverless surfaces, per-cloud error metrics
 
 The substrate from cold-start + sampling rate already wired
 per-cloud `MetricQuerier`. Slice 1 of error rate adds ONE
 NEW METRIC NAME per cloud:
 
 > **⚠️ Detection coverage correction (v0.89.231).** Azure Monitor has no native
-> per-function error metric — `FunctionErrors` below does not exist, so Azure
+> per-function error metric, `FunctionErrors` below does not exist, so Azure
 > error-rate requires Application Insights. The OCI row is corrected to the real
 > `oci_faas` metric. See [detection-coverage.md](./detection-coverage.md).
 
@@ -161,10 +161,10 @@ NEW METRIC NAME per cloud:
 | AWS   | Lambda          | `AWS/Lambda Errors` (Sum)                                 |
 | GCP   | Cloud Run       | `run.googleapis.com/request_count` filtered by `response_code_class = "5xx"` |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_count` filtered by `status != "ok"` |
-| Azure | Functions       | **none native** — needs Application Insights (`FunctionErrors` does not exist in Azure Monitor) |
+| Azure | Functions       | **none native**, needs Application Insights (`FunctionErrors` does not exist in Azure Monitor) |
 | OCI   | Functions       | `FunctionResponseCount` (`oci_faas` error responses; fixed v0.89.229) |
 
-All five reuse the existing cold-start / sampling rate IAM —
+All five reuse the existing cold-start / sampling rate IAM,
 no new permissions. The substrate's rate limiters absorb the
 new queries:
 
@@ -174,8 +174,8 @@ new queries:
 - **Total: 5 queries per resource per scan**
 
 For a 1000-function fleet scanned every 24h:
-- AWS: 5000 queries / 24h = ~0.06 RPS — trivial
-- GCP: 5000 queries / 24h = ~0.06 RPM — trivial
+- AWS: 5000 queries / 24h = ~0.06 RPS, trivial
+- GCP: 5000 queries / 24h = ~0.06 RPM, trivial
 - Azure / OCI: similar
 
 All well under per-cloud rate limits.
@@ -188,7 +188,7 @@ three possible causes. The PR drafts the resource-exhaustion
 case (case 3) ONLY. Cases (1) and (2) are explicitly
 documented as decline paths in the reasoning text.
 
-### Case 1 — Recent deploy regression
+### Case 1, Recent deploy regression
 
 The most common cause: an application deploy introduced a
 bug that's failing at the application layer.
@@ -198,24 +198,24 @@ How to recognize:
   started after a deploy, this is your case.
 - Look at the function's CloudWatch / Cloud Monitoring /
   Application Insights / OCI logs for the specific exception
-  pattern — application stack traces tell you which
+  pattern, application stack traces tell you which
   deployment broke what.
 
 What to do: **decline the Squadron PR.** Revert the deploy,
 or fix the regression at the application layer. The
 Terraform PR does NOT fix application bugs. Add a decline
-note like "deploy regression — reverting #123."
+note like "deploy regression, reverting #123."
 
 The verdict learning loop records the decline.
 
-### Case 2 — Downstream dependency failure
+### Case 2, Downstream dependency failure
 
 The second most common cause: the function calls a database
 / API / queue that's failing, and errors propagate.
 
 How to recognize:
 - Check the downstream's error rate or availability.
-- Look at the function's error pattern — connection refused,
+- Look at the function's error pattern, connection refused,
   timeout, 503 from downstream often surface as Lambda /
   Functions errors.
 - If multiple functions calling the same downstream are
@@ -223,10 +223,10 @@ How to recognize:
   case.
 
 What to do: **decline the Squadron PR.** Fix the downstream
-first. Add a decline note like "downstream X is failing —
+first. Add a decline note like "downstream X is failing,
 investigating with team Y."
 
-### Case 3 — Resource exhaustion under load
+### Case 3, Resource exhaustion under load
 
 The case Squadron's Terraform PR targets: throttling, memory
 pressure, connection pool exhaustion. The function's
@@ -234,7 +234,7 @@ application logic is fine but it's running out of resources
 under the current load.
 
 How to recognize:
-- Check the function's memory utilization metric — if hitting
+- Check the function's memory utilization metric, if hitting
   the configured limit consistently, this is your case.
 - Check throttling counts (per-cloud: Lambda throttles, Cloud
   Run instance limits, Azure quotas, OCI invocation limits).
@@ -364,7 +364,7 @@ Each DiscoveryX Serverless table now has an "Error rate
 | OTel distro       | existing                              |
 | Cold-start P95    | existing (slice 2 of cold-start)      |
 | Sampling rate     | existing (slice 1 of sampling rate)   |
-| Error rate        | NEW — current 24h error rate; amber when all gates met |
+| Error rate        | NEW, current 24h error rate; amber when all gates met |
 | Last seen         | existing                              |
 | Quality           | existing                              |
 
@@ -372,15 +372,15 @@ Hover shows the underlying error count + invocation count +
 baseline comparison.
 
 The dashboard SPAN QUALITY panel does NOT add an error rate
-column. Error rate is workload-health, not span-quality —
+column. Error rate is workload-health, not span-quality,
 slice 2 may add a top-level "Workload health" panel
 summarizing cold-start + sampling + error rate together.
 
-## Workflow — first error rate scan
+## Workflow, first error rate scan
 
 1. Open the AWS Discovery page (`/discovery/aws`). Note the
    existing connection.
-2. **No IAM upgrade required** — the cold-start arc's
+2. **No IAM upgrade required**, the cold-start arc's
    permissions already cover the new error metrics.
 3. Click "Run scan". The scan walks serverless functions,
    queries the error count alongside cold-start + invocation
@@ -398,12 +398,12 @@ summarizing cold-start + sampling + error rate together.
    gates has a `span-quality-error-rate-spike` recommendation.
 8. **Read the 3-failure-mode reasoning carefully.** Cases (1)
    and (2) are the MORE COMMON causes; decline the PR and
-   investigate. Case (3) is what the PR targets — merge if
+   investigate. Case (3) is what the PR targets, merge if
    resource exhaustion is the actual issue.
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new
+Slice 1 reuses the existing audit event types, no new
 constants. The discovery scan emits the existing
 `discovery.{provider}.scan_completed` event with an
 `error_rate_observations_count` field included in the payload.
@@ -420,7 +420,7 @@ recommendation_kind = "span-quality-error-rate-spike"
 
 ## Troubleshooting
 
-- **Error rate column shows "—" for all my functions.** Two
+- **Error rate column shows ", " for all my functions.** Two
   possible causes:
   1. The scan hasn't run since v0.89.129 (chunk 3 wired the
      scan integration). Re-run the scan.
@@ -440,7 +440,7 @@ recommendation_kind = "span-quality-error-rate-spike"
   `baseline_adjusted` flag in the per-resource response.
   If true, the absolute error count is what to focus on,
   not the ratio.
-- **The recommendation fires and I deployed yesterday — is
+- **The recommendation fires and I deployed yesterday, is
   this case 1?** Almost certainly yes. Decline the PR and
   fix the deploy regression at the application layer.
 - **Error rate spike on multiple functions calling the same
@@ -455,7 +455,7 @@ recommendation_kind = "span-quality-error-rate-spike"
   For very large fleets (10K+ functions), scans may take
   longer. Slice 2 may add per-connection rate-limit tuning.
 
-## Per-cloud rate limits + cost surface — substrate absorbs
+## Per-cloud rate limits + cost surface, substrate absorbs
 
 The substrate's rate limiters from cold-start slice 1+2 +
 sampling rate slice 1 absorb the new query:
@@ -495,7 +495,7 @@ Per §13 of the design doc:
 - Error rate by HTTP path / by trigger source (for Lambda
   with multiple event source mappings).
 
-## Strategic frame — substrate compounds 3x
+## Strategic frame, substrate compounds 3x
 
 This is the THIRD diagnostic running on the cold-start
 latency substrate. The architectural bet is now demonstrated
@@ -511,16 +511,16 @@ three ways:
 After error rate slice 1, the substrate supports a complete
 serverless health diagnostic suite:
 
-- **Cold-start latency** — is the workload's startup
+- **Cold-start latency**, is the workload's startup
   performance regressed? (slice 1 + slice 2)
-- **Sampling rate** — is enough of the traffic actually
+- **Sampling rate**, is enough of the traffic actually
   being observed? (slice 1)
-- **Error rate** — is the workload failing at an unusual
+- **Error rate**, is the workload failing at an unusual
   rate? (this arc)
 
 Together, these answer the operator's "is this workload
 healthy?" question with three independent signals. The
-universal claim doesn't grow a new verb — MEASURES gains a
+universal claim doesn't grow a new verb, MEASURES gains a
 third sub-diagnostic.
 
 The Tuesday LinkedIn drumbeat narrative gains another
@@ -541,14 +541,14 @@ ships gets the same compounding return.
 
 When the commercial tier sources the error rate from Application Insights
 (`requests/count` + `requests/failed`), the **absolute** invocation and error
-counts reflect App Insights' own ingestion sampling / `itemCount` weighting —
+counts reflect App Insights' own ingestion sampling / `itemCount` weighting,
 they can be substantially larger than the raw request volume. This is expected
 App Insights behaviour, not a Squadron miscount: Squadron sums one per-bucket
 timeseries (5-minute `Total` aggregation) over the window, with no dimension
 split, so there is no double-counting on our side.
 
 The detection keys off the **error rate** (`failed / count`), which is
-sampling-invariant — numerator and denominator are weighted identically, so the
+sampling-invariant, numerator and denominator are weighted identically, so the
 ratio is unaffected. The absolute count only feeds the conservative volume floor
 (≥1000 invocations) that suppresses noisy low-traffic functions; sampling
 inflation there only makes the floor easier to clear, and the ratio floor
@@ -559,15 +559,15 @@ verification: 95 injected requests surfaced as ~16k counted invocations with the
 
 ## Cross-references
 
-- [Error rate correlation slice 1 design doc](./proposals/error-rate-correlation-slice1.md) —
+- [Error rate correlation slice 1 design doc](./proposals/error-rate-correlation-slice1.md),
   the locked spec this runbook operationalizes.
-- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md) —
+- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md),
   the substrate arc this reuses.
-- [Sampling rate analysis operator guide](./sampling-rate-operator-guide.md) —
+- [Sampling rate analysis operator guide](./sampling-rate-operator-guide.md),
   the second substrate diagnostic this composes with.
-- [Span quality operator guide](./span-quality-operator-guide.md) —
+- [Span quality operator guide](./span-quality-operator-guide.md),
   the recommendation kind prefix this reuses
   (`span-quality-error-rate-spike`).
-- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md) —
+- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md),
   the inventory rows this annotates.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.

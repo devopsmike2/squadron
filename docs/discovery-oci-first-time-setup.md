@@ -1,4 +1,4 @@
-# Connect an OCI tenancy to Squadron — first-time setup
+# Connect an OCI tenancy to Squadron, first-time setup
 
 **As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
 
@@ -6,7 +6,7 @@ This is the operator runbook for the v0.89.55 through v0.89.59 OCI
 discovery arc that closed OCI slice 1: Squadron now scans Oracle
 Cloud Compute Instance fleets for observability gaps, drafts
 recommendations against your Terraform repo, and learns from the
-PRs you accept — same loop as AWS, GCP, and Azure.
+PRs you accept, same loop as AWS, GCP, and Azure.
 
 **After this runbook lands, Squadron covers four major clouds:
 AWS, GCP, Azure, AND Oracle Cloud.** That's the universal
@@ -54,7 +54,7 @@ The same loop as the other three clouds, on OCI:
 
 After this runbook you have a working end-to-end loop: scan →
 draft → review → merge → audit → learn. Verdict learning, Checks
-API back-signal, Don't propose this again affordance — all
+API back-signal, Don't propose this again affordance, all
 provider-aware and work for OCI identically to the other three
 clouds.
 
@@ -68,11 +68,11 @@ clouds.
   instrumentation coverage across the full cloud footprint
   without per-provider tool sprawl.
 - An enterprise evaluating Squadron against multi-cloud
-  procurement requirements — the four-cloud claim is decisive.
+  procurement requirements, the four-cloud claim is decisive.
 
-## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+## Database tier slice 2, SHIPPED in v0.89.65 through v0.89.67
 
-As of v0.89.65 (chunk 4 of the database tier arc — design at
+As of v0.89.65 (chunk 4 of the database tier arc, design at
 [proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
 Squadron's OCI scanner ALSO walks DB Systems AND Autonomous
 Databases across the same compartments it walks for Compute
@@ -93,7 +93,7 @@ case-insensitively matches `ENABLED` to defend against future API
 casing drift.
 
 Instances with `lifecycleState != "AVAILABLE"` (terminating,
-provisioning, etc.) are skipped — they have no observability
+provisioning, etc.) are skipped, they have no observability
 surface to recommend on.
 
 **Recommendation kind:** `ocidb-perfhub-enable`. Targets
@@ -124,9 +124,9 @@ statement.
 **Service identifier in audit:** partial-failure events use
 `failed_services=["ocidb"]`.
 
-## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+## Kubernetes tier slice 2, SHIPPED in v0.89.70 through v0.89.72
 
-As of v0.89.70 (chunk 4 of the Kubernetes tier arc — design at
+As of v0.89.70 (chunk 4 of the Kubernetes tier arc, design at
 [proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
 Squadron's OCI scanner ALSO walks OKE clusters across the same
 compartments it walks for Compute Instances and Databases. The
@@ -145,7 +145,7 @@ self-tag the cluster when they enroll it in Operations Insights.
 Slice 3 will move to a direct Operations Insights API call.
 
 Clusters with `lifecycleState != "ACTIVE"` (mid-create,
-mid-delete, etc.) are skipped — they have no observability
+mid-delete, etc.) are skipped, they have no observability
 surface to recommend on.
 
 **Recommendation kind:** `oke-ops-insights-enable`. Targets the
@@ -180,9 +180,9 @@ emitted normally. Re-run the scan after adding the statement.
 Slice 1 ships intentionally narrow:
 
 - **~~No Autonomous Database / DB Systems scanning.~~** ✓ SHIPPED
-  in v0.89.65 — see "Database tier slice 2" section above.
+  in v0.89.65, see "Database tier slice 2" section above.
 - **~~No OKE (Oracle Kubernetes Engine).~~** ✓ SHIPPED in
-  v0.89.70 — see "Kubernetes tier slice 2" section above.
+  v0.89.70, see "Kubernetes tier slice 2" section above.
 - **No OKE (Oracle Kubernetes Engine).** Slice 3.
 - **No Object Storage scanning.** Slice 4.
 - **No Load Balancer scanning.** Slice 5.
@@ -209,7 +209,7 @@ The [OCI discovery slice 1 design doc](./proposals/oci-discovery-slice1.md)
 - (Optional but recommended) An existing IaC GitHub connection
   so Open PR works end to end.
 
-## Step 1 — Connect an OCI tenancy in Squadron
+## Step 1, Connect an OCI tenancy in Squadron
 
 Open the Squadron UI, navigate to Discovery → OCI in the sidebar
 (sits next to AWS, GCP, and Azure under the Discovery group).
@@ -222,20 +222,20 @@ Enter:
   copy the OCID. Or: `oci iam compartment list --compartment-id-in-subtree=false`.
 - **User OCID.** Format `ocid1.user.oc1..<unique_id>`. Find it:
   OCI Console → Identity → Users → select your user → copy OCID.
-- **Region.** REQUIRED. OCI uses regional API endpoints — pick
+- **Region.** REQUIRED. OCI uses regional API endpoints, pick
   from the dropdown (us-phoenix-1, us-ashburn-1, eu-frankfurt-1,
   ap-tokyo-1, etc.). Match the region where your Compute
   Instances live.
 
 Click Next.
 
-## Step 2 — Generate the API signing key
+## Step 2, Generate the API signing key
 
 Squadron needs an RSA private key to sign API requests. You
 generate the keypair locally (the private key never travels) and
 upload only the public half to OCI Console.
 
-**Option 1 — OCI CLI helper (recommended):**
+**Option 1, OCI CLI helper (recommended):**
 
 ```sh
 oci setup keys --output-dir ~/.oci
@@ -244,7 +244,7 @@ oci setup keys --output-dir ~/.oci
 This creates `oci_api_key.pem` (private), `oci_api_key_public.pem`
 (public), and outputs the fingerprint.
 
-**Option 2 — openssl directly:**
+**Option 2, openssl directly:**
 
 ```sh
 # Generate 2048-bit RSA private key
@@ -263,7 +263,7 @@ The fingerprint output looks like
 `xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx` (16 hex pairs).
 Save it.
 
-## Step 3 — Upload the public key to OCI Console
+## Step 3, Upload the public key to OCI Console
 
 In the OCI Console:
 
@@ -278,14 +278,14 @@ In the OCI Console:
 7. Click Add.
 
 OCI Console shows the fingerprint of the uploaded key. Verify it
-matches the fingerprint from Step 2 (they MUST be identical — if
+matches the fingerprint from Step 2 (they MUST be identical, if
 not, you uploaded the wrong key or the file is corrupted).
 
 OCI Console also offers to copy a config snippet. You don't need
-that snippet for Squadron — you'll paste fields individually in
+that snippet for Squadron, you'll paste fields individually in
 Step 4.
 
-## Step 4 — Paste credentials into Squadron
+## Step 4, Paste credentials into Squadron
 
 Back in Squadron's wizard (Step 4 of the UI):
 
@@ -297,7 +297,7 @@ Back in Squadron's wizard (Step 4 of the UI):
 
 Squadron seals the private key bytes via credstore with AES-GCM
 and the domain-tagged AAD `squadron.oci_signing_key.v1`. This is
-the **fifth** credential domain in credstore — fully isolated
+the **fifth** credential domain in credstore, fully isolated
 from PATs, webhook secrets, GCP SA JSON, and Azure SP secrets.
 The plaintext bytes never appear in audit payloads, never appear
 in logs, never echo through HTTP responses.
@@ -305,7 +305,7 @@ in logs, never echo through HTTP responses.
 Acknowledge the credential-handling warning checkbox. Next button
 enables. Click Next.
 
-## Step 5 — Add the IAM policy (if not already in place)
+## Step 5, Add the IAM policy (if not already in place)
 
 Squadron's scanner needs `compute.instances:read` and
 `compartment:read` on the tenancy.
@@ -329,7 +329,7 @@ oci iam policy create \
   --statements '["Allow group SquadronDiscovery to read instance-family in tenancy", "Allow group SquadronDiscovery to read compartments in tenancy"]'
 ```
 
-## Step 6 — Validate
+## Step 6, Validate
 
 Click Validate. Squadron:
 
@@ -342,27 +342,27 @@ Click Validate. Squadron:
    on success.
 
 If credentials are correct and the policy is in place, you see
-"Connected ✓ — N compute instances visible." Next button enables.
+"Connected ✓, N compute instances visible." Next button enables.
 
 ### What errors look like
 
-- **permission_denied** — "Verify the user has
+- **permission_denied**, "Verify the user has
   compute.instances:read permission on the tenancy. Add a policy:
   `Allow group <YourGroup> to read instances in tenancy`."
-- **tenancy_not_found** — "Verify the tenancy OCID matches an
+- **tenancy_not_found**, "Verify the tenancy OCID matches an
   existing tenancy in region <region>."
-- **fingerprint_mismatch** — "The fingerprint doesn't match the
+- **fingerprint_mismatch**, "The fingerprint doesn't match the
   public key uploaded to OCI Console for this user. Re-verify
   the fingerprint via openssl, and confirm the uploaded public
   key matches the private key you pasted."
-- **private_key_invalid** — "The pasted PEM is malformed or not
+- **private_key_invalid**, "The pasted PEM is malformed or not
   an RSA key. Re-paste including the BEGIN/END markers. Ensure
   you pasted the PRIVATE key, not the public one."
-- **network** — "Squadron's outbound connectivity to
+- **network**, "Squadron's outbound connectivity to
   `*.oraclecloud.com` may be blocked. Allow this domain in your
   egress firewall."
 
-## Step 7 — Run the first scan
+## Step 7, Run the first scan
 
 Click Scan. Squadron walks Compute Instances across the root
 compartment + first-level child compartments (slice 1; deeper
@@ -370,17 +370,17 @@ trees are slice 2).
 
 For each instance, the scanner extracts:
 
-- **ResourceID** — instance.DisplayName
-- **InstanceType** — instance.Shape (e.g.
+- **ResourceID**, instance.DisplayName
+- **InstanceType**, instance.Shape (e.g.
   "VM.Standard.E4.Flex")
-- **Tags** — `FreeformTags` map + `DefinedTags` map (flattened
-  by dropping the namespace prefix; slice 1 simplification —
+- **Tags**, `FreeformTags` map + `DefinedTags` map (flattened
+  by dropping the namespace prefix; slice 1 simplification,
   slice 2 may keep namespacing for richer matching)
-- **HasOTel** — `true` if any tag key starts with `otel*`
+- **HasOTel**, `true` if any tag key starts with `otel*`
   (case-insensitive)
-- **OSFamily** — `unknown` for slice 1 (OCI Image lookup
+- **OSFamily**, `unknown` for slice 1 (OCI Image lookup
   requires a secondary API call; slice 2 adds detection)
-- **Region** — instance.Region
+- **Region**, instance.Region
 
 After completion, the wizard transitions to the Inventory tab:
 
@@ -389,7 +389,7 @@ After completion, the wizard transitions to the Inventory tab:
 | frontend-1 | VM.Standard.E4.Flex | unknown | us-phoenix-1 | yes | otel-collector=v1, env=prod |
 | db-replica | VM.Standard3.Flex | unknown | us-phoenix-1 | no | env=prod |
 
-## Step 8 — Draft recommendations
+## Step 8, Draft recommendations
 
 Click "Draft recommendations." Squadron's discovery proposer
 identifies uninstrumented instances and emits one
@@ -409,11 +409,11 @@ Reasoning template:
 The Don't propose this again button suppresses future
 recommendations of the same kind for that scope. The exclusion
 persists to the same `iac_recommendation_verdicts` table used by
-the other three clouds — all four providers share the storage,
+the other three clouds, all four providers share the storage,
 discriminated by `tenancy_ocid` / `subscription_id` /
 `project_id` / `account_id`.
 
-## Step 9 — Open the PR
+## Step 9, Open the PR
 
 Click Open PR. Branch name:
 
@@ -421,7 +421,7 @@ Click Open PR. Branch name:
 squadron/rec/compute-otel-tag/<tenancy_ocid>/<region>/<short_id>
 ```
 
-The 4th segment is the scope_id — `tenancy_ocid` for OCI. The
+The 4th segment is the scope_id, `tenancy_ocid` for OCI. The
 webhook receiver detects the provider by the `compute-` prefix
 on the recommendation kind (mirroring `gce-` → GCP, `vm-` →
 Azure, default → AWS).
@@ -438,16 +438,16 @@ resource "oci_core_instance" "db_replica" {
 }
 ```
 
-## Step 10 — Verify the audit signal
+## Step 10, Verify the audit signal
 
 Open Timeline. Filter by event type `discovery.oci.*`:
 
-- **discovery.oci.connection_created** — `{connection_id, tenancy_ocid, display_name}`.
-- **discovery.oci.connection_deleted** — when you remove.
-- **discovery.oci.scan_started** — when you click Scan.
-- **discovery.oci.scan_completed** — `{connection_id, tenancy_ocid, region, instance_count, instrumented_count, uninstrumented_count, partial, partial_reason, failed_services}`. `failed_services` uses `ocicompute` as slice 1's service ID.
-- **discovery.oci.scan_failed** — hard error path.
-- **discovery.oci.recommendations_generated** — includes the
+- **discovery.oci.connection_created**, `{connection_id, tenancy_ocid, display_name}`.
+- **discovery.oci.connection_deleted**, when you remove.
+- **discovery.oci.scan_started**, when you click Scan.
+- **discovery.oci.scan_completed**, `{connection_id, tenancy_ocid, region, instance_count, instrumented_count, uninstrumented_count, partial, partial_reason, failed_services}`. `failed_services` uses `ocicompute` as slice 1's service ID.
+- **discovery.oci.scan_failed**, hard error path.
+- **discovery.oci.recommendations_generated**, includes the
   provider-aware `verdict_examples_used_by_state` buckets.
 
 Downstream events work identically across all four providers:
@@ -456,7 +456,7 @@ Downstream events work identically across all four providers:
 `discovery_recommendation.excluded`. `provider: "oci"` in payload
 discriminates.
 
-## Step 11 — (Optional) Tune the per-connection feedback loop
+## Step 11, (Optional) Tune the per-connection feedback loop
 
 ```sh
 curl -X PATCH https://your-squadron-host/api/v1/discovery/oci/connections/<id> \
@@ -477,7 +477,7 @@ curl -X PATCH https://your-squadron-host/api/v1/discovery/oci/connections/<id> \
 | Scan shows partial=true with reason "ocicompute: rate limit exceeded mid-scan" | OCI API rate limit | Wait for window reset; or restrict to a smaller compartment scope (slice 2 feature) |
 | Scan completes but instance_count is 0 | No instances exist in scope, or user can't see them | Run `oci compute instance list --compartment-id <comp-ocid>` directly and verify visibility |
 | Recommendation doesn't appear for instance with otel-collector tag | DefinedTag under a namespace not flattened correctly | Slice 1 flattens by dropping the namespace prefix. Verify the tag key starts with `otel*` after the namespace strip |
-| Instances in grandchild compartments not appearing | Slice 1 walks root + first-level only | Slice 2 candidate — for now, create one connection per child compartment if needed |
+| Instances in grandchild compartments not appearing | Slice 1 walks root + first-level only | Slice 2 candidate, for now, create one connection per child compartment if needed |
 | PR branch missing tenancy_ocid segment | Squadron version older than v0.89.58 | Upgrade |
 
 ## Custom group + policy for stricter posture
@@ -542,18 +542,18 @@ GCP, Azure, AND Oracle Cloud fleets."**
 
 Four major clouds, one control plane, one audit timeline, one
 recommendation pipeline. The marginal cost of cloud N+1 keeps
-dropping — the substrate (scanner interface, credstore credential
+dropping, the substrate (scanner interface, credstore credential
 model, provider-aware audit shape, branch encoding, proposer
 Provider discriminator) is now quadruply-proven.
 
 The next provider arc (Alibaba Cloud, Tencent Cloud, IBM Cloud,
-DigitalOcean) ships in 3 chunks given substrate maturity — chunk
+DigitalOcean) ships in 3 chunks given substrate maturity, chunk
 1 + chunk 2 (scanner + handlers parallel) + chunk 3 (UI +
-proposer parallel) — runbook + design doc bundled in the
+proposer parallel), runbook + design doc bundled in the
 respective chunks. Cloud N+5 should be a 2-3 day effort, not a
 week.
 
-The slice 2 work across all 4 clouds (database tier — RDS / Cloud
+The slice 2 work across all 4 clouds (database tier, RDS / Cloud
 SQL / Azure SQL / Autonomous DB) deepens the recommendation
 surface. Slice 3 extends into managed Kubernetes (EKS / GKE / AKS
 / OKE). The horizontal breadth foundation makes these vertical
@@ -561,25 +561,25 @@ extensions cheaper.
 
 ## Cross-references
 
-- [OCI discovery slice 1 design doc](./proposals/oci-discovery-slice1.md) —
+- [OCI discovery slice 1 design doc](./proposals/oci-discovery-slice1.md),
   the locked spec.
-- [Azure discovery runbook](./discovery-azure-first-time-setup.md) —
+- [Azure discovery runbook](./discovery-azure-first-time-setup.md),
   parallel arc.
-- [GCP discovery runbook](./discovery-gcp-first-time-setup.md) —
+- [GCP discovery runbook](./discovery-gcp-first-time-setup.md),
   parallel arc.
-- [AWS / IaC GitHub setup](./discovery-iac-first-time-setup.md) —
+- [AWS / IaC GitHub setup](./discovery-iac-first-time-setup.md),
   the IaC integration prerequisite for Open PR.
-- [Webhook listener](./webhook-listener.md) — provider-aware
+- [Webhook listener](./webhook-listener.md), provider-aware
   PR-merged webhook arc.
-- [Checks API back-signal](./checks-api.md) — renders OCI
+- [Checks API back-signal](./checks-api.md), renders OCI
   recommendation summaries on Squadron-opened PRs.
-- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md),
   scope tuple is now (connection_id, scope_id, region) where
   scope_id is tenancy_ocid for OCI.
-- [Audit log](./audit-log.md) — full catalog including
+- [Audit log](./audit-log.md), full catalog including
   `discovery.oci.*` family.
 
-## Object-store + load-balancer tiers — SHIPPED (coverage-parity arc)
+## Object-store + load-balancer tiers, SHIPPED (coverage-parity arc)
 
 Squadron's OCI scanner walks **Object Storage buckets** and **Load
 Balancers** across the same compartments it walks for Compute,
@@ -602,7 +602,7 @@ creates an `oci_logging_log` (`log_type = "SERVICE"`) with
 `configuration.source.service = "objectstorage"` / `"loadbalancer"`,
 `resource = <bucket-name>` / `<load-balancer-OCID>`, and an
 `oci_logging_log_group` (operator-chosen). The log destination is the
-Logging service itself, so — unlike AWS — there is no target-bucket
+Logging service itself, so, unlike AWS, there is no target-bucket
 policy prerequisite.
 
 **IAM policy additions.** The Compute/Database/OKE statements do NOT

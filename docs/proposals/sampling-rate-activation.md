@@ -1,12 +1,12 @@
 # Sampling-rate detection activation (#295)
 
-**Status:** design — implementation in slices. Arc kickoff after the #300
-metric-detection wiring landed (v0.89.330–335).
+**Status:** design, implementation in slices. Arc kickoff after the #300
+metric-detection wiring landed (v0.89.330-335).
 
 ## The dormancy
 
 Sampling-rate analysis flags serverless functions whose **observed OTLP span
-count** is far below their **cloud-native invocation count** over 24h — i.e. the
+count** is far below their **cloud-native invocation count** over 24h, i.e. the
 OTel SDK's trace sampler is dropping so aggressively that the function is
 effectively unobserved. The rule (proposer/sampling_rate.go): `ratio =
 spans / invocations`; fire `span-quality-sampling-too-aggressive` when
@@ -15,10 +15,10 @@ statistical noise).
 
 Everything downstream is already built and tested:
 
-- `proposer.DetectSamplingRate(querier, qual, arn, surface, key)` — the detector.
+- `proposer.DetectSamplingRate(querier, qual, arn, surface, key)`, the detector.
 - Per-cloud invocation metric routing (all 5 surfaces) through `QueryAggregate`.
 - `GET /…/serverless/{id}/sampling` endpoint (`DiscoveryServerlessSamplingHandlers`).
-- `AnnotateServerlessWithSampling` — populates `ServerlessInstanceSnapshot.
+- `AnnotateServerlessWithSampling`, populates `ServerlessInstanceSnapshot.
   SamplingRatio` + `.SamplingExceedsFloor` on the inventory rows (UI).
 - Proposer checks (5 per-cloud variants) + iacpicker Terraform (OTEL_TRACES_SAMPLER
   env injection, all 5 clouds).
@@ -26,7 +26,7 @@ Everything downstream is already built and tested:
 **What's missing:** a wired *producer*. No concrete `SamplingAnnotator` /
 `SamplingDetector` is constructed in `main.go`/`server.go`, so both consumers
 degrade to no-op / 404. This is the exact shape the cold-start + error-rate
-detectors were in before #300 — and it's unblocked by the same fix: sampling
+detectors were in before #300, and it's unblocked by the same fix: sampling
 reads the invocation-count metric, which now has a wired per-cloud metric client
 behind `serverless_metric_detection.enabled`.
 
@@ -35,14 +35,14 @@ behind `serverless_metric_detection.enabled`.
 Sampling is unique among the serverless detectors: it joins **two** data sources
 that live in **different layers**:
 
-1. **Cloud invocation count** — scanner-side, via the scanner's
+1. **Cloud invocation count**, scanner-side, via the scanner's
    `QueryAggregate` (the metric client #300 wired).
-2. **Observed span count** — server-side, from the OTLP receiver's
+2. **Observed span count**, server-side, from the OTLP receiver's
    `traceindex.Quality.SpanCountLast24h(key)` (already wired into the discovery
    handlers as the `qualityIndex`, v0.89.326).
 
 Neither the scanner (no OTLP) nor the receiver (no cloud creds) has both. The
-**handler** is the only layer that does — which is why the designed seam
+**handler** is the only layer that does, which is why the designed seam
 (`AnnotateServerlessWithSampling`, the `SamplingAnnotator`/`SamplingDetector`
 interfaces) is handler-level and does a **live** detection at scan-response time
 rather than reading a persisted observation (unlike cold-start/error-rate).
@@ -51,12 +51,12 @@ rather than reading a persisted observation (unlike cold-start/error-rate).
 
 `traceindex.ComputeResourceKey` tier 1 keys verbatim on `cloud.resource_id`. A
 properly-instrumented serverless function emits `cloud.resource_id` = its ARN /
-resource name / OCID — the same identifier the scanner stores as
+resource name / OCID, the same identifier the scanner stores as
 `ServerlessInstanceSnapshot.ResourceARN`. So the `SamplingKeyResolver` for
 serverless is trivial: **key = ResourceARN**. When a function doesn't emit
 `cloud.resource_id` (weaker instrumentation), the span lookup returns
 `ok=false` → 0 observed spans → the annotator leaves the row's pointers nil
-(renders "—"), which is the correct insufficient-data posture.
+(renders ", "), which is the correct insufficient-data posture.
 
 ### The concrete adapter (slice 1)
 
@@ -84,10 +84,10 @@ and call `AnnotateServerlessWithSampling(detector, arnResolver, result.Serverles
 
 This rides `serverless_metric_detection.enabled` implicitly: with the flag off,
 the scanner has no metric client, `QueryAggregate` returns
-`ErrMetricNotImplemented`, the annotator logs+continues, and the rows stay "—" —
+`ErrMetricNotImplemented`, the annotator logs+continues, and the rows stay ", ",
 zero behavior change, zero metric reads. With the flag on, the annotation runs.
 
-**Known wrinkle — AWS per-region binding.** AWS builds `cwClient` per-region
+**Known wrinkle, AWS per-region binding.** AWS builds `cwClient` per-region
 during the scan walk and leaves `s.cwClient` bound to the *last* region. A
 post-scan sampling query for a function in a *different* region would hit the
 wrong region's CloudWatch. Resolution options (decide in the AWS slice): (i)
@@ -99,31 +99,31 @@ are unaffected.
 
 `GET /…/sampling` has no live scanner. Options: build a metric querier on-demand
 from the connection (heavier), or have the scan-response annotation persist a
-small sampling observation that the endpoint reads (mirrors cold-start). Deferred
-— the inventory annotation (UI + recs) is the higher-value consumer and ships
+small sampling observation that the endpoint reads (mirrors cold-start). Deferred,
+the inventory annotation (UI + recs) is the higher-value consumer and ships
 first.
 
 ## Slice plan
 
 1. **Concrete `samplingDetector` adapter + ARN key resolver + tests** (this
-   slice — self-contained, no per-cloud wiring).
+   slice, self-contained, no per-cloud wiring).
 2. **GCP + OCI annotation wiring** (no region wrinkle) + handler tests.
 3. **AWS annotation wiring** (resolve the per-region binding) + tests.
-4. **Azure annotation wiring** (commercial App Insights path) — Azure's metric
+4. **Azure annotation wiring** (commercial App Insights path), Azure's metric
    client is the App Insights component path; confirm `QueryAggregate` reaches it.
 5. **Per-resource `/sampling` endpoint** wiring + docs reconciliation
    (detection-coverage.md sampling rows) + full gate.
 
 ## Implementation findings (post-slice-1)
 
-Tracing the per-cloud scan handlers surfaced two facts that reshape slices 2–5:
+Tracing the per-cloud scan handlers surfaced two facts that reshape slices 2-5:
 
 1. **Only the AWS handler runs a serverless annotation pass.** `discovery.go`
    (~2224) calls `AnnotateServerlessWithColdStart` + `…WithErrorRate` after the
    scan. The GCP / OCI / Azure handlers annotate **compute/database/cluster**
    last-seen only (e.g. `discovery_gcp.go:1079`) and pass `result.Serverless`
    straight through **unannotated**. So the serverless cold-start / error-rate /
-   sampling UI fields are *already* AWS-only for those clouds — a pre-existing
+   sampling UI fields are *already* AWS-only for those clouds, a pre-existing
    gap this arc must fill, not just "wire sampling". Each of GCP/OCI/Azure needs
    a new serverless annotation block in its scan handler.
 
@@ -153,7 +153,7 @@ Tracing the per-cloud scan handlers surfaced two facts that reshape slices 2–5
 - **3 (GCP + OCI):** add the serverless annotation block (new) to each handler
   + thread the span counter; no region wrinkle.
 - **4 (Azure):** add the annotation block; Azure's invocation metric rides the
-  App Insights commercial path — confirm `QueryAggregate` reaches it.
+  App Insights commercial path, confirm `QueryAggregate` reaches it.
 - **5:** per-resource `/sampling` endpoint wiring + detection-coverage.md
   sampling-rows reconciliation + full gate.
 
@@ -163,52 +163,52 @@ What actually shipped, and the two deliberate deviations from the original plan:
 
 **Shipped (AWS / GCP / OCI):**
 
-- Slice 1 — `samplingDetector` adapter + `samplingARNKeyResolver` + tests.
-- Slice 2 — GCP + OCI serverless annotation blocks (new passes; these handlers
+- Slice 1, `samplingDetector` adapter + `samplingARNKeyResolver` + tests.
+- Slice 2, GCP + OCI serverless annotation blocks (new passes; these handlers
   previously annotated only compute/db/cluster) + span-counter threading + tests.
-- Slice 3 — AWS serverless annotation + a region-aware `aws.QueryAggregate`
+- Slice 3, AWS serverless annotation + a region-aware `aws.QueryAggregate`
   (rebinds CloudWatch to the queried Lambda's own region) + tests.
-- Slice 5 — the per-resource `GET /…/serverless/{id}/sampling` endpoint is now
+- Slice 5, the per-resource `GET /…/serverless/{id}/sampling` endpoint is now
   live. Backed by an **in-memory last-result cache** (`SamplingObservationCache`):
   the scan annotation records each resource's live result (via a sink on the
   detector); the endpoint reads that cache as both lookup + detector. The server
   holds one cache, wires it as the endpoint's lookup/detector, and threads it
   into each per-cloud scan handler as the sink. This is the "persist a small
   sampling observation the endpoint reads" option from the *Per-resource
-  endpoint* note above — chosen over a sqlite observation store (cold-start's
+  endpoint* note above, chosen over a sqlite observation store (cold-start's
   pattern) because sampling is a **live join**, recomputed each scan, with no
   historical-observation concept: the endpoint reflects the last scan and 404s
   for resources no scan has observed (or whenever `serverless_metric_detection`
   is off). All four roles (record / lookup / detect) are one small type, tested.
 
-**Deferred — Azure sampling (slice 4), a surfaced product decision:**
+**Deferred, Azure sampling (slice 4), a surfaced product decision:**
 
-### Azure sampling — activated (Option 2)
+### Azure sampling, activated (Option 2)
 
 Azure sampling was initially deferred (it would have been the first native-metric
 Azure serverless detector, and lighting it up touched three coupled decisions).
 After surfacing the options, **Option 2 (native `FunctionExecutionCount`,
 opt-in)** was chosen and shipped. The three concerns resolved cleanly:
 
-1. **Metric rename — done.** `azure.AzureFunctionsInvocationsMetric` is now the
+1. **Metric rename, done.** `azure.AzureFunctionsInvocationsMetric` is now the
    real native metric `"FunctionExecutionCount"` (was the nonexistent placeholder
    `"FunctionInvocations"`). The constant NAME keeps the historical "Invocations"
    spelling so the proposer/error-rate call sites stay byte-identical; only the
    wire value changed. The rename also un-breaks the native error-rate denominator
-   (it queried the nonexistent name before) — no regression (the error numerator
+   (it queried the nonexistent name before), no regression (the error numerator
    `FunctionErrors` is still App-Insights-only, so native error-rate stays inert).
-2. **Gating — explicit handler check.** Because Azure's `QueryAggregate` runs
+2. **Gating, explicit handler check.** Because Azure's `QueryAggregate` runs
    whenever the scan token is present (no metric-client-absence signal), the Azure
    handler gates the sampling annotation on an explicit
    `serverlessMetricDetectionEnabled` flag threaded from
-   `config.ServerlessMetricDetection.Enabled` — same opt-in posture as the other
+   `config.ServerlessMetricDetection.Enabled`, same opt-in posture as the other
    clouds, different mechanism.
-3. **Granularity — clean.** `FunctionExecutionCount` is Function-App-level, which
+3. **Granularity, clean.** `FunctionExecutionCount` is Function-App-level, which
    *matches* Squadron's Azure serverless unit (the scanner enumerates Function
    Apps, not individual functions), so both sides of the join are app-level. And
    `FunctionExecutionCount` counts ALL executions regardless of trigger (HTTP,
-   timer, queue, blob, event) — the correct, complete sampling denominator. (App
-   Insights `requests/count` would have under-counted non-HTTP triggers — see the
+   timer, queue, blob, event), the correct, complete sampling denominator. (App
+   Insights `requests/count` would have under-counted non-HTTP triggers, see the
    Option-2-vs-hybrid analysis.)
 
 Sampling is now active for **all four clouds** behind
@@ -216,8 +216,8 @@ Sampling is now active for **all four clouds** behind
 
 ## Non-goals
 
-- No new config flag — rides `serverless_metric_detection.enabled` (Azure too).
+- No new config flag, rides `serverless_metric_detection.enabled` (Azure too).
 - No persisted sampling-observation store (the annotation + endpoint are live;
   slice 5 uses an in-memory last-result cache, not a sqlite store).
 - No change to the detection math, the recommendation kind, or the Terraform
-  patterns — all already shipped.
+  patterns, all already shipped.

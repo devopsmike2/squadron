@@ -1,4 +1,4 @@
-# Event source tier slice 3 — AWS SNS (second AWS surface)
+# Event source tier slice 3, AWS SNS (second AWS surface)
 
 **Status:** design doc, locked for slice 3 implementation.
 Widens the event source tier claim from 1 surface per cloud
@@ -10,7 +10,7 @@ alongside EventBridge (slice 1).
 end-to-end. Slice 3 built the scanner (aws/sns.go, HasLogAxis =
 any per-protocol delivery-feedback role set) and the iacpicker
 emitter (`PickSNSDeliveryLoggingPattern`) but never wired a
-detection branch to call the picker — the kind was dormant in
+detection branch to call the picker, the kind was dormant in
 production. The picker-activation arc adds
 `proposer.CheckSNSDeliveryLogging` (fires when a scanned SNS topic
 has `HasLogAxis == false`, honoring exclusions/verdict-learning)
@@ -20,14 +20,14 @@ scan now surfaces the recommendation and opens a Terraform PR. This
 is the reference slice for wiring the remaining dormant
 event-source pickers.
 
-**Arc closed (v0.89.348–v0.89.352):** all event-source pickers are
+**Arc closed (v0.89.348, v0.89.352):** all event-source pickers are
 now wired to production detection branches + per-cloud handler
 appends. Coverage: AWS SNS delivery-logging + SQS redrive; GCP Cloud
 Tasks retry/logging + Pub/Sub Lite logging/reservation; Azure Event
 Grid diagnostics/CloudEvents-schema + Event Hubs
 diagnostics/Capture; OCI Notification Service logging. Every signal
 was confirmed (via a per-cloud parallel survey) to already reach the
-handler from the existing scanners — no scanner enrichment was
+handler from the existing scanners, no scanner enrichment was
 required. The one remaining dormant picker,
 `PickResourceManagerLoggingPattern`, is orchestration-tier (not
 event-source) and is tracked separately. The detection branches live
@@ -47,7 +47,7 @@ source surface per cloud: AWS EventBridge, GCP Pub/Sub, Azure
 Service Bus, OCI Streaming. The slice 1 design doc honestly
 qualified this:
 
-> "Slice 1 covers ONE event source surface per cloud — slice
+> "Slice 1 covers ONE event source surface per cloud, slice
 > 2+ will add more (SNS / SQS / EventHubs / Event Grid /
 > Cloud Tasks / Notification Service)."
 
@@ -73,7 +73,7 @@ second surfaces for GCP / Azure / OCI in turn.
    surface; teams use them as the fan-out layer in
    pub/sub architectures.
 2. **Clean detection axes.** Slice 1's EventBridge scanner
-   pattern carries over cleanly — list topics, inspect
+   pattern carries over cleanly, list topics, inspect
    attributes, detect trace primitive + log primitive.
 3. **Composes with existing arcs.** SNS topics often fan out
    to Lambda (serverless tier), SQS, and HTTP endpoints.
@@ -86,7 +86,7 @@ A 6-surface arc (SNS + SQS + EventHubs + Event Grid + Cloud
 Tasks + Notification Service) would push past the soft cap
 multiple times. The slice 1 pattern of one surface per
 cloud per arc has held for serverless / orchestration / event
-sources slice 1 — keeping the per-arc cap honest preserves
+sources slice 1, keeping the per-arc cap honest preserves
 the verification gate quality.
 
 ## 2. Non-goals (slice 3)
@@ -112,7 +112,7 @@ the verification gate quality.
   notes whether `KmsMasterKeyId` is set (informational only).
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — AWS SNS
+## 3. Detection surface, AWS SNS
 
 API: `sns:ListTopics`, `sns:GetTopicAttributes`. Required IAM
 extension to the existing AWS scanner policy.
@@ -127,7 +127,7 @@ Detection axes:
 | FIFO content dedup         | FIFO topics: `ContentBasedDeduplication = true`             | informational only               |
 
 The "has delivery subscriptions" axis catches dead-topic
-orphans — operators frequently leave SNS topics behind
+orphans, operators frequently leave SNS topics behind
 after refactoring; if a topic has zero active subscriptions,
 nothing downstream gets the messages. Squadron's
 `sns-subscriptions-attach` is more of an audit signal than a
@@ -137,7 +137,7 @@ topic without subs as a placeholder).
 The delivery status logging axis is the canonical "did the
 message get through?" signal. SNS doesn't natively emit OTel
 spans, but the per-protocol success/failure feedback to
-CloudWatch Logs is the closest cloud-native trace proxy —
+CloudWatch Logs is the closest cloud-native trace proxy,
 mirrors the EventBridge log-target proxy from slice 1.
 
 ## 4. Storage schema
@@ -187,7 +187,7 @@ The SNS API:
   FifoTopic, ContentBasedDeduplication, etc.)
 - The AWS SDK Go v2 package `github.com/aws/aws-sdk-go-v2/service/sns`
   exposes both. Already in go.mod from previous discovery
-  work — no new dependency.
+  work, no new dependency.
 
 ## 6. API surface
 
@@ -199,7 +199,7 @@ The Discovery summary endpoint's `event_source_count` for AWS
 starts increasing by the topic count.
 
 The trace coverage endpoint's `event_source_pct` aggregation
-unchanged — slice 1's emission detection logic per resource
+unchanged, slice 1's emission detection logic per resource
 correlates by ARN, which works for SNS ARNs.
 
 ## 7. UI
@@ -279,10 +279,10 @@ Reasoning template for `sns-subscriptions-attach`:
 > OR a downstream consumer needs to subscribe.
 >
 > Slice 3 of event sources does NOT auto-draft a subscription
-> Terraform PR — the operator decides what to subscribe.
+> Terraform PR, the operator decides what to subscribe.
 > This recommendation surfaces the topic for review."
 
-No Terraform pattern for `sns-subscriptions-attach` — the
+No Terraform pattern for `sns-subscriptions-attach`, the
 recommendation is audit-only. The runbook documents this.
 
 ## 9. Slice 3 contract
@@ -327,12 +327,12 @@ recommendation is audit-only. The runbook documents this.
   **v0.89.139.**
 
 Total: 2 release tags. Smaller than recent arcs because slice
-3 reuses all the existing event source surface scaffolding —
+3 reuses all the existing event source surface scaffolding,
 storage, API, UI, audit all carry through.
 
 ## 11. Acceptance tests
 
-1. **AWS ScanSNSTopics returns topics** — paginated list
+1. **AWS ScanSNSTopics returns topics**, paginated list
    response is walked.
 2. **Topic with SubscriptionsConfirmed > 0 → has_trace_axis
    reflects delivery logging path, has_log_axis reflects
@@ -358,7 +358,7 @@ storage, API, UI, audit all carry through.
 11. **Webhook routes sns-delivery-logging-enable to aws**.
 12. **Discovery summary AWS event_source_count surfaces
     non-zero when topics exist**.
-13. **Cold-start parity preserved** — proposer prompts
+13. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.136 when no SNS rows trigger
     recommendations.
 
@@ -374,7 +374,7 @@ ListTopics rate limit (~30 TPS) and GetTopicAttributes
 (~30 TPS). For a fleet of 1000 SNS topics in one region,
 that's 1000 GetTopicAttributes queries. The substrate's
 existing AWS rate limiter (10 RPS for CloudWatch, but SNS
-has its own quota) absorbs this — ~100 seconds added to the
+has its own quota) absorbs this, ~100 seconds added to the
 scan duration.
 
 **Cost surface.** SNS API queries are free. No new
@@ -399,18 +399,18 @@ audit chain. PII surface stays at zero.
 
 ## 13. Slice 4+ candidates
 
-- **AWS SQS** — second AWS event source surface alongside
+- **AWS SQS**, second AWS event source surface alongside
   EventBridge + SNS. Slice 4.
-- **GCP Cloud Tasks** — second GCP surface. Slice 5.
-- **Azure Event Grid** — second Azure surface. Slice 6.
-- **Azure Event Hubs** — third Azure surface. Slice 6 or 7.
-- **OCI Notification Service** — second OCI surface. Slice 7.
-- **SNS-to-SQS subscription fan-out trace correlation** —
+- **GCP Cloud Tasks**, second GCP surface. Slice 5.
+- **Azure Event Grid**, second Azure surface. Slice 6.
+- **Azure Event Hubs**, third Azure surface. Slice 6 or 7.
+- **OCI Notification Service**, second OCI surface. Slice 7.
+- **SNS-to-SQS subscription fan-out trace correlation**,
   per-subscription propagation detection like slice 2 for
   EventBridge rules. Slice 8+.
-- **SNS message filter inspection** — does the subscription's
+- **SNS message filter inspection**, does the subscription's
   filter drop messages with traceparent attributes? Slice 8+.
-- **Per-region multi-account fan-out** — coordinate SNS
+- **Per-region multi-account fan-out**, coordinate SNS
   scans across accounts when an operator has many. Slice 9+.
 
 ---
@@ -422,18 +422,18 @@ Each subsequent slice adds one new surface, keeping the
 per-arc cap honest while compounding the claim:
 
 > "Squadron covers SIX event source surfaces across four
-> clouds — AWS EventBridge + SNS, GCP Pub/Sub + Cloud Tasks,
+> clouds, AWS EventBridge + SNS, GCP Pub/Sub + Cloud Tasks,
 > Azure Service Bus + Event Grid, OCI Streaming +
 > Notification Service."
 
-The universal claim doesn't grow a new tier or new verb —
+The universal claim doesn't grow a new tier or new verb,
 the existing event source tier becomes more rigorous. The
 operator-meaningful framing: "Squadron sees the event
 sources you actually use."
 
 The Tuesday LinkedIn drumbeat narrative gains: "Your AWS
 account has 47 SNS topics. 12 of them have zero
-subscriptions — they're orphans from a refactor. Squadron
+subscriptions, they're orphans from a refactor. Squadron
 just flagged them for review. The other 35 have active
 subscriptions; 11 of those don't have CloudWatch Logs
 delivery status feedback configured. Here are the IaC PRs."

@@ -1,4 +1,4 @@
-# Continuous discovery — drift notifications (slice 5)
+# Continuous discovery, drift notifications (slice 5)
 
 Status: shipped v0.89.255. Author: autonomous session. Builds on slice 4
 (drift) + slice 3 (scheduler).
@@ -6,7 +6,7 @@ Status: shipped v0.89.255. Author: autonomous session. Builds on slice 4
 ## Problem
 
 Drift (slice 4) answers "what changed?" on request. The continuous engine runs
-scans unattended on a timer (slice 3) — so the natural next step is to PUSH the
+scans unattended on a timer (slice 3), so the natural next step is to PUSH the
 "what changed" signal instead of waiting for an operator to poll the drift
 endpoint.
 
@@ -15,7 +15,7 @@ endpoint.
 After each successful SCHEDULED scan, the scheduler diffs the new scan against
 the previous one and, when anything changed, records a
 `discovery.scan_drift_detected` audit event. That event flows through the
-existing audit timeline and SIEM forwarding with no extra wiring — the operator
+existing audit timeline and SIEM forwarding with no extra wiring, the operator
 gets drift in whatever channel already consumes Squadron's audit stream.
 
 - `emitDriftIfChanged` (per-cloud, in the scheduler wiring) lists the two most
@@ -24,7 +24,7 @@ gets drift in whatever channel already consumes Squadron's audit stream.
 - `scanAccountWithDrift` wraps each cloud's `ScanAccount` so the diff+emit runs
   after the scan persists. All four clouds.
 - Payload: provider, scope_id, from/to scan ids, the three totals, and
-  `instrumentation_regressions` — the highest-signal subset (resources whose
+  `instrumentation_regressions`, the highest-signal subset (resources whose
   OTel turned OFF between scans).
 
 ## Scope / honest framing

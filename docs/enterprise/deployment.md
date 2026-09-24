@@ -7,7 +7,7 @@ key, and env var is drawn from it.
 
 ## 1. Build
 
-The enterprise binary is **composed at build time** from three trees — the OSS
+The enterprise binary is **composed at build time** from three trees, the OSS
 open core plus the private `squadron-enterprise` and `squadron-compliance` packs.
 Which code is compiled in *is* the entitlement boundary; it is not a runtime
 flag.
@@ -21,7 +21,7 @@ make build-enterprise      # -> bin/squadron-enterprise
 build-time **overlay** onto the OSS open core and fully **reverts it on exit**
 (success *or* failure) via an `EXIT` trap, leaving the OSS tree pristine:
 
-1. **Drops the edition wire files** into the OSS `cmd/all-in-one/` — the
+1. **Drops the edition wire files** into the OSS `cmd/all-in-one/`, the
    enterprise wire files (identity, tenant resolver, scoped store, strict,
    detectors, RBAC store/audit/handler, tenant handler, enterprise-server) plus
    the Compliance Pack's `wire_compliance.go`.
@@ -98,7 +98,7 @@ Sealing the OIDC client secret at rest (AES-256-GCM) requires a secrets key.
 
 ### Strict tenant scoping is auto-on
 
-Strict scoping is **auto-on in the enterprise wire — there is no config knob**.
+Strict scoping is **auto-on in the enterprise wire, there is no config knob**.
 The enterprise build calls `sqlite.SetStrictTenantScoping(true)`,
 `opamp.SetRejectUntenantedConnections(true)`, and installs the OTLP fatal-check
 on `ingest.otlp.tenant_id`. Consequently:
@@ -122,13 +122,13 @@ binary issues one bootstrap token automatically:
 - label **`bootstrap`**, **wildcard** scope, **no expiry**;
 - issued only when the token list is empty (idempotent across restarts);
 - logged **loudly at Warn** with the plaintext: `API auth is enabled and no
-  tokens exist yet — issued a bootstrap token.`
+  tokens exist yet, issued a bootstrap token.`
 
-Capture that plaintext from the logs — it is the only way to authenticate to a
+Capture that plaintext from the logs, it is the only way to authenticate to a
 freshly-enabled Squadron. The enterprise RBAC engine grants **implicit admin**
 to tokens whose label is in the bootstrap set (defaults to `bootstrap`, extended
 additively via `SQUADRON_RBAC_BOOTSTRAP_LABELS="bootstrap,break-glass"`), so it
-can provision roles and tenants before any role exists — no lockout.
+can provision roles and tenants before any role exists, no lockout.
 
 ```bash
 export TOKEN="sqd_<bootstrap-plaintext-from-logs>"   # the sqd_ prefix is required
@@ -141,7 +141,7 @@ export TOKEN="sqd_<bootstrap-plaintext-from-logs>"   # the sqd_ prefix is requir
 
 ## 4. Prove the edition
 
-Confirm you are running the enterprise edition — not OSS — three ways:
+Confirm you are running the enterprise edition, not OSS, three ways:
 
 === "Startup log"
 

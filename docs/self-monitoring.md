@@ -1,7 +1,7 @@
 # Self-monitoring
 
 Squadron can emit its own state changes as OpenTelemetry traces to a
-configurable OTLP endpoint — typically the same observability stack
+configurable OTLP endpoint, typically the same observability stack
 you're already using Squadron to manage the OTel collectors for. The
 dogfood version of "telemetry control plane".
 
@@ -24,17 +24,17 @@ dogfood version of "telemetry control plane".
 The audit log in `/api/v1/audit/events` is the durable record of every
 state change Squadron makes. Self-monitoring fans the same events out
 as OTel spans so they land in your existing trace search tool (Tempo,
-Jaeger, SigNoz, Honeycomb, Datadog OTLP — anything that speaks OTLP).
+Jaeger, SigNoz, Honeycomb, Datadog OTLP, anything that speaks OTLP).
 Operators get to query Squadron's activity alongside everything else
 they observe.
 
 - "Show me every rollout that aborted in the last week."
 - "What did `operator:alice@example.com` change yesterday?"
-- "Trace `target_id=<rollout-id>` — every stage, every state
+- "Trace `target_id=<rollout-id>`, every stage, every state
   transition, every audit entry, in one place."
 
 The audit log stays source-of-truth in SQLite. OTel export is
-best-effort — if the destination is unreachable, the durable record
+best-effort, if the destination is unreachable, the durable record
 is unaffected.
 
 ## Turning it on
@@ -60,7 +60,7 @@ Restart Squadron. The startup log line confirms the configuration:
 INFO  selftel: OTLP trace export enabled  endpoint=otel-collector:4317 protocol=grpc service_name=squadron
 ```
 
-If `enabled: true` but `endpoint` is empty, Squadron refuses to start —
+If `enabled: true` but `endpoint` is empty, Squadron refuses to start,
 the misconfiguration would silently drop every export.
 
 ## What gets emitted
@@ -78,7 +78,7 @@ Every audit event becomes one span:
 The full list lives in [audit-log.md](./audit-log.md#whats-recorded).
 Anything that lands in the audit log lands as a span.
 
-Spans are **point-event-shaped** — start time equals end time (plus the
+Spans are **point-event-shaped**, start time equals end time (plus the
 SDK's monotonic-clock noise). Trace UIs render them as flat events
 rather than nested durations. That matches what audit entries actually
 are: instantaneous state changes, not bracketing operations.
@@ -96,7 +96,7 @@ Every span carries the same canonical attributes:
 | `squadron.action`      | audit event `action`         | `created`, `aborted`           |
 | `squadron.payload.<k>` | primitive payload keys       | `squadron.payload.stage_count = 3` |
 
-Non-primitive payload fields (maps, slices) are deliberately dropped —
+Non-primitive payload fields (maps, slices) are deliberately dropped,
 they blow up trace UI cardinality and don't filter cleanly. The full
 payload is always retained in the SQLite audit log.
 
@@ -156,7 +156,7 @@ Span events on the parent span carry the transition narrative:
 ### Restart recovery
 
 When Squadron restarts mid-rollout, the OTel span doesn't carry
-across processes — the new Squadron opens a fresh span when it picks
+across processes, the new Squadron opens a fresh span when it picks
 up the in-progress rollout on its next tick. The recovered span will
 be missing the early stages' history but the rest of the lifecycle
 gets traced. Document this in your runbook if your operators rely on
@@ -167,7 +167,7 @@ trace continuity across deploys.
 `engine.Stop` flushes any in-flight rollout spans before exiting.
 Truncated spans end with status `Error` and message `engine.shutdown`,
 so they're visible in the trace UI rather than silently dropped. The
-rollout itself isn't aborted — on next start the engine resumes from
+rollout itself isn't aborted, on next start the engine resumes from
 the persisted state and opens a new span.
 
 ## Alert evaluation traces
@@ -179,12 +179,12 @@ state after the threshold comparison, and closes it once dispatch
 completes.
 
 A fired alert is still a **successful evaluation** from the tracer's
-perspective — the QL query worked, the threshold was applied, the
+perspective, the QL query worked, the threshold was applied, the
 rule yielded its result. Status only flips to `Error` when the QL
 query itself errored. Operators filter:
 
-- `squadron.fired = true` — all firing evaluations.
-- `status = Error` — query failures (parse errors, telemetry-store
+- `squadron.fired = true`, all firing evaluations.
+- `status = Error`, query failures (parse errors, telemetry-store
   problems, etc.).
 
 ### Attribute schema
@@ -224,7 +224,7 @@ as a span event before the span closes.
 | `squadron.target_id`       | agent UUID                                             |
 | `squadron.agent_id`        | agent UUID (duplicate of target_id for filtering)      |
 | `squadron.config_id`       | config row ID being pushed                             |
-| `squadron.group_id`        | group ID — omitted entirely for single-agent direct pushes |
+| `squadron.group_id`        | group ID, omitted entirely for single-agent direct pushes |
 | `squadron.push_source`     | what triggered the push: `rollout` / `direct` / `group` / `drift_remediation` (reserved) |
 
 ### Span events
@@ -264,7 +264,7 @@ disconnect.
 | `squadron.agent_id`                      | agent instance UUID                         |
 | `squadron.agent_version`                 | reported in the first AgentDescription. Omitted if the agent never reports one. |
 | `squadron.disconnect_reason`             | set at End: `client_disconnected`, `server_shutdown`, or a protocol-error string |
-| `squadron.connection_duration_seconds`   | float — derived at End from the span's wall-clock start time |
+| `squadron.connection_duration_seconds`   | float, derived at End from the span's wall-clock start time |
 
 ### Status semantics
 
@@ -283,8 +283,8 @@ your operators rely on connection-span continuity across deploys.
 ## Tracing across the agent boundary
 
 The trace propagation story doesn't stop at the API edge. When
-Squadron pushes a config to an agent — via the rollout engine, the
-direct-push API handler, or (eventually) the drift-remediation loop —
+Squadron pushes a config to an agent, via the rollout engine, the
+direct-push API handler, or (eventually) the drift-remediation loop,
 the W3C TraceContext for the originating operation rides along on
 the OpAMP message. An OTel-instrumented agent can extract it and
 parent its own apply-side spans under Squadron's trace, so a single
@@ -308,7 +308,7 @@ propagator would put into an HTTP `traceparent` header (`00-<trace-id>-<span-id>
 `tracestate` is included only when the source context carries one.
 
 Per the OpAMP spec, agents that don't recognize a custom capability
-ignore it. The injection is therefore fully backward-compatible —
+ignore it. The injection is therefore fully backward-compatible,
 old agents see the same wire frame they always saw.
 
 ### When the field is attached
@@ -325,14 +325,14 @@ Squadron deliberately omits the CustomMessage when no active span is
 present rather than emitting a sentinel all-zeros traceparent. The
 W3C spec treats `00-00000000000000000000000000000000-0000000000000000-00`
 as syntactically valid, and naive consumers might adopt it as a
-parent — that would create phantom traces rooted in a non-existent
+parent, that would create phantom traces rooted in a non-existent
 span. Better to send nothing.
 
 ### What we don't send
 
 The selftel publisher installs a composite propagator
 (`TraceContext` + `Baggage`). Squadron extracts only the W3C
-trace-context headers for the OpAMP payload — baggage entries are
+trace-context headers for the OpAMP payload, baggage entries are
 dropped. Baggage typically carries operator-private context (tenant
 id, deploy version, request-scoped feature flags), and shipping it
 to every agent in the fleet on every push is unnecessary noise.
@@ -374,11 +374,11 @@ Squadron's API server participates in W3C
 [Trace Context](https://www.w3.org/TR/trace-context/) propagation.
 When a client (`squadronctl`, a CI pipeline, the in-browser UI) sends
 a `traceparent` header on `POST /api/v1/rollouts` or any other API
-call, Squadron's server span becomes a child of the caller's span —
+call, Squadron's server span becomes a child of the caller's span,
 the request shows up under the caller's trace in your observability
 tool rather than starting a fresh root.
 
-This is automatic — turning on `telemetry.enabled` also installs the
+This is automatic, turning on `telemetry.enabled` also installs the
 W3C TraceContext + Baggage propagator globally, and the API server
 mounts the `otelgin` middleware on every route.
 
@@ -398,7 +398,7 @@ distinguishable from any future link types.
 
 We use a link rather than a true parent-child relationship because:
 
-- The rollout span lives across many engine ticks — often minutes,
+- The rollout span lives across many engine ticks, often minutes,
   sometimes hours. The API span ended seconds after the request
   returned.
 - Nesting a long-lived span under a short-lived one breaks trace UIs
@@ -410,7 +410,7 @@ We use a link rather than a true parent-child relationship because:
 
 ```bash
 # squadronctl doesn't yet inject traceparent on its own (planned),
-# but you can wrap it with anything that does — e.g. otel-cli:
+# but you can wrap it with anything that does, e.g. otel-cli:
 otel-cli exec --service-name ci-deploy --name "deploy v2.3" -- \
   squadronctl rollout create \
     --group prod-collectors \
@@ -424,23 +424,23 @@ In your trace UI:
 - The `ci-deploy` root span shows the full operation.
 - A `POST /api/v1/rollouts` child span shows the API request.
 - A `rollout.deploy-v2.3` linked span shows the engine's bracketing
-  rollout trace — kept as a separate trace tree because it lives
+  rollout trace, kept as a separate trace tree because it lives
   beyond the API request.
 
 ## Metrics
 
 As of v0.17, turning on `telemetry.enabled` also bridges Squadron's
 Prometheus `/metrics` surface to OTLP metrics on the same endpoint
-that receives the traces. Every collector that backs `/metrics` —
+that receives the traces. Every collector that backs `/metrics`,
 API request counters, OpAMP connection gauges, OTLP receiver
 histograms, drift status gauges, alert evaluation counters, worker
-pool retries / dead letters — shows up on the OTLP side without any
+pool retries / dead letters, shows up on the OTLP side without any
 per-collector rewiring.
 
 The intent is to give operators on OTel-only observability stacks
 (no Prometheus scrape configured) the same fleet view that
 Prometheus operators get from `/metrics`. Operators who already run
-a Prometheus scrape against `/metrics` can keep doing so — both
+a Prometheus scrape against `/metrics` can keep doing so, both
 exports run in parallel, drawing from the same in-memory registry.
 
 ### How it works
@@ -455,7 +455,7 @@ insecure flag.
 
 [bridge]: https://pkg.go.dev/go.opentelemetry.io/contrib/bridges/prometheus
 
-The pipeline runs entirely in-process — no second scrape against
+The pipeline runs entirely in-process, no second scrape against
 `/metrics`. The bridge reads the underlying `prometheus.Gatherer`
 state directly on each Reader cycle. That means the export cadence
 is independent of any external Prometheus scrape; if you want
@@ -468,7 +468,7 @@ Prometheus metric names and label keys pass through verbatim. A
 counter named `api_requests_total` with label `component=api` lands
 on the OTLP side as a Sum (monotonic) named `api_requests_total`
 with an `api_requests_total{component="api"}` attribute set. There
-is no `squadron.` prefix transformation — operators querying the
+is no `squadron.` prefix transformation, operators querying the
 OTLP side will see the same names as in `/metrics`.
 
 Type mapping:
@@ -524,7 +524,7 @@ receivers:
     protocols:
       grpc: { endpoint: 0.0.0.0:4317 }
 exporters:
-  # Whatever your stack uses — Tempo, Jaeger, Datadog, etc.
+  # Whatever your stack uses, Tempo, Jaeger, Datadog, etc.
   otlphttp:
     endpoint: http://tempo:4318
 service:
@@ -556,9 +556,9 @@ Squadron's spans will appear under the service name `squadron`
 In your trace tool, filter by `service.name = squadron` to scope to
 the control-plane events. Then narrow further by any attribute:
 
-- `squadron.event_type = rollout.aborted` — every aborted rollout.
-- `squadron.actor != system` — operator-attributed events only.
-- `squadron.target_id = <rollout-id>` — full event stream for one
+- `squadron.event_type = rollout.aborted`, every aborted rollout.
+- `squadron.actor != system`, operator-attributed events only.
+- `squadron.target_id = <rollout-id>`, full event stream for one
   rollout.
 
 ## What's NOT exported (yet)

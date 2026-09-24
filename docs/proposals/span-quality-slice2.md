@@ -1,8 +1,8 @@
-# Span quality slice 2 — W3C trace context parsing
+# Span quality slice 2, W3C trace context parsing
 
 **Status:** design doc, locked for slice 2 implementation.
 Closes the explicit slice 1 deferral (span quality slice 1
-§2 non-goal: "W3C trace context validation — that's slice
+§2 non-goal: "W3C trace context validation, that's slice
 2"). Composes with both span quality slice 1 (which catches
 orphan-span SYMPTOMS) and event source tier slice 2 (which
 catches broken propagation CONFIG) into a complete
@@ -18,11 +18,11 @@ diagnostic picture.
 Span quality slice 1 (v0.89.84-88) ships three pathology
 detectors on the OTLP receiver hot path:
 
-- **Orphan spans** — `parent_span_id` is non-zero but no span
+- **Orphan spans**, `parent_span_id` is non-zero but no span
   with that span_id has been observed in the 5-minute window.
-- **Missing required resource attributes** — per-tier fixed
+- **Missing required resource attributes**, per-tier fixed
   set (service.name / cloud.provider / etc.).
-- **Attribute placeholder/mismatch** — host.name=localhost,
+- **Attribute placeholder/mismatch**, host.name=localhost,
   cloud.account.id=000000000000, etc.
 
 These detectors catch real problems but leave a specific gap:
@@ -54,17 +54,17 @@ between:
   service's library DID receive a valid header, but for
   some reason the SDK didn't attach `traceparent` to the
   span's attributes. The span carries parent_span_id but no
-  traceparent — suggests an SDK bug or instrumentation gap
+  traceparent, suggests an SDK bug or instrumentation gap
   (especially common with custom auto-instrumentation
   patches).
 
 Slice 2 surfaces cases B and C with two new pathology
 detectors at the same Quality observer hot path:
 
-1. **HasMalformedTraceparent** — span carries a `traceparent`
+1. **HasMalformedTraceparent**, span carries a `traceparent`
    attribute but its value doesn't match the W3C format
    `00-{32hex}-{16hex}-{2hex}`.
-2. **HasMissingTraceparentOnChild** — span has a non-zero
+2. **HasMissingTraceparentOnChild**, span has a non-zero
    `parent_span_id` but no `traceparent` attribute.
 
 Two new recommendation kinds correspond. The operator can
@@ -94,7 +94,7 @@ broken values" (slice 2 W3C parsing).
   Some SDKs propagate context via HTTP headers but don't
   attach traceparent to the resulting span's attributes
   (they just use it during span creation). Squadron's
-  Quality observer reads attributes — if the SDK doesn't
+  Quality observer reads attributes, if the SDK doesn't
   attach traceparent to the span, slice 2 can't detect it
   even when propagation worked. The operator sees a false
   positive; the runbook documents.
@@ -169,7 +169,7 @@ A span with a `traceparent` attribute whose value fails this
 check increments the `MalformedTraceparentSpans` counter for
 the resource. Threshold: > 1% of spans (intentionally lower
 than the slice 1 thresholds because ANY malformed traceparent
-is unusual — most SDKs either propagate correctly or not at
+is unusual, most SDKs either propagate correctly or not at
 all).
 
 ### 3.2 Missing traceparent on child detection
@@ -424,25 +424,25 @@ than adding a new scanner surface.
 
 ## 11. Acceptance tests
 
-1. **isWellFormedTraceparent — canonical example**.
+1. **isWellFormedTraceparent, canonical example**.
    `"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"`
    → true.
-2. **isWellFormedTraceparent — wrong length**.
+2. **isWellFormedTraceparent, wrong length**.
    `"00-too-short"` → false.
-3. **isWellFormedTraceparent — non-hex character in trace_id**.
+3. **isWellFormedTraceparent, non-hex character in trace_id**.
    `"00-0123456789abcdef0123456789abcdeg-0123456789abcdef-01"`
    (note `g`) → false.
-4. **isWellFormedTraceparent — all-zero trace_id**.
+4. **isWellFormedTraceparent, all-zero trace_id**.
    `"00-00000000000000000000000000000000-0123456789abcdef-01"`
    → false (spec prohibits).
-5. **isWellFormedTraceparent — all-zero parent_id**.
+5. **isWellFormedTraceparent, all-zero parent_id**.
    `"00-0123456789abcdef0123456789abcdef-0000000000000000-01"`
    → false.
-6. **isWellFormedTraceparent — version "ff" (future
+6. **isWellFormedTraceparent, version "ff" (future
    reserved)**.
    `"ff-...-..."` → false (slice 2 only accepts version "00";
    slice 3 may relax for forward-compat).
-7. **isWellFormedTraceparent — version "01" (next-version
+7. **isWellFormedTraceparent, version "01" (next-version
    reserved)**. Returns false. Operator may see this in real
    traffic when SDKs ship the next spec version.
 8. **HasMalformedTraceparent counter increments on bad span**.
@@ -519,7 +519,7 @@ percentages only.
 
 **Strategic frame:**
 
-Slice 2 doesn't grow the universal claim — it makes the
+Slice 2 doesn't grow the universal claim, it makes the
 existing span quality claim more rigorous. Operators who run
 Squadron's discovery + verification now get an answer at
 THREE levels for the "where did my trace go?" question:
@@ -530,7 +530,7 @@ THREE levels for the "where did my trace go?" question:
    end-to-end? (event source slice 2)
 3. Does the trace context that DOES arrive at Squadron's
    OTLP receiver conform to the W3C spec? (span quality
-   slice 2 — this arc)
+   slice 2, this arc)
 
 These three diagnostic layers cover the full "request → orchestration
 → execution" chain Squadron scans. The Tuesday LinkedIn
@@ -538,7 +538,7 @@ drumbeat narrative gains the most specific answer yet to
 "where did my trace go?":
 
 > "Your downstream Lambda received a traceparent header from
-> the EventBridge bus, but the header is malformed — version
+> the EventBridge bus, but the header is malformed, version
 > segment is '01' (a future-spec reserved value). The SDK
 > rejected it and generated a fresh parent_span_id. Your
 > trace chain looks broken because the propagation is broken
@@ -546,6 +546,6 @@ drumbeat narrative gains the most specific answer yet to
 > the PR to pin the upstream SDK to the W3C-compliant version."
 
 This is exactly the diagnosis operators struggle to find
-themselves — buried in SDK changelogs, hidden in version-pin
+themselves, buried in SDK changelogs, hidden in version-pin
 files, never surfaced by the cloud console or by typical
 observability backends.

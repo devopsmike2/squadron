@@ -1,4 +1,4 @@
-# Action runner steps in plans — operator runbook
+# Action runner steps in plans, operator runbook
 
 This is the operator-facing runbook for v0.89.14's slice-1
 implementation of action runner steps inside multi-step plans
@@ -25,8 +25,8 @@ turnaround.
 
 A **plan** with at least one step whose `kind` is `action`. The
 plan engine treats the action step the same way it treats a
-config-rotation step for sequencing, approval, and audit purposes
-— with three operator-visible differences worth knowing up front:
+config-rotation step for sequencing, approval, and audit purposes,
+with three operator-visible differences worth knowing up front:
 
 1. **The action dispatches as a single signed request.** There are
    no stages, no canary percentage, no abort-on-error-rate. The
@@ -37,7 +37,7 @@ config-rotation step for sequencing, approval, and audit purposes
    envelope, so the plan layer doesn't re-implement them.
 2. **The plan-step-0 approval covers the action.** The standalone
    action-runner path (v0.53) requires a two-phase dry-run +
-   execute interaction. Plan-embedded actions skip that — the
+   execute interaction. Plan-embedded actions skip that, the
    operator approving the plan at step 0 is the same operator
    who would have approved the dry-run, and forcing the
    double-approve adds latency without changing the trust
@@ -102,10 +102,10 @@ limitations.
   `action_type` string; the runner refuses anything outside
   its declared capabilities. There is no mechanism for the
   proposer or for Squadron's plan engine to add a verb to a
-  runner's capability set — that's an operator config-file
+  runner's capability set, that's an operator config-file
   edit on the runner host, intentionally out of band.
 - **The runner is not addressable by hostname or by group.**
-  The plan step names a specific `runner_id` — the public
+  The plan step names a specific `runner_id`, the public
   half of the runner's ed25519 keypair. A plan that fans an
   action out to N runners is a plan with N steps (one per
   runner_id), or a future slice. Slice 1 is one runner per
@@ -162,7 +162,7 @@ still sign and persist the request, but the runner won't pick it
 up; the engine will declare `action_timeout` once the request's
 `expires_at` elapses.
 
-## Step 1 — Author the plan with an action step
+## Step 1, Author the plan with an action step
 
 The plan create endpoint is `POST /api/v1/rollouts/plans`. The
 body shape from v0.73 is unchanged; v0.89.14 adds the `kind`
@@ -215,7 +215,7 @@ it returns so you can debug from the wire response:
    Empty or whitespace-only values return
    `plan step N action.runner_id is required` /
    `plan step N action.action_type is required`. There is no
-   defaulting — naming the runner explicitly is what makes the
+   defaulting, naming the runner explicitly is what makes the
    step dispatchable.
 3. **`timeout_seconds` defaults to 300 and is clamped to 3600.**
    Anything above the clamp returns
@@ -226,7 +226,7 @@ it returns so you can debug from the wire response:
    default.
 
 The handler also enforces `kind=action` does not appear in
-mismatched form with rollout-only fields populated — the
+mismatched form with rollout-only fields populated, the
 acceptance test `create_plan_rejects_mixed_action_and_rollout_fields`
 exercises this. If the response is a 400, the body's `detail`
 field names exactly which step index needs fixing.
@@ -235,16 +235,16 @@ field names exactly which step index needs fixing.
 rollouts. The plan's approval gate is at step 0; the operator
 approves once, and steps 1..N inherit the approval transitively.
 A plan where step 0 is the action and step 1 is the rollout is
-just as legal as the reverse — the approval semantics don't
+just as legal as the reverse, the approval semantics don't
 care about kind.
 
-## Step 2 — Approve the plan
+## Step 2, Approve the plan
 
 The plan detail page in the UI grows an Approve button on step 0
 the same way it would for a config-only plan. The approver sees
-the full step list — action steps render as cards with the
+the full step list, action steps render as cards with the
 action_type, the target runner_id (truncated to the first 12
-chars), and the parameters dictionary — and clicks Approve.
+chars), and the parameters dictionary, and clicks Approve.
 
 If the auth chain rejects the approver (insufficient scope, or
 auth-disabled deployment running without an actor), the UI
@@ -256,13 +256,13 @@ approval-gate-skipped case is rare in practice.
 Once the approver clicks Approve, step 0 transitions out of
 `pending_approval`. From here on the plan engine drives.
 
-## Step 3 — Watch the engine walk the plan
+## Step 3, Watch the engine walk the plan
 
 The state transitions for an action step are:
 
 | Trigger | Engine action |
 | --- | --- |
-| Predecessor succeeded → engine promotes the action step from `queued` to `pending` | Standard `advancePlan` path — same one rollout steps follow |
+| Predecessor succeeded → engine promotes the action step from `queued` to `pending` | Standard `advancePlan` path, same one rollout steps follow |
 | Action step in `pending` | Dispatcher signs + persists an `action_request`; step transitions to `in_progress`; `action_request_id` is attached to the rollout row |
 | Runner posts `success` | Step → `succeeded`; engine emits `action.executed`; engine calls `advancePlan` to promote the next step |
 | Runner posts `failure` | Step → `aborted` with reason `action_runtime_failure`; engine triggers the backwards walk |
@@ -291,7 +291,7 @@ A few subtleties worth knowing:
   next tick.** This is a bookkeeping move that lets
   `IsTerminal()` return true so the engine stops scanning
   the row each tick. It does NOT mean Squadron rolled the
-  action back — it didn't, because there's no auto-undo.
+  action back, it didn't, because there's no auto-undo.
   The audit event recorded at abort time is the source of
   truth for what happened; the `rolled_back` state is the
   finalize marker. Slice-1's docs flag this clearly so SIEM
@@ -304,16 +304,16 @@ action step in any non-terminal state and the tooltip shows
 the action_request_id; the same id appears in the audit event
 payloads.
 
-## Step 4 — Read the audit timeline
+## Step 4, Read the audit timeline
 
 The plan engine reuses the existing v0.53 action event types
 rather than minting new ones. Plan-embedded action events add
 three fields to the payload:
 
-- **`plan_id`** — the plan the action belongs to.
-- **`plan_step_index`** — the action's position within the
+- **`plan_id`**, the plan the action belongs to.
+- **`plan_step_index`**, the action's position within the
   plan (0-based).
-- **`plan_step_origin`** — `"plan_embedded"` for actions
+- **`plan_step_origin`**, `"plan_embedded"` for actions
   dispatched through a plan step; `"standalone"` (or
   omitted) for the existing v0.53 dispatch path. Filtering
   on this lets SIEM consumers separate the two paths
@@ -321,19 +321,19 @@ three fields to the payload:
 
 The four event types you'll see are:
 
-- **`action.dispatched`** — the engine just signed and
+- **`action.dispatched`**, the engine just signed and
   persisted the action_request. The runner has not picked it
   up yet. Payload fields: `request_id`, `runner_id`,
   `action_type`, plus the three plan fields above.
-- **`action.executed`** — the runner reported `success`. The
+- **`action.executed`**, the runner reported `success`. The
   engine has transitioned the step to `succeeded` and is
   promoting the next step. Payload includes the runner's
   reported `result_payload` if any.
-- **`action.failed`** — the runner reported `failure`. The
+- **`action.failed`**, the runner reported `failure`. The
   engine has transitioned the step to `aborted` with reason
   `action_runtime_failure` and triggered the backwards walk
   on the rest of the plan.
-- **`action.denied`** — the runner reported `denied` (or the
+- **`action.denied`**, the runner reported `denied` (or the
   signature check failed, or the action type was outside the
   capability set). Payload includes a `denied_for` reason
   field if the runner supplied one; the engine substitutes
@@ -348,7 +348,7 @@ the first 8 chars of the UUID, matching the truncation used
 elsewhere in the UI. Standalone action events fall through to
 the unchanged v0.53 title format. If you've written external
 log parsers against the action.* event types, no change is
-needed — the new payload fields are additive and the existing
+needed, the new payload fields are additive and the existing
 top-level keys are unchanged.
 
 The `plan.rolled_back` event (fired when the backwards walk
@@ -359,7 +359,7 @@ consumers can filter on that to surface "the action step ran
 and was not reversed" without joining against the action
 event table.
 
-## Step 5 — Worked example
+## Step 5, Worked example
 
 Cost spike on a Splunk-fed group `web-prod`. The proposer's
 analysis: a noisy attribute is dominating the volume, and the
@@ -374,7 +374,7 @@ audit arc.
    runner. `require_approval: true` on step 0. Step 1 has no
    approval gate of its own.
 2. **Operator approves the plan at step 0.** UI shows two
-   cards — the config rollout with its 25%→100% stages, and
+   cards, the config rollout with its 25%→100% stages, and
    the action card with action_type `restart-systemd-service`
    and parameters `{"unit_name": "otelcol-contrib.service"}`.
    Operator clicks Approve.
@@ -423,7 +423,7 @@ exit-1 and the runner reports `failure`).
    systemd exit reason or a stderr excerpt) if reported.
 3. **Engine triggers the backwards walk.** No queued followers
    to cancel (step 1 was the last). One succeeded predecessor
-   in the plan — step 0, the config rollout. The walk
+   in the plan, step 0, the config rollout. The walk
    identifies step 0 as a kind=rollout and pushes a rollback
    config to `web-prod`. Audit timeline shows the rollback
    rollout's own arc starting with `rollout.started`.
@@ -454,7 +454,7 @@ the daemon).
 
 If step 1's rollout fails (auto-abort on error rate, say),
 the backwards walk starts at step 1 and tries to roll back
-step 0. Step 0 is an action — the walk skips it, emits
+step 0. Step 0 is an action, the walk skips it, emits
 `plan.rolled_back` with step 0 marked `skipped_reason:
 action_step_no_auto_undo`, and emits an audit warning. The
 secret on the host stays rotated. The operator owns the
@@ -465,7 +465,7 @@ it can't undo a rotation than silently fake it. The proposer
 prompt explicitly teaches the model that action steps in the
 succeeded prefix won't be reversed, so a careful proposer
 will sequence the irreversible action LATER in the plan, not
-EARLIER — or split it into two plans.
+EARLIER, or split it into two plans.
 
 ## CLI parity
 
@@ -476,8 +476,8 @@ offending step index. `squadronctl plans get <plan_id>` renders
 action steps with the action_type and runner_id alongside the
 rollout steps.
 
-There is no `squadronctl plans propose --include-actions` flag
-— the proposer decides on action-step inclusion based on the
+There is no `squadronctl plans propose --include-actions` flag,
+the proposer decides on action-step inclusion based on the
 cost-spike context, not an operator flag.
 
 ## Roadmap touchpoints
@@ -512,19 +512,19 @@ behavior you can rely on today.
 
 ## Cross-references
 
-- [Multi-step plans — design](./multi-step-plans-design.md) —
+- [Multi-step plans, design](./multi-step-plans-design.md),
   the plan protocol this runbook builds on. The v0.89.14
   appendix at the end of that doc is the locked design this
   implementation promotes.
-- [Action runner — design](./action-runner-design.md) — the
+- [Action runner, design](./action-runner-design.md), the
   signed-action protocol the plan engine reuses verbatim.
   Capability declarations, signature verification, dry-run
   semantics (for the standalone path), and the threat model
   all live there.
-- [Rollouts](./rollouts.md) — the single-rollout protocol
+- [Rollouts](./rollouts.md), the single-rollout protocol
   that kind=rollout plan steps inherit.
-- [Audit log](./audit-log.md) — event-type catalog and
+- [Audit log](./audit-log.md), event-type catalog and
   payload schemas. The v0.89.14 plan-embedded fields are
   documented under the action.* entries.
-- [#530 proposal](./proposals/530-action-runner-steps-in-plans.md) —
+- [#530 proposal](./proposals/530-action-runner-steps-in-plans.md),
   the locked design that v0.89.14 promotes to implementation.

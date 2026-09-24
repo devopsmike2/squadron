@@ -1,4 +1,4 @@
-# Workload Health panel — operator guide
+# Workload Health panel, operator guide
 
 This is the operator-facing runbook for the v0.89.131 through
 v0.89.133 Workload Health dashboard panel arc. The Discovery
@@ -7,7 +7,7 @@ COVERAGE and SPAN QUALITY that consolidates the substrate's
 three serverless diagnostics into a single one-glance view.
 
 The strategic frame: the metric correlation substrate
-(v0.89.113 + v0.89.118) has shipped three diagnostics —
+(v0.89.113 + v0.89.118) has shipped three diagnostics,
 cold-start latency, sampling rate, error rate. Each diagnostic
 already surfaces per-resource on the per-cloud Discovery
 pages' Serverless tables. The Workload Health panel adds the
@@ -59,7 +59,7 @@ intentionally narrow:
   the whole connected fleet.
 - **"Healthy fleet" celebratory empty state.** The panel
   hides when all three percentages are zero. Slice 2 may
-  add a green "Healthy fleet — all serverless resources
+  add a green "Healthy fleet, all serverless resources
   passing thresholds" empty state.
 
 ## The three diagnostic columns
@@ -118,7 +118,7 @@ Below the 3-column grid, a footer line summarizes:
 
 > **Total resources with at least one issue: 22 / 142 (15.5%)**
 
-This uses **UNION semantics** — a resource that fires both
+This uses **UNION semantics**, a resource that fires both
 cold-start AND sampling AND error rate counts as ONE
 any-issue, not three. A clean fleet would have any_issue at
 zero; a 100% problem fleet would have any_issue at 100%.
@@ -144,10 +144,10 @@ amber-when-nothing-to-show placeholder.
 
 The Discovery dashboard renders three panels in this order:
 
-1. **TRACE COVERAGE** — "is telemetry flowing?"
-2. **WORKLOAD HEALTH (SERVERLESS)** — "is the workload
+1. **TRACE COVERAGE**, "is telemetry flowing?"
+2. **WORKLOAD HEALTH (SERVERLESS)**, "is the workload
    healthy?" (this arc)
-3. **SPAN QUALITY** — "are the spans we receive
+3. **SPAN QUALITY**, "are the spans we receive
    diagnostically usable?"
 
 The vertical narrative flow reads top-to-bottom:
@@ -224,16 +224,16 @@ slice 2 additions stay backward-compatible.
 
 No new audit event types beyond the cache-miss surface:
 
-- `discovery.workload_health.requested` — emitted on cache
+- `discovery.workload_health.requested`, emitted on cache
   miss when the dashboard or a curl pulls fresh data.
   Audit-only; no side effects.
 
 The recommendation lifecycle (`recommendation.created` /
 `pr_opened` / `pr_merged` / `pr_closed`) carries kinds from
-the underlying diagnostics — the panel doesn't introduce
+the underlying diagnostics, the panel doesn't introduce
 new kinds.
 
-## Workflow — first dashboard view
+## Workflow, first dashboard view
 
 1. Open `/discovery`. The dashboard renders three panels:
    TRACE COVERAGE → WORKLOAD HEALTH → SPAN QUALITY.
@@ -260,7 +260,7 @@ new kinds.
      each provider's Serverless table to confirm.
   2. The serverless inventory reader returned an error.
      Check the audit log for
-     `discovery.workload_health.requested` — if it's
+     `discovery.workload_health.requested`, if it's
      emitting but no panel renders, the aggregation may
      be returning a zero-count result.
   3. The new endpoint isn't wired in production yet
@@ -279,7 +279,7 @@ new kinds.
   proposer (or wait for the next proposer cycle).
 - **Any-issue count is lower than the sum of the three
   column counts.** This is UNION semantics working
-  correctly — a resource firing 2 of 3 diagnostics counts
+  correctly, a resource firing 2 of 3 diagnostics counts
   as 1 in any-issue, but 2 in the column sums. Pinned by
   `TestWorkloadHealth_AnyIssueUsesUnionSemantics`.
 - **Panel shows stale data.** Cache TTL is 30s. Wait at
@@ -289,9 +289,9 @@ new kinds.
 - **Per-provider breakdowns I see on the per-provider
   Discovery pages don't match the panel aggregate.** Two
   causes:
-  1. Cache timing — the panel may be 30s stale relative
+  1. Cache timing, the panel may be 30s stale relative
      to a fresh provider-page read.
-  2. Aggregation rounding — the panel uses 1-decimal
+  2. Aggregation rounding, the panel uses 1-decimal
      precision on the column percentages but full
      precision internally for the union count.
 - **Panel shows non-zero but I clicked into a column and
@@ -331,7 +331,7 @@ Per §10 of the design doc:
   hide-when-zero.
 - Recommendation count badge per column.
 
-## Strategic frame — surface polish
+## Strategic frame, surface polish
 
 This is a polish arc. The substrate has paid for itself
 three times over already (cold-start latency + sampling
@@ -342,13 +342,13 @@ serverless health picture without paging through 4
 per-provider pages.
 
 The universal claim doesn't grow a new verb or new tier.
-What changes is the SURFACE — the existing diagnostic
+What changes is the SURFACE, the existing diagnostic
 work becomes visible at the dashboard's primary
 entrypoint:
 
 > "Open Squadron's dashboard. TRACE COVERAGE tells you if
 > telemetry is flowing. WORKLOAD HEALTH tells you if your
-> serverless fleet is healthy across three dimensions —
+> serverless fleet is healthy across three dimensions,
 > latency, throughput, errors. SPAN QUALITY tells you if
 > the spans you receive are diagnostically usable. Three
 > panels. One screen. Then drill into whichever's
@@ -357,23 +357,23 @@ entrypoint:
 Three panels. One screen. The Tuesday LinkedIn drumbeat
 narrative gains the most operator-friendly framing yet
 because the operator doesn't have to know which
-recommendation kinds map to which problem — the panel
+recommendation kinds map to which problem, the panel
 labels them in operator language: "Cold-start P95
 exceeded" / "Sampling too aggressive" / "Error rate
 spike."
 
 ## Cross-references
 
-- [Workload Health panel slice 1 design doc](./proposals/workload-health-panel-slice1.md) —
+- [Workload Health panel slice 1 design doc](./proposals/workload-health-panel-slice1.md),
   the locked spec this runbook operationalizes.
-- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md) —
+- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md),
   first substrate diagnostic; column 1 in the panel.
-- [Sampling rate analysis operator guide](./sampling-rate-operator-guide.md) —
+- [Sampling rate analysis operator guide](./sampling-rate-operator-guide.md),
   second substrate diagnostic; column 2 in the panel.
-- [Error rate correlation operator guide](./error-rate-correlation-operator-guide.md) —
+- [Error rate correlation operator guide](./error-rate-correlation-operator-guide.md),
   third substrate diagnostic; column 3 in the panel.
-- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md) —
+- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md),
   the dashboard surface this panel sits on, plus the 30s
   cache pattern this reuses.
-- [Audit log](./audit-log.md) — full catalog of event types
+- [Audit log](./audit-log.md), full catalog of event types
   including the new `discovery.workload_health.requested`.

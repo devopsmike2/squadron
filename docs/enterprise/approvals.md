@@ -1,7 +1,7 @@
 # Approvals and change windows
 
 The Compliance Pack turns Squadron's rollout `require_approval` metadata from a
-hint into an enforced control — the actual SOC 2 / NERC CIP separation-of-duties
+hint into an enforced control, the actual SOC 2 / NERC CIP separation-of-duties
 requirement. In the OSS core a group can *carry* `require_approval`, but the
 engine doesn't block on it; the Compliance Pack's `GroupPolicyProvider` is what
 makes it actually hold a rollout in `pending_approval` and refuse to advance
@@ -16,14 +16,14 @@ until the approval bar is met.
 
 Approving a rollout is a **distinct capability** from creating one. The
 `rollouts:approve` scope gates the approve action, separate from
-`rollouts:write` — so the identity that ships a change is not automatically the
+`rollouts:write`, so the identity that ships a change is not automatically the
 identity that can bless it. Under [RBAC](rbac.md) you grant `rollouts:approve`
 to a different role (say `release-approver`) than the one your CI deployer
 carries.
 
 ## N-of-M distinct approvers
 
-The gate requires **N distinct approvers out of the eligible M** — the same
+The gate requires **N distinct approvers out of the eligible M**, the same
 principal cannot satisfy two of the required approvals. The per-group minimum is
 set with a group label:
 
@@ -38,7 +38,7 @@ With `required-approvals=2`, a rollout against that group stays in
 ## Rule-based required approver roles
 
 Beyond a raw count, a group can mandate that the approvals **cover specific
-roles** — so a security-sensitive change needs sign-off from both security and
+roles**, so a security-sensitive change needs sign-off from both security and
 SRE, not just any two approvers:
 
 ```
@@ -73,7 +73,7 @@ rollout stays pending.
 
 Change windows are a hard freeze on when rollouts may advance. The Compliance
 Pack's `changewindow.Provider` reads a group's configured windows and returns
-the active one, so the **rollout engine refuses to advance during a freeze** —
+the active one, so the **rollout engine refuses to advance during a freeze**,
 a stage that would otherwise promote simply waits until the blackout closes. The
 window time-math (IANA timezone, day-of-week, midnight wrap) lives in the open
 core's `extension/changewindow`; the Compliance Pack fetches and dispatches.

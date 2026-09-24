@@ -1,4 +1,4 @@
-# Trace integration slice 2 — recommendation kinds
+# Trace integration slice 2, recommendation kinds
 
 **Status:** design doc, locked for slice 2 implementation. Builds
 directly on slice 1 (v0.89.73 through v0.89.78), which shipped
@@ -18,7 +18,7 @@ proposer-drafted recommendations.
 After slice 1 lands an operator can see the discovery dashboard
 showing "67% trace coverage across all providers" and an
 inventory row showing `i-0abc | Container Insights enabled |
-never`. The signal is honest, the gap is visible — but the
+never`. The signal is honest, the gap is visible, but the
 remediation is operator-manual. The operator has to:
 
 1. Open the Compute Inventory page for that provider.
@@ -40,7 +40,7 @@ it, the SDK gets deployed via Terraform. If they decline, the
 decline becomes signal in the verdict learning loop (#531 slice
 2).
 
-The recommendation surface gets twelve new kinds — one per
+The recommendation surface gets twelve new kinds, one per
 provider per tier:
 
 ```
@@ -128,7 +128,7 @@ something else). Slice 2 cannot distinguish from outside the
 host. The recommendation's reasoning lays out all three cases;
 the operator (or their on-call) walks through them.
 
-The Terraform patch slice 2 drafts ALWAYS targets case (a) —
+The Terraform patch slice 2 drafts ALWAYS targets case (a),
 SDK deployment via auto-instrumentation. If the operator was
 actually in case (b) or (c), they'll catch it on PR review,
 decline the PR, and the verdict learning loop (#531 slice 2)
@@ -136,7 +136,7 @@ records why for the next proposal cycle.
 
 ## 4. Per-cloud recommendation patterns
 
-### 4.1 AWS — trace-emission-aws-compute (EC2)
+### 4.1 AWS, trace-emission-aws-compute (EC2)
 
 Terraform pattern: install the ADOT Collector via the AWS-managed
 `AWSDistroOTel-Collector` SSM Distributor package, applied to the
@@ -165,7 +165,7 @@ CWAgent which includes the ADOT collector binary. The operator
 still has to configure ADOT to export traces; slice 2 ships
 the collector deployment, slice 3 ships the config.
 
-### 4.2 AWS — trace-emission-aws-db (RDS)
+### 4.2 AWS, trace-emission-aws-db (RDS)
 
 Terraform pattern: enable Performance Insights long-term
 retention. RDS Performance Insights itself emits no spans (it's
@@ -187,7 +187,7 @@ emission has to come from the application client; Squadron flags
 the DB but the fix happens on the app side. The Terraform PR
 is a half-step.
 
-### 4.3 AWS — trace-emission-aws-k8s (EKS)
+### 4.3 AWS, trace-emission-aws-k8s (EKS)
 
 Terraform pattern: install the ADOT operator via the EKS addon
 mechanism.
@@ -206,7 +206,7 @@ workloads on the cluster. The operator still has to label
 their Deployments to enable per-workload auto-instrumentation;
 slice 2 ships the operator install.
 
-### 4.4 GCP — trace-emission-gcp-compute (GCE)
+### 4.4 GCP, trace-emission-gcp-compute (GCE)
 
 Terraform pattern: add the Ops Agent metadata and labels to the
 target instance via `google_compute_instance` metadata block.
@@ -222,7 +222,7 @@ resource "google_compute_instance" "<name>" {
 }
 ```
 
-### 4.5 GCP — trace-emission-gcp-db (Cloud SQL)
+### 4.5 GCP, trace-emission-gcp-db (Cloud SQL)
 
 Pattern: enable Query Insights' enhanced fields.
 
@@ -238,7 +238,7 @@ resource "google_sql_database_instance" "<name>" {
 }
 ```
 
-### 4.6 GCP — trace-emission-gcp-k8s (GKE)
+### 4.6 GCP, trace-emission-gcp-k8s (GKE)
 
 Pattern: deploy the OpenTelemetry Operator via the
 `google_gke_hub_feature` Cloud Service Mesh integration, OR via
@@ -256,7 +256,7 @@ resource "google_gke_hub_feature" "service_mesh" {
 for many operators is the Helm-based install which is slice 2's
 non-goal. The Terraform pattern here is the IaC-pure version.)
 
-### 4.7 Azure — trace-emission-azure-compute (VM)
+### 4.7 Azure, trace-emission-azure-compute (VM)
 
 Pattern: enable the Azure Monitor Agent VM extension.
 
@@ -270,7 +270,7 @@ resource "azurerm_virtual_machine_extension" "azure_monitor_agent" {
 }
 ```
 
-### 4.8 Azure — trace-emission-azure-db (Azure SQL)
+### 4.8 Azure, trace-emission-azure-db (Azure SQL)
 
 Pattern: enable both Diagnostic Settings AND auto-tuning
 recommendations on the SQL Database.
@@ -282,10 +282,10 @@ resource "azurerm_mssql_database_extended_auditing_policy" "<name>" {
 }
 ```
 
-### 4.9 Azure — trace-emission-azure-k8s (AKS)
+### 4.9 Azure, trace-emission-azure-k8s (AKS)
 
 Pattern: enable the AKS Application Insights add-on, which
-includes auto-instrumentation for JVM, .NET, Node.js workloads.
+includes auto-instrumentation for JVM.NET, Node.js workloads.
 
 ```hcl
 resource "azurerm_kubernetes_cluster" "<name>" {
@@ -296,7 +296,7 @@ resource "azurerm_kubernetes_cluster" "<name>" {
 }
 ```
 
-### 4.10 OCI — trace-emission-oci-compute (Instance)
+### 4.10 OCI, trace-emission-oci-compute (Instance)
 
 Pattern: add the OCI APM Java agent (or Python agent) via
 cloud-init script in the instance launch template.
@@ -306,7 +306,7 @@ Slice 2 ships the cloud-init pattern via
 script. The recommendation flags this as an upgrade-during-
 maintenance change since cloud-init only runs on first boot.
 
-### 4.11 OCI — trace-emission-oci-db (Autonomous Database)
+### 4.11 OCI, trace-emission-oci-db (Autonomous Database)
 
 Pattern: enable Database Management's full Operations Insights
 + Performance Hub features, which include trace correlation.
@@ -318,7 +318,7 @@ resource "oci_database_management_managed_database_group" "<name>" {
 }
 ```
 
-### 4.12 OCI — trace-emission-oci-k8s (OKE)
+### 4.12 OCI, trace-emission-oci-k8s (OKE)
 
 Pattern: install the OCI Service Operator on the OKE cluster
 via kubernetes_manifest, which provides Operations Insights
@@ -369,13 +369,13 @@ Each new recommendation kind:
 
 The Recommendations tab on each per-provider page already
 renders any recommendation kind generically. Slice 2 does NOT
-require new UI surface for the recommendations themselves —
+require new UI surface for the recommendations themselves,
 they appear alongside the existing tag-, db-, and k8s-
 recommendation kinds.
 
 The Discovery dashboard's TRACE COVERAGE panel gains a sub-
 indicator: "X resources with the primitive enabled but no recent
-emission — see Recommendations tab on each provider for the
+emission, see Recommendations tab on each provider for the
 drafts." Click-through links to the per-provider Recommendations
 page filtered to `trace-emission-*` kinds.
 
@@ -483,8 +483,8 @@ already exist) and no new credentials. The new threat surface
 is recommendation-content quality:
 
 **Wrong failure mode targeting.** Slice 2 ALWAYS drafts for
-case (a) — SDK not deployed — even when the actual root cause
-is case (b) — exporter misconfigured. An operator who blindly
+case (a), SDK not deployed, even when the actual root cause
+is case (b), exporter misconfigured. An operator who blindly
 merges the PR adds redundant SDK install on top of an existing
 deployment. Mitigation: PR body explicitly lists all three
 cases and asks the reviewer to confirm. The operator's review
@@ -509,7 +509,7 @@ deployment mode triage in bulk via the exclusion.
 ## 12. Slice 3 candidates
 
 - Per-language SDK customization (Python, Go, Node.js, JVM,
-  .NET) — currently slice 2 ships cloud-native generic patterns.
+  .NET), currently slice 2 ships cloud-native generic patterns.
 - Service mesh sidecar injection patterns.
 - Helm chart deployment via kubernetes Terraform provider.
 - Span quality analysis (broken context propagation, missing

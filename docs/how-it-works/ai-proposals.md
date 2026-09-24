@@ -9,7 +9,7 @@ validation and staged-rollout safeguards as any other change. **The AI never
 applies anything directly.**
 
 AI is **off by default.** You opt in, and when you do, you **bring your own or
-self-host the model** — it's your provider and your key.
+self-host the model**, it's your provider and your key.
 
 ## The flow
 
@@ -31,7 +31,7 @@ step in that chain finds a problem, the change does not ship.
 ## The privacy story
 
 When AI is on and you trigger an action, Squadron sends the **context relevant
-to that recommendation** — the configuration and surrounding detail the model
+to that recommendation**, the configuration and surrounding detail the model
 needs to draft or explain the change. That's it: no API tokens, no telemetry
 data, no audit log, nothing outside the specific action's context.
 

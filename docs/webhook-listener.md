@@ -1,4 +1,4 @@
-# GitHub webhook listener — operator runbook
+# GitHub webhook listener, operator runbook
 
 This is the operator-facing runbook for the v0.89.23 GitHub
 webhook listener that closes the PR audit lifecycle. It covers
@@ -14,7 +14,7 @@ it tells Squadron when a PR Squadron opened actually merges, and
 nothing more.
 
 For a first test against a personal GitHub account with a sandbox
-repo, the walkthrough takes about 15 minutes — most of it spent
+repo, the walkthrough takes about 15 minutes, most of it spent
 in GitHub's repo settings UI. For a production setup against an
 org-owned repo, budget 30 minutes plus whatever your org's
 change-management process requires for adding webhooks.
@@ -27,7 +27,7 @@ Three things, in this order:
    and share with both Squadron and GitHub. Squadron uses it to
    verify that every inbound request actually came from GitHub.
    GitHub uses it to sign every delivery with HMAC-SHA256. The
-   secret is the *only* authentication on this route — there is
+   secret is the *only* authentication on this route, there is
    no Bearer token, no IP allow-list, no mTLS. The HMAC
    signature **is** the auth.
 2. **The `SQUADRON_GITHUB_WEBHOOK_SECRET` env var** set on the
@@ -35,7 +35,7 @@ Three things, in this order:
    the bytes, and uses constant-time HMAC comparison on every
    request. If the env var is empty, the route still mounts but
    responds with 503 + a humanized "secret not configured"
-   message — so a misconfigured deployment surfaces clearly in
+   message, so a misconfigured deployment surfaces clearly in
    GitHub's delivery log rather than silently no-op.
 3. **A GitHub repo webhook** pointing at
    `https://your-squadron-host/api/v1/webhooks/github`, configured
@@ -81,7 +81,7 @@ limitations.
   comment on the PR with proposer reasoning) is on the slice-2
   roadmap and explicitly out of slice 1.
 - **The receiver only ACTS on PR merges.** Other GitHub event
-  types — `push`, `issues`, `ping`, `release`, etc. — return
+  types, `push`, `issues`, `ping`, `release`, etc., return
   200 with `{"ok": true, "ignored": true, "event": "<type>"}`
   so GitHub's redelivery system doesn't fire. PR `closed`
   events that aren't merged (the operator hit "Close pull
@@ -89,7 +89,7 @@ limitations.
   `{"ok": true, "ignored": true, "reason": "pr_closed_not_merged"}`.
   No audit event in either case.
 - **The route is public-by-design.** GitHub doesn't
-  authenticate to Squadron's API — the HMAC signature is the
+  authenticate to Squadron's API, the HMAC signature is the
   auth. The handler comment explicitly says "do NOT add auth
   middleware here," and the route is mounted above the
   `RequireBearer` group in `server.go::registerRoutes`. If you
@@ -117,8 +117,8 @@ limitations.
   hardest prerequisite. GitHub's webhook delivery is
   outbound-from-GitHub: your Squadron deployment needs a
   public IP and TLS, or a tunnel (Cloudflare Tunnel, ngrok,
-  Tailscale Funnel). Squadron will not poll GitHub for merges
-  — slice 1 is push-only.
+  Tailscale Funnel). Squadron will not poll GitHub for merges,
+slice 1 is push-only.
 
 ## Prerequisites
 
@@ -135,38 +135,38 @@ limitations.
   so there's a `repo_full_name` for the receiver to correlate
   inbound merges against. PRs from repos Squadron doesn't
   manage still get an audit event, but with an empty
-  `connection_id` — the merge is real even if Squadron
+  `connection_id`, the merge is real even if Squadron
   didn't author the branch.
 - `openssl` (or equivalent) on the machine where you're
   generating the secret. macOS, every Linux distro, and Git
   for Windows all include it.
 
-## Step 1 — Generate the webhook secret
+## Step 1, Generate the webhook secret
 
 ### Recommended: use the Connect IaC repo wizard
 
 As of v0.89.32, the **Connect IaC repo wizard** generates and stores
 the webhook secret for you as part of the connection setup flow.
-This is the recommended path for almost everyone — it closes the
+This is the recommended path for almost everyone, it closes the
 "operators have to read this runbook and PATCH the secret after the
 wizard completes" gap that earlier slices left open.
 
 When you reach the **"Set up the webhook secret"** step in the
 wizard, you'll see three choices:
 
-1. **Generate a new secret** — the wizard mints a 64-character hex
+1. **Generate a new secret**, the wizard mints a 64-character hex
    string in your browser (same byte-shape as `openssl rand -hex 32`),
    shows it once with a Copy button, and PATCHes it onto the
    connection sealed at rest. The secret is shown ONLY at generate
    time; if you lose it later, you have to generate a new one and
    PATCH the connection. This is the right choice for multi-team
    deployments where each managed repo has a different owner.
-2. **Use the global env-var secret** — the wizard skips the PATCH;
+2. **Use the global env-var secret**, the wizard skips the PATCH;
    inbound deliveries fall back to your existing
    `SQUADRON_GITHUB_WEBHOOK_SECRET` at HMAC-verify time. The right
    choice if you have one or two managed repos sharing the same
    ownership story.
-3. **Skip and configure later** — the wizard defers the whole
+3. **Skip and configure later**, the wizard defers the whole
    webhook setup; the success card reminds you to run the
    `openssl rand -hex 32` + curl PATCH flow documented below when
    you're ready. The right choice for advanced or scripted
@@ -174,12 +174,12 @@ wizard, you'll see three choices:
    rather than a human paste.
 
 If you used the wizard's **Generate** path, this section is
-informational only — you don't need to re-do the steps below.
+informational only, you don't need to re-do the steps below.
 If you used **Use global** or **Skip**, follow the manual flow
 below to set the env var or PATCH the per-connection secret on
 your own.
 
-### Manual flow — alternative for advanced or scripted deployments
+### Manual flow, alternative for advanced or scripted deployments
 
 Pick a strong 32-byte random secret. The shape we recommend:
 
@@ -193,7 +193,7 @@ HMAC-SHA256 doesn't care about the format. Hex is convenient
 because it's URL-safe, copy-paste-safe, and doesn't contain
 shell metacharacters.
 
-Save this somewhere safe — a password manager, your
+Save this somewhere safe, a password manager, your
 deployment's secret store (Vault, AWS Secrets Manager,
 Kubernetes Secret), or wherever your team manages
 infrastructure credentials. You'll paste it into two places in
@@ -205,11 +205,11 @@ Even with the encryption layer, the blast radius of a
 compromised key is the same as a leaked secret. Treat it like
 a database password.
 
-## Step 2 — Configure Squadron
+## Step 2, Configure Squadron
 
 > **If you used the Connect IaC repo wizard's Generate path
 > (v0.89.32+),** this step happens automatically when you click
-> Finish — the wizard PATCHes the secret onto the connection sealed
+> Finish, the wizard PATCHes the secret onto the connection sealed
 > at rest, and the inbound webhook handler picks the per-connection
 > secret over the env-var global. The manual steps below are for
 > the env-var-global path (when you picked "Use global" in the
@@ -239,7 +239,7 @@ How you set this depends on your deployment shape:
 
 The handler reads the env var ONCE at startup and caches the
 bytes. If you rotate the secret later, you have to restart the
-Squadron process — there's no hot-reload path in slice 1.
+Squadron process, there's no hot-reload path in slice 1.
 
 Verify Squadron picked it up by hitting the route without a
 signature:
@@ -252,10 +252,10 @@ curl -i https://your-squadron-host/api/v1/webhooks/github \
 You should see `401 Unauthorized` with body
 `{"error": "invalid signature"}`. If you see `503` with the
 "secret not configured" message, the env var didn't reach the
-process — check the deployment shape above. If you see `404`,
+process, check the deployment shape above. If you see `404`,
 you're on a version before v0.89.23.
 
-## Step 3 — Configure the GitHub repo webhook
+## Step 3, Configure the GitHub repo webhook
 
 In the GitHub UI:
 
@@ -266,11 +266,11 @@ In the GitHub UI:
    organization's webhook-add permission.
 3. Fill in the form:
 
-   - **Payload URL**: `https://your-squadron-host/api/v1/webhooks/github`
-     — exactly that path, no trailing slash. The host should
+   - **Payload URL**: `https://your-squadron-host/api/v1/webhooks/github`,
+exactly that path, no trailing slash. The host should
      be the same TLS-terminated host you set above.
    - **Content type**: `application/json` (NOT
-     `application/x-www-form-urlencoded` — the handler
+     `application/x-www-form-urlencoded`, the handler
      parses JSON only, the form-encoded payload would
      unmarshal to an empty struct).
    - **Secret**: paste the same secret you set on Squadron in
@@ -281,7 +281,7 @@ In the GitHub UI:
    - **Which events would you like to trigger this webhook?**:
      pick **"Let me select individual events"**, then check
      ONLY **Pull requests**. Don't enable Pushes, Issues, or
-     "Send me everything" — the handler ignores those anyway,
+     "Send me everything", the handler ignores those anyway,
      but every additional event type is extra inbound traffic
      and noise in GitHub's delivery log.
    - **Active**: leave checked.
@@ -297,7 +297,7 @@ If the ping shows a red X, click into the delivery to see the
 response. Common causes are covered in §"Troubleshooting"
 below.
 
-## Step 4 — Verify the loop end-to-end
+## Step 4, Verify the loop end-to-end
 
 The cleanest test is to drive a recommendation all the way
 through:
@@ -309,7 +309,7 @@ through:
    opens the PR. The Timeline page shows
    **"Opened PR #N in github.com/<repo> for <kind>"**.
 2. **Merge the PR in GitHub.** Click **Merge pull request**.
-   Optionally delete the branch — Squadron doesn't care
+   Optionally delete the branch, Squadron doesn't care
    either way.
 3. **Wait a few seconds.** GitHub's webhook delivery is
    typically sub-second, but allow up to 30s for the
@@ -330,11 +330,11 @@ If you don't see the event within 30 seconds:
 - Click into the delivery to see the request body, headers,
   and response. The `X-Hub-Signature-256` header should be
   present; if not, the secret isn't configured on the GitHub
-  side. The response body explains what the handler did —
+  side. The response body explains what the handler did,
   `"ignored": true` means the handler verified the signature
   but the event didn't match a merge.
 
-## Step 5 — Read the audit signal
+## Step 5, Read the audit signal
 
 The `recommendation.pr_merged` audit event carries this
 payload:
@@ -361,7 +361,7 @@ payload:
 
 Field-by-field:
 
-- **`actor`** is always `"github_webhook"` — not the GitHub
+- **`actor`** is always `"github_webhook"`, not the GitHub
   user. The merger's identity is in `merged_by`. This lets
   SIEM consumers filter on `actor=github_webhook` to surface
   every inbound webhook event together, regardless of which
@@ -399,7 +399,7 @@ came from non-Squadron-shaped branches render without the
 |---|---|---|
 | GitHub delivery shows 503 with "webhook secret not configured" | `SQUADRON_GITHUB_WEBHOOK_SECRET` env var not set on the Squadron process | Set the env var per §Step 2; restart Squadron |
 | GitHub delivery shows 401 with "invalid signature" | Secret mismatch between Squadron and GitHub | Compare the secret pasted into the GitHub repo webhook UI against `SQUADRON_GITHUB_WEBHOOK_SECRET` byte-for-byte; trailing newlines from copy-paste are a common culprit |
-| GitHub delivery shows 200 with `"ignored": true, "event": "ping"` | Normal — this is GitHub's initial reachability probe | No action needed; you should see this once per webhook setup |
+| GitHub delivery shows 200 with `"ignored": true, "event": "ping"` | Normal, this is GitHub's initial reachability probe | No action needed; you should see this once per webhook setup |
 | GitHub delivery shows 200 with `"ignored": true, "reason": "pr_closed_not_merged"` | Operator closed the PR without merging | No action needed; only merges produce audit events |
 | Squadron logs show webhook fired but no audit event | The merge happened from a non-Squadron repo (no `iac_connection` matched) AND your audit storage filtered the event out | The event IS in audit; check the audit log with no target_id filter. The `target_id` is empty when no connection matched |
 | GitHub delivery shows 200 with `"ignored": true, "event": "push"` | The webhook is configured for events Squadron doesn't act on | Edit the webhook in GitHub repo settings → uncheck everything except "Pull requests" |
@@ -453,14 +453,14 @@ runbook describes behavior you can rely on as of v0.89.23.
 
 ## Cross-references
 
-- [Discovery IaC first-time setup](./discovery-iac-first-time-setup.md) —
+- [Discovery IaC first-time setup](./discovery-iac-first-time-setup.md),
   prerequisite for the webhook listener. Walks the IaC
   connection wizard plus the "Open PR" loop. The webhook is
   the lifecycle close on the PR loop documented there.
-- [Audit log](./audit-log.md) — full catalog of audit event
+- [Audit log](./audit-log.md), full catalog of audit event
   types and target types. The
   `recommendation.pr_opened` / `pr_open_failed` / `pr_merged`
   trio is documented there alongside the rest of the IaC arc.
-- [API reference](./api-reference.md) — the
+- [API reference](./api-reference.md), the
   `POST /api/v1/webhooks/github` endpoint contract (request
   shape, signature header, response codes).

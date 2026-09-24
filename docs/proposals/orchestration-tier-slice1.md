@@ -1,4 +1,4 @@
-# Orchestration tier slice 1 — fifth tier across three clouds
+# Orchestration tier slice 1, fifth tier across three clouds
 
 **Status:** design doc, locked for slice 1 implementation.
 Builds on the existing compute / database / kubernetes /
@@ -22,7 +22,7 @@ actually flows from each discovered resource. But operators
 running production workloads almost universally have a fifth
 surface Squadron doesn't see: **orchestration**.
 
-Orchestration is where workflows live — Step Functions on AWS,
+Orchestration is where workflows live, Step Functions on AWS,
 Workflows on GCP, Logic Apps on Azure. It's the layer where
 business logic gets sequenced across the serverless +
 compute + database + kubernetes surfaces Squadron already
@@ -42,7 +42,7 @@ This matters for three reasons:
 - **Squadron's existing serverless tier coverage is
   incomplete without orchestration.** Operators look at the
   Lambda inventory and see "this function has tracing on, has
-  ADOT layer, last seen 2h ago — looks good." Then they look
+  ADOT layer, last seen 2h ago, looks good." Then they look
   at the Step Function dashboard and see retries, failures,
   state-transition timeouts that don't show up in the
   per-function view. The orchestration tier closes that gap.
@@ -63,7 +63,7 @@ For each, slice 1 detects:
    Settings → App Insights for Logic Apps).
 2. The orchestration version / type (STANDARD vs EXPRESS for
    Step Functions; GA vs preview for Workflows; Standard vs
-   Consumption for Logic Apps) — affects which spans get
+   Consumption for Logic Apps), affects which spans get
    emitted.
 3. Last span observation per orchestration via the existing
    traceindex.
@@ -103,7 +103,7 @@ serverless tier slice 1 arc structure.
   a 24h window. Slice 1 uses the same 24h "last seen"
   threshold as serverless; long-running callbacks are slice 2+.
 - **EventBridge / Cloud Tasks / Service Bus event sources.**
-  These are the event source tier — feed orchestrations and
+  These are the event source tier, feed orchestrations and
   Lambda but conceptually different. Separate arc.
 - **Auto-fix.** Squadron remains a recommender. Slice 1
   surfaces gaps + drafts PRs.
@@ -147,7 +147,7 @@ Detection axes:
 | Cloud Trace integration    | workflow.callLogLevel = "LOG_ALL_CALLS" (proxy for trace emission) | `workflows-trace-enable` |
 | Cloud Logging level        | workflow.callLogLevel != "CALL_LOG_LEVEL_UNSPECIFIED" | `workflows-logging-enable` |
 
-GCP Workflows doesn't have a separate "trace" toggle — log
+GCP Workflows doesn't have a separate "trace" toggle, log
 level acts as the trace primitive surface. Slice 1's detection
 treats `LOG_ALL_CALLS` as a soft proxy for trace emission;
 slice 2 may refine when GCP exposes a more granular trace
@@ -268,7 +268,7 @@ until slice 2):
 ### 6.4 Trace coverage endpoint extension
 
 `GET /api/v1/discovery/trace_coverage` per-provider response
-gains `orchestration_pct` field — % of orchestrations emitting
+gains `orchestration_pct` field, % of orchestrations emitting
 in 24h. For OCI it's always nil / 0 until slice 2.
 
 ## 7. UI
@@ -370,27 +370,27 @@ Total: 4 release tags via parallel scanner fan-out.
 
 ## 11. Acceptance tests
 
-1. **AWS Step Functions scanner — STANDARD machine with
+1. **AWS Step Functions scanner, STANDARD machine with
    X-Ray enabled.** Mock states:DescribeStateMachine to return
    `tracingConfiguration.enabled = true`, `type = "STANDARD"`.
    Assert: snapshot has HasTraceAxis=true, WorkflowType="STANDARD".
-2. **AWS Step Functions scanner — STANDARD machine without
+2. **AWS Step Functions scanner, STANDARD machine without
    X-Ray.** Assert: HasTraceAxis=false.
-3. **AWS Step Functions scanner — EXPRESS machine.** Assert:
+3. **AWS Step Functions scanner, EXPRESS machine.** Assert:
    snapshot has WorkflowType="EXPRESS"; HasTraceAxis reflects
    tracingConfiguration as-is (not auto-suppressed).
-4. **AWS Step Functions scanner — logging level not OFF.**
+4. **AWS Step Functions scanner, logging level not OFF.**
    Assert: HasLogAxis=true.
-5. **GCP Workflows scanner — workflow with LOG_ALL_CALLS.**
+5. **GCP Workflows scanner, workflow with LOG_ALL_CALLS.**
    Assert: HasTraceAxis=true, HasLogAxis=true.
-6. **GCP Workflows scanner — workflow with CALL_LOG_LEVEL_UNSPECIFIED.**
+6. **GCP Workflows scanner, workflow with CALL_LOG_LEVEL_UNSPECIFIED.**
    Assert: HasTraceAxis=false, HasLogAxis=false.
-7. **Azure Logic Apps — Standard tier with APPLICATIONINSIGHTS_CONNECTION_STRING.**
+7. **Azure Logic Apps, Standard tier with APPLICATIONINSIGHTS_CONNECTION_STRING.**
    Assert: HasTraceAxis=true, WorkflowType="Standard".
-8. **Azure Logic Apps — Consumption tier with diagnostic settings.**
+8. **Azure Logic Apps, Consumption tier with diagnostic settings.**
    Assert: HasTraceAxis=true via Insights path,
    WorkflowType="Consumption".
-9. **Azure Logic Apps — neither tier with anything.**
+9. **Azure Logic Apps, neither tier with anything.**
    Assert: HasTraceAxis=false, HasLogAxis=false.
 10. **Storage migration v11→v12 idempotent.** Run twice; no
     error, table exists.
@@ -419,7 +419,7 @@ the in-product IAM upgrade path (#590).
 **Step Functions EXPRESS coverage caveat.** Slice 1 detects
 `tracingConfiguration.enabled` uniformly, but EXPRESS
 machines don't emit X-Ray segments for their orchestration
-runtime — only for the per-state Lambda invocations. A
+runtime, only for the per-state Lambda invocations. A
 `stepfunc-xray-active` recommendation on an EXPRESS machine
 is technically valid (it enables X-Ray for the Lambdas) but
 won't show in X-Ray as a state-machine span. The runbook
@@ -474,7 +474,7 @@ Squadron's universal claim grows from four tiers to five:
 
 Four clouds. Five tiers. Four verbs. One control plane. The
 honest framing: slice 1 covers orchestration on AWS / GCP /
-Azure but NOT OCI — OCI's primitives are shape-different and
+Azure but NOT OCI, OCI's primitives are shape-different and
 deserve their own analysis. The four-cloud claim still holds
 for the prior four tiers; the five-tier claim qualifies as
 three-cloud at this slice and grows to full coverage in slice

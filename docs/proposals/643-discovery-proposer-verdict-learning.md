@@ -1,4 +1,4 @@
-# #643 — Discovery proposer learns from accepted recommendations
+# #643, Discovery proposer learns from accepted recommendations
 
 **Status:** slice 1 SHIPPED in v0.89.28; operator runbook in
 v0.89.29. Design doc landed v0.89.27. This page remains the
@@ -20,14 +20,14 @@ The discovery proposer
 generates the same recommendation against the same resource on
 every scan, even after the operator has accepted it. An EC2
 instance flagged for ADOT SSM association gets the recommendation
-on Monday's scan, Tuesday's scan, and Wednesday's scan — even
+on Monday's scan, Tuesday's scan, and Wednesday's scan, even
 when Monday's scan ended with the operator clicking Open PR,
 the PR merging on Tuesday, and Wednesday's reality being "this
 instance is already instrumented."
 
 The discovery side is supposed to be feedback-driven: scan,
 recommend, accept-or-decline, learn, scan again. Today it's a
-dumb diff — the proposer has no awareness of what the operator
+dumb diff, the proposer has no awareness of what the operator
 accepted last week.
 
 The signal to fix this finally exists: v0.89.23's
@@ -60,20 +60,20 @@ learning are explicit slice 2+ work.
   recommendation less likely. Same-kind-strict for slice 1.
 - The "rejected" signal. Slice 1 is accepted-only. PR closed
   without merge, operator explicitly typed exclude on a past
-  recommendation, the operator never opened a PR — all of
+  recommendation, the operator never opened a PR, all of
   these are slice 2 questions that depend on per-recommendation
   state we don't track today.
 - Per-recommendation suppression. v0.89.26 shipped this for
   cost-spike rollouts via `Rollout.ExcludeFromLearning`. The
   discovery analog is a slice 2 question (would need an
-  `iac_recommendations` storage row to carry the flag —
+  `iac_recommendations` storage row to carry the flag,
   recommendations are computed on-demand today, not stored).
 - Fine-tuning, RAG, embedding stores. Same as #531: prompt-
   only is the slice 1 contract.
 
 ## 3. Signal source
 
-Every datum slice 1 needs is on existing audit events — no
+Every datum slice 1 needs is on existing audit events, no
 new persistence for the signal itself.
 
 - **Accepted signal**: a
@@ -97,7 +97,7 @@ new persistence for the signal itself.
   the connection_id directly to scope examples without joining
   on repo. Empty `connection_id` means the webhook receiver
   saw a merge from a repo Squadron doesn't manage; those rows
-  are NOT positive signal for slice 1 (defer to slice 2 — the
+  are NOT positive signal for slice 1 (defer to slice 2, the
   proposer can't be sure the PR was actually about a Squadron
   recommendation).
 
@@ -105,7 +105,7 @@ Pending signal (PR opened, no PR merged yet) is NOT used as
 positive OR negative signal in slice 1. The PR may still merge
 tomorrow; the recommendation isn't accepted yet, but it isn't
 declined either. Treating pending as "the operator implicitly
-accepted by opening the PR" would be wrong — operators routinely
+accepted by opening the PR" would be wrong, operators routinely
 open PRs to discuss, then close them. Slice 1 only counts merges.
 
 ## 4. Storage
@@ -153,7 +153,7 @@ keeps storage lean.
 The v0.89.23 `recommendation.pr_merged` audit payload does NOT
 currently carry `account_id` or `region`. Slice 1's implementation
 MUST extend the webhook receiver's audit payload to include
-these fields — the original recommendation context (account +
+these fields, the original recommendation context (account +
 region) needs to round-trip from the discovery scan through
 the PR open through the webhook merge so the lookup query can
 filter on it. Mechanism: the v0.89.0 `recommendation.pr_opened`
@@ -175,7 +175,7 @@ Opt-out flag on
 [`iac_connections`](../../internal/discovery/iacconnstore/types.go):
 new `LearnFromAcceptedRecommendations bool`, default `true`.
 Add via the iacconnstore migration mechanism (whichever pattern
-that package uses — verify in slice 1; the v0.89.17 sqlite
+that package uses, verify in slice 1; the v0.89.17 sqlite
 storage layer's migration system isn't necessarily what
 iacconnstore uses).
 
@@ -200,7 +200,7 @@ given `(connection_id, account_id, region, now)`:
   Cold-start parity test pins this.
 - **Cap**: each example's per-field payload is short
   (PR URL, branch, merged_by, recommendation_kind). The total
-  example payload bounded to ~500 tokens — well under the
+  example payload bounded to ~500 tokens, well under the
   cost-spike side's ~1.5K budget because discovery examples
   are structurally smaller.
 
@@ -229,7 +229,7 @@ Recently accepted recommendations for this scope (operator merged a Squadron-ope
 Use these as preference signal. Do NOT re-propose recommendations
 of the same kind against the same resource that was already
 accepted within the window above. The accepted snapshot may have
-drifted — if a resource clearly NEEDS a fresh recommendation
+drifted, if a resource clearly NEEDS a fresh recommendation
 (the previous PR was reverted, the resource's instrumented state
 is missing again), propose it with a note in the reasoning
 explaining the divergence.
@@ -241,7 +241,7 @@ parity acceptance test pins.
 
 The instruction line is load-bearing: without it, the model
 sometimes interprets "accepted" as "do nothing on this scope
-ever again," which is wrong — the recommendation may be valid
+ever again," which is wrong, the recommendation may be valid
 again because the operator's CI rolled back the change, or
 because the resource was re-created. Slice 1 explicitly tells
 the model "the world may have drifted, propose if you have
@@ -276,7 +276,7 @@ Pick: **per-connection flag**, not per-recommendation.
 ## 8. Audit trail
 
 The discovery proposer does NOT currently emit a dedicated audit
-event when it produces recommendations — the existing
+event when it produces recommendations, the existing
 `POST /api/v1/discovery/aws/connections/:id/recommendations`
 route returns the proposal payload directly without writing to
 audit. Slice 1 introduces:
@@ -374,12 +374,12 @@ Cold-start fallback: `Discovery recommendations generated`.
 4. **Multi-tenant per-connection vs per-repo.** Same as #531
    slice 2 cross-group: do operators with N connections to the
    same repo (e.g. one per managing team) want the accepted
-   signal to cross those? Slice 1 says no — connection-strict.
+   signal to cross those? Slice 1 says no, connection-strict.
    Slice 2 with a namespace mode would answer yes.
 
 5. **What about scan_id correlation?** The cost-spike side's
    audit field is rollout IDs; the discovery side's is PR URLs.
-   Both are reasonable but inconsistent — would SIEM consumers
+   Both are reasonable but inconsistent, would SIEM consumers
    prefer the same field shape across both? Defer to slice 2:
    slice 1 ships PR URLs because that's what identifies an
    accepted discovery recommendation. If we later promote to

@@ -1,6 +1,6 @@
 # Squadron thesis
 
-> **Squadron — universal insight, dynamic discovery, intuitive
+> **Squadron, universal insight, dynamic discovery, intuitive
 > remediation, user friendly.**
 >
 > The OSS observability control plane that connects every
@@ -10,8 +10,8 @@
 
 Last revised: v0.84.0.
 
-This document exists so anyone reading the codebase — contributor,
-security reviewer, future-self, potential commercial partner —
+This document exists so anyone reading the codebase, contributor,
+security reviewer, future-self, potential commercial partner,
 understands what Squadron is trying to be. It is the load-bearing
 constraint that every design choice in this repository should be
 checked against. When a feature proposal fights this thesis, the
@@ -26,7 +26,7 @@ plans with operator approval gates.
 
 It is not a backend (Datadog, Honeycomb, Grafana, Splunk own
 that). It is not an SDK (OpenTelemetry owns that). It is the
-layer between the two — the place where decisions about *what to
+layer between the two, the place where decisions about *what to
 observe, how to configure it, and when to ship changes* live.
 
 ## The thesis
@@ -36,11 +36,11 @@ multiple observability backends (logs in one place, traces in
 another, metrics in a third), agents converging on OpenTelemetry,
 clouds that drift constantly, and engineers who can't keep up
 manually. The bottleneck is no longer ingestion price or query
-performance — it's the human cost of deciding *what should flow,
+performance, it's the human cost of deciding *what should flow,
 how it should be shaped, and when to roll the change out*.
 
 Squadron's bet is that this decision layer becomes its own
-product category — the observability control plane — and that
+product category, the observability control plane, and that
 the winner of that category will be:
 
 1. **OSS-native**, so it can sit between heterogeneous backends
@@ -50,10 +50,10 @@ the winner of that category will be:
 3. **Audit-complete**, so security and compliance reviews don't
    block adoption
 4. **Orchestrating, not executing** for any change that touches
-   the customer's cloud or production — Squadron emits the
+   the customer's cloud or production, Squadron emits the
    change; the customer's existing IaC pipeline runs it
-5. **Universally aware** of the customer's environment — cloud
-   accounts, on-prem fleets, k8s clusters, bare metal — so the
+5. **Universally aware** of the customer's environment, cloud
+   accounts, on-prem fleets, k8s clusters, bare metal, so the
    proposer can reason about the whole picture, not just the
    slice it can see
 
@@ -69,7 +69,7 @@ default for new instrumentation in most languages. The backends
 that lock you to their proprietary agent are losing relative
 share. The OSS collector is mature. The OpAMP spec for control-
 plane traffic shipped. This means a vendor-neutral control plane
-*can actually work* across the customer base — five years ago it
+*can actually work* across the customer base, five years ago it
 couldn't, because OTel adoption was too low.
 
 **AI reasoning matured enough to be in the loop.** Frontier
@@ -91,7 +91,7 @@ vendor-neutral on the backend." That slot is open and large.
 
 ## What we win if we land this
 
-The strategic position is not "compete with Datadog" — it's
+The strategic position is not "compete with Datadog", it's
 *sit above the backends as the layer that decides what flows
 into them*. From that altitude:
 
@@ -120,7 +120,7 @@ Historical analogies that match this trajectory:
 - **OpenTelemetry won the SDK slot** by being neutral on the
   backend.
 
-Squadron's path is adjacent to all three — win the *control
+Squadron's path is adjacent to all three, win the *control
 plane* slot the same way OTel won the SDK slot.
 
 ## What we do not do
@@ -131,7 +131,7 @@ or explicitly rebut.
 
 **We do not run a backend.** No metric storage, no log search,
 no trace UI. Squadron's UI shows fleet state, rollouts, audit
-events, recommendations — not customer telemetry. The customer
+events, recommendations, not customer telemetry. The customer
 keeps their existing backend (or picks a new one) and Squadron
 orchestrates collectors to point at it.
 
@@ -167,7 +167,7 @@ Squadron is a solid OSS project that a smaller team can adopt
 without security review pain. Anchor users are platform-eng
 teams at series B-D companies.
 
-**Year 1-2:** Universal discovery slice 1 — AWS read-only,
+**Year 1-2:** Universal discovery slice 1, AWS read-only,
 recommendations only. EC2 + Lambda + ECS first, then RDS / S3
 / ALB. No cloud-mutating actions; recommendations emit IaC
 snippets. Compliance Pack adds enterprise IAM controls. First
@@ -175,7 +175,7 @@ serious enterprise pilots.
 
 **Year 2-3:** GCP and Azure discovery. On-prem connector
 (SSH-keyed, OpAMP-style heartbeat). Proposer memory loop
-(Arc B, #531) — the AI learns from accepted/rejected
+(Arc B, #531), the AI learns from accepted/rejected
 recommendations and gets calibrated. Action runner (Arc A,
 #530) reaches GA for VM-level actions through registered
 daemons; cloud actions remain IaC-orchestrated.
@@ -212,7 +212,7 @@ useful. The thesis is intact even if we stop after each slice.
 
 **Backends respond.** Datadog could ship a "Squadron killer"
 control plane in 18 months. The mitigation is the OSS + vendor-
-neutral wedge — Datadog cannot ship a vendor-neutral product
+neutral wedge, Datadog cannot ship a vendor-neutral product
 without cannibalizing their own ingestion, and they won't.
 Squadron has to be far enough along that "use Squadron with
 Datadog as your backend" is a clean, well-documented path before
@@ -230,7 +230,7 @@ escape hatches.
 Squadron + AWS integration + GCP integration + on-prem
 connector + the AI calls. Five conversations per deal slows
 adoption. The mitigation is the audit-complete and
-IaC-orchestrating posture from day one — security teams can
+IaC-orchestrating posture from day one, security teams can
 verify the trust model from the architecture, not just from
 behavior. The Compliance Pack accelerates this further for
 regulated industries.
@@ -320,7 +320,7 @@ heading. None of that is guaranteed.
 
 If the bet pays, Squadron becomes the layer every observability
 conversation has to go through. If it doesn't, Squadron remains
-a useful OSS tool in a crowded market — which is still a
+a useful OSS tool in a crowded market, which is still a
 better outcome than most projects in this space get.
 
 Either way, the constraints in the "We do not" section are

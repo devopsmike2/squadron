@@ -1,4 +1,4 @@
-# DLQ configuration analysis slice 1 — design doc
+# DLQ configuration analysis slice 1, design doc
 
 **Status:** design doc, locked for slice 1 implementation.
 First **per-axis-depth** slice after the cross-cloud event
@@ -19,7 +19,7 @@ source widening pass closed at 3-3-3-3 / 12 surfaces.
 After the slice 10 strategic close, the event source tier
 covers every cloud at 3 surfaces (queue, pub/sub fan-out,
 partitioned-log). The widening is structural; the next
-horizon is **per-axis depth** — detecting whether the
+horizon is **per-axis depth**, detecting whether the
 operator has configured each surface's per-resource
 operational knobs correctly.
 
@@ -36,7 +36,7 @@ configuration** because:
    Operators routinely ship queues to production WITHOUT a
    DLQ configured. Poison messages get redelivered
    indefinitely (or until the message expires after the
-   retention window — whichever comes first), wasting
+   retention window, whichever comes first), wasting
    consumer-side processing budget AND silently dropping
    work that should have been routed for human review.
 3. **Squadron's existing scanners ALREADY READ the relevant
@@ -51,8 +51,8 @@ configuration** because:
 4. **The recommendation Terraform is concrete.** Per-cloud
    DLQ creation patterns are well-known and decline-paths
    are clear (operators using out-of-band poison-message
-   handling — manual replay tooling, custom Lambda /
-   Function consumers with side-channel write-out — have
+   handling, manual replay tooling, custom Lambda /
+   Function consumers with side-channel write-out, have
    honest decline cases).
 
 The slice ships per-cloud chunks so the per-cloud detail
@@ -78,7 +78,7 @@ DLQ wins as the FIRST per-axis-depth slice because:
    requires a cost substrate Squadron does not yet have.
 2. **High operator value.** DLQ misconfigurations are
    among the most common SEV1 root causes Squadron is
-   designed to catch — see the existing
+   designed to catch, see the existing
    slice-9-design-doc Tuesday LinkedIn drumbeat anchor
    ("when a message lands in the DLQ at 2am the operator
    has no record of which consumer attempted it") which
@@ -90,16 +90,16 @@ DLQ wins as the FIRST per-axis-depth slice because:
 
 ### What slice 1 does NOT address
 
-- **Per-message DLQ destination analysis** — checking
+- **Per-message DLQ destination analysis**, checking
   whether the DLQ queue itself is logged + monitored is
   slice 2+ candidate.
-- **DLQ depth / age alerts** — "the DLQ has N messages
+- **DLQ depth / age alerts**, "the DLQ has N messages
   older than X hours" requires substrate MetricQuerier
   integration; slice 12+.
-- **Cross-queue DLQ topology** — when multiple primary
+- **Cross-queue DLQ topology**, when multiple primary
   queues share a single DLQ, detecting fan-in correlation
   is slice 12+.
-- **Per-subscription DLQ for Pub/Sub topics** — Azure
+- **Per-subscription DLQ for Pub/Sub topics**, Azure
   Service Bus subscriptions have per-subscription DLQ
   config; AWS SNS subscriptions also; slice 2+ extends to
   the pub/sub family.
@@ -107,14 +107,14 @@ DLQ wins as the FIRST per-axis-depth slice because:
 
 ## 2. Non-goals (slice 1)
 
-- **Per-message DLQ destination analysis** — slice 2+.
-- **DLQ depth / age substrate analysis** — slice 12+.
-- **Cross-queue DLQ topology** — slice 12+.
+- **Per-message DLQ destination analysis**, slice 2+.
+- **DLQ depth / age substrate analysis**, slice 12+.
+- **Cross-queue DLQ topology**, slice 12+.
 - **Pub/Sub-tier DLQ (SNS subscriptions, Service Bus topic
-  subscriptions, Pub/Sub subscriptions)** — slice 2+.
+  subscriptions, Pub/Sub subscriptions)**, slice 2+.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection rules — 4-cloud queue tier
+## 3. Detection rules, 4-cloud queue tier
 
 The slice 1 detection rule fires when EITHER condition is
 true:
@@ -130,7 +130,7 @@ true:
 The band `[2, 50]` is heuristic and the slice 1 design doc
 makes the threshold explicit so future tuning is auditable.
 Operators with deliberately tight (≤1) or deliberately
-loose (>50) retry policies have honest decline cases — both
+loose (>50) retry policies have honest decline cases, both
 recommendation kinds carry decline-path framing.
 
 ### Per-cloud field mapping
@@ -138,9 +138,9 @@ recommendation kinds carry decline-path framing.
 | Cloud | Resource | DLQ-presence field | Retry-count field |
 |-------|----------|---------------------|--------------------|
 | AWS   | SQS queue | `Attributes.RedrivePolicy` (non-empty + valid JSON resolving to a sibling queue ARN) | `Attributes.RedrivePolicy.maxReceiveCount` |
-| GCP   | Cloud Tasks queue | n/a (Cloud Tasks does NOT have a DLQ primitive — operator pattern is consumer-side dead-letter routing) — see §3.1 special case | `retryConfig.maxAttempts` |
+| GCP   | Cloud Tasks queue | n/a (Cloud Tasks does NOT have a DLQ primitive, operator pattern is consumer-side dead-letter routing), see §3.1 special case | `retryConfig.maxAttempts` |
 | Azure | Service Bus queue | `forwardDeadLetteredMessagesTo` non-empty OR enableDeadLetteringOnMessageExpiration true (the latter routes to the namespace's default DLQ which Service Bus auto-creates) | `maxDeliveryCount` |
-| OCI   | Queue Service queue | `deadLetterQueueDeliveryCount > 0` (the value itself is the count; presence of the field flips presence) | (same field — the field both gates DLQ presence AND counts retries) |
+| OCI   | Queue Service queue | `deadLetterQueueDeliveryCount > 0` (the value itself is the count; presence of the field flips presence) | (same field, the field both gates DLQ presence AND counts retries) |
 
 ### §3.1 Cloud Tasks special case
 
@@ -161,7 +161,7 @@ recommendation Terraform creates a sibling Cloud Tasks
 queue named `${original}-dlq` and emits a reasoning text
 calling out that Squadron CANNOT verify the operator's
 HTTP target actually routes to the DLQ on final-retry
-failure — the operator review is load-bearing.
+failure, the operator review is load-bearing.
 
 For the retry-count axis on Cloud Tasks, the standard
 detection rule applies (`maxAttempts` outside `[2, 50]`
@@ -170,7 +170,7 @@ fires `cloudtasks-retry-count-bound`).
 ### §3.2 Azure Service Bus scanner-coverage-gap (revised in v0.89.165)
 
 The Azure Service Bus scanner walks Microsoft.ServiceBus
-**namespaces** — NOT individual queues. The queue-level DLQ
+**namespaces**, NOT individual queues. The queue-level DLQ
 fields (`forwardDeadLetteredMessagesTo`,
 `enableDeadLetteringOnMessageExpiration`, `maxDeliveryCount`)
 sit at the `Microsoft.ServiceBus/namespaces/queues` ARM
@@ -216,13 +216,13 @@ NO migration. The existing `event_source_instance` table
 from v0.89.100 has the right shape. Slice 1 records the
 per-queue DLQ axis as informational Detail bag entries:
 
-- `has_dlq` (bool) — true for AWS / Azure / OCI when the
+- `has_dlq` (bool), true for AWS / Azure / OCI when the
   per-cloud presence rule fires; always false for Cloud
   Tasks per §3.1.
-- `dlq_retry_count` (int) — the per-cloud retry-count
+- `dlq_retry_count` (int), the per-cloud retry-count
   field value when readable; -1 sentinel when the field is
   absent or the queue has no DLQ.
-- `dlq_retry_count_in_band` (bool) — true when
+- `dlq_retry_count_in_band` (bool), true when
   `dlq_retry_count` is in `[2, 50]`.
 
 Schema stays at v15.
@@ -277,7 +277,7 @@ queues-dlq-attach
 queues-dlq-retry-count-bound
 ```
 
-Webhook routing extends THE EXISTING per-cloud prefixes —
+Webhook routing extends THE EXISTING per-cloud prefixes,
 NO new prefixes needed. `sqs-*` → AWS, `cloudtasks-*` →
 GCP, `servicebus-*` → Azure, `queues-*` → OCI. The dlq-
 suffix patterns extend cleanly under the existing prefix
@@ -304,7 +304,7 @@ Reasoning template for `cloudtasks-dlq-pattern-add`:
 > "This Cloud Tasks queue has no sibling DLQ pattern that
 > Squadron can detect from the Tasks admin surface. The
 > canonical Cloud Tasks DLQ pattern is consumer-side
-> dead-letter routing — the HTTP target catches the final
+> dead-letter routing, the HTTP target catches the final
 > retry's failure and writes to a separate dead-letter
 > destination.
 >
@@ -322,7 +322,7 @@ Reasoning template for `cloudtasks-dlq-pattern-add`:
 > loop records."
 
 (Per-cloud reasoning templates for the remaining 6 kinds
-follow the same pattern — concrete Terraform + clear
+follow the same pattern, concrete Terraform + clear
 decline path. Documented in detail in each per-cloud
 chunk's commit message.)
 
@@ -339,7 +339,7 @@ chunk's commit message.)
    per-queue projection function.
 4. 8 new recommendation kinds (2 per cloud).
 5. Webhook routing extends UNDER EXISTING per-cloud
-   prefixes — no new prefixes.
+   prefixes, no new prefixes.
 6. iacpicker emitters for all 8 Terraform patterns.
 7. Operator runbook section.
 8. README index entry updated.
@@ -372,7 +372,7 @@ chunk's commit message.)
   lines. **v0.89.166.**
 
 Total: 5 release tags (this design doc + 4 chunks).
-Per-cloud chunks are independent — chunk 4 closes the arc
+Per-cloud chunks are independent, chunk 4 closes the arc
 with the cross-cloud proposer prompt + runbook + README
 work that depends on all four detection helpers landing.
 
@@ -447,7 +447,7 @@ know what to pin.
 18. **Webhook routes all 8 kinds to the correct cloud
     via the existing per-cloud prefix switch (no new
     prefix routing logic)**.
-19. **Cold-start parity preserved** — proposer prompts
+19. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.161 when no DLQ rows trigger
     recommendations.
 
@@ -465,7 +465,7 @@ honest decline cases.
 **Cloud Tasks honest framing.** The cloudtasks-dlq-pattern
 recommendation explicitly calls out that Squadron CANNOT
 verify the consumer-side wiring. The reasoning text shifts
-the verification burden to PR review — Squadron drafts
+the verification burden to PR review, Squadron drafts
 the Terraform skeleton; the operator confirms their HTTP
 target actually enqueues to the DLQ on final-retry
 failure.
@@ -476,16 +476,16 @@ surface stays at zero.
 
 ## 13. Slice 2+ candidates (DLQ axis)
 
-- **Pub/Sub-tier DLQ extension** — Azure Service Bus
+- **Pub/Sub-tier DLQ extension**, Azure Service Bus
   subscription per-subscription DLQ, AWS SNS subscription
   DLQ, GCP Pub/Sub dead-letter topic.
-- **DLQ destination logging axis** — does the DLQ queue
+- **DLQ destination logging axis**, does the DLQ queue
   itself have Logging configured? (Reuses the per-cloud
   Logging detection helpers consolidated in Stream 200.)
-- **Cross-queue DLQ topology** — when multiple primary
+- **Cross-queue DLQ topology**, when multiple primary
   queues share one DLQ, detecting fan-in correlation
   + surfacing the topology view on the Inventory tab.
-- **DLQ-destination existence check** — for Service Bus
+- **DLQ-destination existence check**, for Service Bus
   `forwardDeadLetteredMessagesTo`, verify the target
   queue/topic actually exists in the namespace (currently
   a static-string check).
@@ -494,15 +494,15 @@ surface stays at zero.
 
 These need substrate MetricQuerier wiring:
 
-- **DLQ depth / age alerts** — "the DLQ has N messages
+- **DLQ depth / age alerts**, "the DLQ has N messages
   older than X hours". Requires per-cloud CloudWatch /
   Cloud Monitoring / Azure Monitor / OCI Monitoring
   metric reads.
-- **Consumer-side lag** vs. DLQ-arrival correlation —
+- **Consumer-side lag** vs. DLQ-arrival correlation,
   flagging when a DLQ arrival burst correlates with a
   consumer-side latency spike (the slice 11+ candidate
   list called this out).
-- **Cost-impact estimation** for DLQ presence — the cost
+- **Cost-impact estimation** for DLQ presence, the cost
   of DLQ-bound retries vs. inline retries.
 
 ---
@@ -522,7 +522,7 @@ cross-cloud widening pass closed at 3-3-3-3.
 This is also the first Squadron arc that ships
 recommendations CALLING OUT that Squadron's detection has
 limits the operator's review must close (Cloud Tasks
-§3.1). The honest framing IS the load-bearing pattern —
+§3.1). The honest framing IS the load-bearing pattern,
 slice 12+ depth work will repeatedly hit
 "substrate-dependent detection where Squadron cannot prove
 the operator's invariant from the admin API alone"; slice

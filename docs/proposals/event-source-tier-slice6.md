@@ -1,4 +1,4 @@
-# Event source tier slice 6 — Azure Event Grid (second Azure surface)
+# Event source tier slice 6, Azure Event Grid (second Azure surface)
 
 **Status:** design doc, locked for slice 6 implementation.
 Continues the widening pass by adding Azure Event Grid as the
@@ -12,21 +12,21 @@ second Azure event source surface alongside Service Bus.
 
 ## 1. Problem
 
-The widening pass continues with Azure — the third cloud — by
+The widening pass continues with Azure, the third cloud, by
 adding Event Grid alongside Service Bus.
 
 Azure's three event source primitives serve different
 patterns:
 
 - **Service Bus** (slice 1, v0.89.99-103): enterprise
-  messaging — queues + topics for transactional message
+  messaging, queues + topics for transactional message
   delivery with ordering and FIFO guarantees.
 - **Event Grid** (this slice): event distribution layer for
   cloud events (CloudEvents 1.0 schema). Topics + System
   Topics for many-to-many event routing across Azure
   services.
 - **Event Hubs** (slice 7): big-data event ingestion at
-  millions of events per second. Different design center —
+  millions of events per second. Different design center,
   streaming analytics + telemetry intake.
 
 The canonical Azure event distribution architecture is
@@ -47,7 +47,7 @@ to which subscribers.
 
 1. **Architectural parity with Pub/Sub / EventBridge.** Event
    Grid serves the same architectural role as GCP Pub/Sub
-   (slice 1) and AWS EventBridge (slice 1) — many-to-many
+   (slice 1) and AWS EventBridge (slice 1), many-to-many
    event distribution. Service Bus (slice 1) is the queue
    pattern; Event Grid is the topic/fan-out pattern.
 2. **Larger adoption surface.** Event Grid is more broadly
@@ -62,9 +62,9 @@ Event Hubs is honest slice 7 deferral.
 
 ### What slice 6 does NOT address
 
-- **Azure Event Hubs** — slice 7.
-- **OCI Notification Service** — slice 7 alongside Event Hubs.
-- **Event Grid Domains** — multi-tenant Event Grid pattern.
+- **Azure Event Hubs**, slice 7.
+- **OCI Notification Service**, slice 7 alongside Event Hubs.
+- **Event Grid Domains**, multi-tenant Event Grid pattern.
   Slice 8+ candidate.
 - **Per-subscription filter rule inspection.** Slice 6
   detects topic-level diagnostic settings; per-subscription
@@ -76,22 +76,22 @@ Event Hubs is honest slice 7 deferral.
 
 ## 2. Non-goals (slice 6)
 
-- **Azure Event Hubs** — slice 7.
-- **OCI Notification Service** — slice 7.
-- **Event Grid Domains** — slice 8+.
-- **Per-subscription filter rule inspection** — slice 8+.
-- **Per-event CloudEvents payload validation** — requires
+- **Azure Event Hubs**, slice 7.
+- **OCI Notification Service**, slice 7.
+- **Event Grid Domains**, slice 8+.
+- **Per-subscription filter rule inspection**, slice 8+.
+- **Per-event CloudEvents payload validation**, requires
   consumer-side substrate; slice 8+.
-- **Private endpoint configuration validation** — slice 6
+- **Private endpoint configuration validation**, slice 6
   records PublicNetworkAccess as informational; deeper
   private endpoint analysis is slice 8+.
-- **Event Grid System Topics for resource-event routing** —
+- **Event Grid System Topics for resource-event routing**,
   slice 6 covers Custom Topics (created by user); System
   Topics (auto-created by Azure services like Blob Storage)
   are slice 7+ candidate when adoption justifies.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — Azure Event Grid
+## 3. Detection surface, Azure Event Grid
 
 API: `Microsoft.EventGrid/topics` via Azure Resource Manager.
 Required Azure RBAC: existing Reader role on the resource
@@ -103,12 +103,12 @@ Detection axes:
 |--------------------------------|---------------------------------------------------------------------------|----------------------------------|
 | Diagnostic settings configured | Topic has `Microsoft.Insights/diagnosticSettings` child routing to App Insights OR Log Analytics workspace | `eventgrid-diagnostics-enable`   |
 | Input schema enforcement       | `properties.inputSchema` is `"CloudEventSchemaV1_0"` (vs `"EventGridSchema"` or `"CustomEventSchema"`) | `eventgrid-cloudevent-schema-enforce` |
-| Public network access          | `properties.publicNetworkAccess` is `"Enabled"` (informational only — flag for review) | informational only               |
+| Public network access          | `properties.publicNetworkAccess` is `"Enabled"` (informational only, flag for review) | informational only               |
 | Topic state                    | `properties.provisioningState == "Succeeded"`                            | informational only               |
 | Local auth disabled            | `properties.disableLocalAuth == true` (AAD-only auth)                     | informational only               |
 
 The diagnostic settings axis mirrors the slice 1 Service Bus
-pattern (v0.89.101) — same Microsoft.Insights/diagnosticSettings
+pattern (v0.89.101), same Microsoft.Insights/diagnosticSettings
 child resource + same App Insights OR Log Analytics workspace
 destination check.
 
@@ -231,13 +231,13 @@ Reasoning template for `eventgrid-cloudevent-schema-enforce`:
 
 > "This Event Grid Topic has `inputSchema` set to
 > `EventGridSchema` (Azure proprietary) OR `CustomEventSchema`
-> (operator-defined). CloudEvents 1.0 — the W3C standard —
+> (operator-defined). CloudEvents 1.0, the W3C standard,
 > is the canonical format for cross-vendor event
 > interoperability AND includes the distributed tracing
 > extension (`traceparent` in event extensions).
 >
 > Switching to `CloudEventSchemaV1_0` is a breaking change
-> for existing subscribers — they need to consume the
+> for existing subscribers, they need to consume the
 > CloudEvents wire format. This PR proposes the schema
 > change; coordinate with subscribers before merging.
 >
@@ -281,7 +281,7 @@ resource "azurerm_eventgrid_topic" "<name>" {
   
   input_schema = "CloudEventSchemaV1_0"  # was: EventGridSchema or CustomEventSchema
   # WARNING: changing input_schema is a BREAKING CHANGE for
-  # existing subscribers — they must consume the new wire
+  # existing subscribers, they must consume the new wire
   # format. Coordinate before merging.
 }
 ```
@@ -330,7 +330,7 @@ Total: 2 release tags. Same pattern as slices 3, 4, 5.
 
 ## 11. Acceptance tests
 
-1. **Azure ScanEventGridTopics returns topics** — paginated
+1. **Azure ScanEventGridTopics returns topics**, paginated
    list response is walked.
 2. **Topic with diagnostic settings to App Insights →
    HasLogAxis = true**.
@@ -361,7 +361,7 @@ Total: 2 release tags. Same pattern as slices 3, 4, 5.
     azure**.
 16. **Discovery summary Azure event_source_count surfaces
     non-zero when topics exist**.
-17. **Cold-start parity preserved** — proposer prompts
+17. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.145 when no Event Grid rows
     trigger recommendations.
 
@@ -375,7 +375,7 @@ the Azure subscription covers `Microsoft.EventGrid/topics/read`
 existing rate limiter from slice 1 Service Bus (and from
 v0.89.118 metrics). Event Grid topics add 1 list call per
 subscription + 1 diagnostic settings call per topic. For a
-fleet of 500 topics, that's 501 API calls per scan — well
+fleet of 500 topics, that's 501 API calls per scan, well
 within Azure's per-subscription ARM rate limit.
 
 **Cost surface.** Azure ARM read operations are free. No new
@@ -391,7 +391,7 @@ Same in the other direction. Pinned by tests 11 + 12.
 `eventgrid-cloudevent-schema-enforce` recommendation flags
 that switching `inputSchema` BREAKS existing subscribers.
 The reasoning text emphasizes coordination with subscribers
-before merging — Squadron drafts the PR but the operator's
+before merging, Squadron drafts the PR but the operator's
 review catches the breakage risk.
 
 **No span content logging.** Slice 6 reads topic metadata
@@ -400,17 +400,17 @@ surface stays at zero.
 
 ## 13. Slice 7+ candidates
 
-- **Azure Event Hubs** — third Azure surface. Slice 7.
-- **OCI Notification Service** — second OCI surface. Slice 7.
-- **Event Grid Domains** — multi-tenant Event Grid.
+- **Azure Event Hubs**, third Azure surface. Slice 7.
+- **OCI Notification Service**, second OCI surface. Slice 7.
+- **Event Grid Domains**, multi-tenant Event Grid.
   Slice 8+.
-- **Event Grid System Topics** — auto-created by Azure
+- **Event Grid System Topics**, auto-created by Azure
   services. Slice 8+.
-- **Per-subscription filter rule inspection** — does the
+- **Per-subscription filter rule inspection**, does the
   filter drop CloudEvents with traceparent?
-- **Per-event CloudEvents payload validation** — requires
+- **Per-event CloudEvents payload validation**, requires
   consumer-side substrate.
-- **Private endpoint configuration validation** — deeper
+- **Private endpoint configuration validation**, deeper
   network access analysis.
 
 ---
@@ -424,27 +424,27 @@ on the event source tier:
 > clouds:
 > - AWS: EventBridge + SNS + SQS (3 surfaces)
 > - GCP: Pub/Sub + Cloud Tasks (2 surfaces)
-> - Azure: Service Bus + Event Grid (2 surfaces — slice 7 adds
+> - Azure: Service Bus + Event Grid (2 surfaces, slice 7 adds
 >   Event Hubs)
-> - OCI: Streaming (1 surface — slice 7 adds Notification
+> - OCI: Streaming (1 surface, slice 7 adds Notification
 >   Service)"
 
 After slice 6, the Azure event distribution chain is fully
 visible:
 
 1. **Event Grid topic** without diagnostic settings (this
-   slice `eventgrid-diagnostics-enable`) — operator has no
+   slice `eventgrid-diagnostics-enable`), operator has no
    per-event delivery audit
 2. **Event Grid topic** with proprietary schema (this slice
-   `eventgrid-cloudevent-schema-enforce`) — events lose
+   `eventgrid-cloudevent-schema-enforce`), events lose
    cross-vendor interoperability + W3C trace context
 3. **Service Bus namespace** without diagnostic settings
-   (slice 1 `servicebus-diagnostics-enable`) — downstream
+   (slice 1 `servicebus-diagnostics-enable`), downstream
    queue has no audit
 4. **Azure Functions / Logic Apps** without trace primitive
    (serverless + orchestration tiers)
 5. **Azure Functions cold-start regression** (substrate's
-   three diagnostics) — workload-health view
+   three diagnostics), workload-health view
 
 Five layers. One control plane.
 
@@ -452,6 +452,6 @@ The Tuesday LinkedIn drumbeat narrative gains: "Your Event
 Grid topic accepts events in the proprietary EventGridSchema
 format. The W3C-standard CloudEvents 1.0 schema includes a
 `traceparent` extension that propagates trace context to
-subscribers. Squadron flagged the topic for migration — but
+subscribers. Squadron flagged the topic for migration, but
 warns that the schema change BREAKS existing subscribers.
 Coordinate before merging."

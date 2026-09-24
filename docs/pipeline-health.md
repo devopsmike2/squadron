@@ -4,7 +4,7 @@ Squadron's Pipeline Health surface answers the operational question
 SRE teams ask first: **"are my collectors actually delivering data?"**
 
 It runs entirely off the OpenTelemetry Collector's built-in
-self-metrics (the `otelcol_*` family) — no extra agents, no
+self-metrics (the `otelcol_*` family), no extra agents, no
 sidecars, no scraping infrastructure. If you can already point your
 collectors at Squadron's OpAMP server, you can already see pipeline
 health.
@@ -13,7 +13,7 @@ health.
 
 For every collector reporting to Squadron, you get:
 
-- A **verdict** — `healthy`, `degraded`, `broken`, or `unknown` —
+- A **verdict**, `healthy`, `degraded`, `broken`, or `unknown`,
   derived from threshold rules over the latest self-metric samples.
 - A **signal list** explaining what's wrong (queue 92% full,
   send_failed > 0, processor dropping points, etc.).
@@ -67,13 +67,13 @@ That's it. Squadron's ingest pipeline detects the `otelcol_*` metric
 prefix in the incoming OTLP batch, extracts those samples into the
 dedicated `pipeline_health_samples` table, and serves them through
 the new endpoints below. Your user telemetry continues to flow into
-`metrics_sum` / `metrics_gauge` unchanged — pipeline health is a
+`metrics_sum` / `metrics_gauge` unchanged, pipeline health is a
 sibling surface, not a replacement.
 
 ## The verdict rules
 
 `internal/pipelinehealth/verdict.go` implements three rules. They're
-deliberately coarse — the goal is to flag obvious problems, not
+deliberately coarse, the goal is to flag obvious problems, not
 nitpick steady-state noise.
 
 **Queue saturation** (`otelcol_exporter_queue_size` /
@@ -85,12 +85,12 @@ slow" signal.
 **Send failures** (`otelcol_exporter_send_failed_*` > 0). Any
 non-zero value emits a warn signal and bumps to `degraded`. The
 collector reports cumulative counters, so a non-zero value means
-failures have occurred at some point in the agent's lifetime — not
+failures have occurred at some point in the agent's lifetime, not
 necessarily right now. v0.32+ adds a rate-over-time evaluator to
 the alert layer for that distinction.
 
 **Processor drops** (`otelcol_processor_dropped_*` > 0). Same shape
-as send failures — non-zero counter → `degraded`. Drops usually
+as send failures, non-zero counter → `degraded`. Drops usually
 mean a filter processor or a memory_limiter is throwing data away.
 
 The worst-severity signal drives the overall verdict. Verdicts
@@ -101,17 +101,17 @@ healthy.
 
 All three endpoints require `ScopeAgentsRead`.
 
-`GET /api/v1/pipeline-health/fleet` — fleet-wide bucketed counts +
+`GET /api/v1/pipeline-health/fleet`, fleet-wide bucketed counts +
 per-agent verdict map. The Dashboard's `<FleetHealthSummary/>`
 component reads this.
 
-`GET /api/v1/pipeline-health/agents/:agentID` — per-agent snapshot
+`GET /api/v1/pipeline-health/agents/:agentID`, per-agent snapshot
 with verdict, signals, and the latest values of every captured
 metric. The Agent Details drawer's pipeline-health panel reads
 this.
 
-`GET /api/v1/pipeline-health/agents/:agentID/timeseries?metric=...`
-— 1-minute bucketed sparkline for a single metric on one agent.
+`GET /api/v1/pipeline-health/agents/:agentID/timeseries?metric=...`,
+1-minute bucketed sparkline for a single metric on one agent.
 `labels=key=value;key=value` filters to a specific exporter /
 receiver / processor. Optional `window` parameter (default 1h).
 
@@ -134,7 +134,7 @@ CREATE TABLE pipeline_health_samples (
 
 The natural key is `(agent_id, metric_name, labels_hash)`. The
 labels hash is a sha256/16 prefix of the sorted (key=value) pairs
-in the labels map — stable across requests, collision-free at
+in the labels map, stable across requests, collision-free at
 realistic scales.
 
 Retention follows the same configuration as the rest of the
@@ -156,7 +156,7 @@ actually consume:
 
 Other `otelcol_*` metrics (compression ratio, per-receiver
 per-format counters, scope-instrumentation internals) **still land
-in the regular `metrics_*` tables** — you can still query them via
+in the regular `metrics_*` tables**, you can still query them via
 SquadronQL. We just don't store a second copy of them in the
 pipeline-health table, and they don't influence the verdict.
 

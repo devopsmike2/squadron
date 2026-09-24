@@ -1,4 +1,4 @@
-# GitHub Checks API back-signal — operator runbook
+# GitHub Checks API back-signal, operator runbook
 
 This is the operator-facing runbook for the v0.89.44 GitHub Checks
 API back-signal arc that closes slice 1 of the
@@ -10,14 +10,14 @@ doesn't fire.
 
 If you haven't yet wired the inbound GitHub webhook listener, start
 there instead: [webhook-listener.md](./webhook-listener.md). The
-Checks API arc is the inverse direction of that arc — the webhook
+Checks API arc is the inverse direction of that arc, the webhook
 listener tells Squadron when a PR merges; the Checks API tells GitHub
 operators what Squadron's reasoning was. The two arcs work
 independently, but the lifecycle becomes legible end-to-end only when
 both are live.
 
 For a first test against a personal sandbox repo with an existing IaC
-connection, budget about 10 minutes — most of it spent in GitHub's
+connection, budget about 10 minutes, most of it spent in GitHub's
 Settings → Tokens UI verifying the PAT scope. For a production setup
 against an org-owned repo, budget 30 minutes plus whatever your org's
 change-management process requires for PAT scope expansion.
@@ -29,7 +29,7 @@ Three things, in this order:
 1. **A PAT with the `checks:write` scope** (or fine-grained
    equivalent: `Checks: Read and write` on the target repos). The
    same PAT that opens Squadron PRs is the PAT that creates check
-   runs — design doc §3 option A, picked for slice 1's operational
+   runs, design doc §3 option A, picked for slice 1's operational
    simplicity. If your existing PAT was minted with `repo` scope
    only, the first check-run create attempt will fail open with a
    structured `iac.check_run.failed` audit event whose `error_kind`
@@ -97,7 +97,7 @@ implementation. See design doc §2 for the rationale on each.
 - **Per-file / per-line annotations.** The GitHub Checks API
   supports per-annotation positioning that surfaces as inline PR
   comments. Slice 1 ships the check run with summary + text only.
-  Annotations are a slice 2 candidate — the discovery proposer's
+  Annotations are a slice 2 candidate, the discovery proposer's
   `affected_resources` field already carries enough information to
   draft them, but the UX of inline annotations needs its own
   scoping pass.
@@ -149,7 +149,7 @@ implementation. See design doc §2 for the rationale on each.
 
 ## Enabling it (all-in-one binary)
 
-The feature is **opt-in and off by default** — without it, PRs still
+The feature is **opt-in and off by default**, without it, PRs still
 open exactly as before, just with no check run (fail-open). To enable
 it on the standard `all-in-one` Squadron binary, set one environment
 variable to a PAT carrying the `checks:write` scope (Step 1 below
@@ -162,9 +162,9 @@ export SQUADRON_IAC_GITHUB_PAT="<a PAT with checks:write>"
 export SQUADRON_PUBLIC_HOST="https://squadron.example.com"
 ```
 
-Setting `SQUADRON_IAC_GITHUB_PAT` wires every Checks surface at once —
+Setting `SQUADRON_IAC_GITHUB_PAT` wires every Checks surface at once,
 create-on-open (chunk 2), update-on-merge/close (chunk 3), and
-update-on-exclude (chunk 4) — so a created check run always reaches a
+update-on-exclude (chunk 4), so a created check run always reaches a
 final conclusion rather than hanging `in_progress`. Leaving it unset
 keeps all Checks surfaces dormant (the default OSS posture). The PAT is
 held in memory and never logged. Operators embedding Squadron in a
@@ -172,7 +172,7 @@ custom binary wire the same setters (`SetIaCChecksClient`,
 `SetIaCWebhookChecksClient` / `…PAT`, `SetIaCChecksPAT`,
 `SetSquadronHost`) in their own composition root.
 
-## Step 1 — Verify or upgrade your PAT scope
+## Step 1, Verify or upgrade your PAT scope
 
 The cleanest one-shot check is GitHub's `/user` endpoint, which
 surfaces the PAT's effective scopes in the `X-OAuth-Scopes` response
@@ -192,7 +192,7 @@ If `checks:write` (or its classic-PAT alias `repo:status`) is
 absent, you have two options:
 
 1. **Mint a new PAT** with the expanded scope (recommended for
-   classic PATs — GitHub's edit-PAT flow regenerates the secret on
+   classic PATs, GitHub's edit-PAT flow regenerates the secret on
    every edit, so you're not saving any operational complexity by
    editing in place).
 2. **Edit the existing fine-grained PAT** at GitHub Settings →
@@ -207,9 +207,9 @@ manually with the expanded scope, then paste it into the wizard.
 
 After updating the PAT, restart Squadron so the chunk-2 bridge
 picks up the new credential. Squadron does NOT hot-reload PATs in
-slice 1 — there's no /reload endpoint and no SIGHUP handler.
+slice 1, there's no /reload endpoint and no SIGHUP handler.
 
-## Step 2 — Open a PR to verify the check run appears
+## Step 2, Open a PR to verify the check run appears
 
 The cleanest test loop is to drive a discovery recommendation all
 the way through the existing Open PR path:
@@ -230,14 +230,14 @@ the way through the existing Open PR path:
    **"Squadron recommendation: <kind>"** and a summary that walks
    through:
    - The scope tuple (account, region, connection).
-   - **What this PR does** — the proposer's reasoning, after the
+   - **What this PR does**, the proposer's reasoning, after the
      existing redact.go + the chunk-2 markdown-injection escape
      pass.
-   - **Verdict learning context** — the prior-accepted +
+   - **Verdict learning context**, the prior-accepted +
      closed-without-merge + operator-excluded citations from
      chunk 6 of #531 slice 2, when present. Cold-start PRs (no
      prior verdicts in scope) omit this section entirely.
-   - **[View in Squadron]** — the deep link back to the
+   - **[View in Squadron]**, the deep link back to the
      recommendations tab anchored on this `recommendation_id`.
 3. **Confirm the audit signal.** Open the Timeline page. The most
    recent event for this PR should be **"Squadron posted a check
@@ -267,7 +267,7 @@ Each transition fires once. The check run stays at its final
 conclusion thereafter; subsequent operator actions on a completed
 check run are no-ops by design (see design doc §7).
 
-## Step 3 — Reading the audit signal
+## Step 3, Reading the audit signal
 
 Three new audit event types ship in this arc, each carrying a
 distinct payload shape. Examples below are pulled from a real
@@ -346,10 +346,10 @@ the neutral transition.
 The `new_conclusion` field carries the load-bearing transition
 signal:
 
-- `"success"` — operator merged the PR (chunk 3, webhook handler).
-- `"failure"` — operator closed the PR without merging (chunk 3,
+- `"success"`, operator merged the PR (chunk 3, webhook handler).
+- `"failure"`, operator closed the PR without merging (chunk 3,
   webhook handler).
-- `"neutral"` — operator clicked "Don't propose this again" on a
+- `"neutral"`, operator clicked "Don't propose this again" on a
   PR that was still open (chunk 4, exclusion handler).
 
 To query the neutral transitions specifically:
@@ -392,19 +392,19 @@ the check-run side-effect dropped.
 The `error_kind` field is the SIEM dashboard fan-out signal. Four
 slice-1 values, in design doc §8 order:
 
-- `"scope_missing"` — PAT lacks `checks:write` (or fine-grained
+- `"scope_missing"`, PAT lacks `checks:write` (or fine-grained
   equivalent). The Step 4 matrix below has the fix.
-- `"rate_limit"` — GitHub REST API rate limit exceeded. Slice 1
+- `"rate_limit"`, GitHub REST API rate limit exceeded. Slice 1
   does NOT retry; the check run is dropped. The
   `error_message` field carries `reset=<unix-timestamp>` so the
   SIEM dashboard's "when does this clear?" panel can read it
   without parsing prose.
-- `"pr_not_found"` — Squadron's view of the PR diverged from
+- `"pr_not_found"`, Squadron's view of the PR diverged from
   GitHub's (operator deleted the PR, force-push orphaned the
   SHA). Drop and log.
-- `"network"` — transport-level errors, 5xx responses, or any
+- `"network"`, transport-level errors, 5xx responses, or any
   other 4xx the wrapper doesn't classify. The "I don't know,
-  drop it" branch — SIEM dashboards group these as transient.
+  drop it" branch, SIEM dashboards group these as transient.
 
 To filter on just the scope-missing failures:
 
@@ -414,14 +414,14 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   | jq '.events[] | select(.payload.error_kind == "scope_missing")'
 ```
 
-## Step 4 — Troubleshooting
+## Step 4, Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `iac.check_run.failed` with `error_kind=scope_missing` | PAT lacks `checks:write` (or its classic-PAT alias `repo:status`) | Add `checks:write` to the PAT at GitHub Settings → Tokens → your token → Edit (fine-grained) or Mint a new classic PAT with the expanded scope, then restart Squadron |
 | `iac.check_run.failed` with `error_kind=rate_limit` | GitHub REST API rate limit (5000 req/hour per PAT) exhausted | Wait for `X-RateLimit-Reset` (the timestamp is embedded in `error_message`). Slice 1 ships a 100 req/min token bucket in the client to smooth bursts; sustained pressure requires a slice-2-style App credential with its own rate-limit budget |
-| `iac.check_run.failed` with `error_kind=pr_not_found` | PR was deleted on the GitHub side between PR-open and check-run-create, OR a force-push orphaned the original head SHA | No fix — slice 1 does not chase head_sha changes. The PR open was honest; the check run is best-effort. If this fires consistently, investigate why your team is deleting PRs mid-review |
-| `iac.check_run.failed` with `error_kind=network` | Transport-level error, GitHub 5xx, or an unclassified 4xx | Check Squadron's outbound connectivity to api.github.com; check GitHub's status page; if it persists, the `error_message` field carries the wrapper's diagnostic — file an issue if the message looks like a misclassification |
+| `iac.check_run.failed` with `error_kind=pr_not_found` | PR was deleted on the GitHub side between PR-open and check-run-create, OR a force-push orphaned the original head SHA | No fix, slice 1 does not chase head_sha changes. The PR open was honest; the check run is best-effort. If this fires consistently, investigate why your team is deleting PRs mid-review |
+| `iac.check_run.failed` with `error_kind=network` | Transport-level error, GitHub 5xx, or an unclassified 4xx | Check Squadron's outbound connectivity to api.github.com; check GitHub's status page; if it persists, the `error_message` field carries the wrapper's diagnostic, file an issue if the message looks like a misclassification |
 | PR opens, but NO `iac.check_run.*` audit event fires | Squadron deployment wasn't built / configured with the chunk-2 wiring (nil `iacChecksClient` or empty `SQUADRON_PUBLIC_HOST` / PAT) | Verify `SetIaCChecksClient` is called in your deployment's wiring layer; verify `SQUADRON_GITHUB_TOKEN` (or your fine-grained equivalent) is set with `checks:write` scope; restart Squadron |
 | Check run appears on GitHub but NO `iac.check_run.created` audit event fires | The audit service is unwired on the IaCGitHubHandlers (rare; happens in test_server.go-style deployments) | Wire `WithAuditService` on the IaCGitHubHandlers builder; restart Squadron |
 | Operator clicks "Don't propose this again" but the check run stays `in_progress` | One of: chunk-4 wiring missing (nil checksClient / nil checkRunStore / empty PAT), no check-run row for this `recommendation_id` (chunk-2 bridge never opened a PR for it), or the check run was already PATCHed to `completed` by the merge / close webhook | Confirm `SetIaCChecksPAT` is called in server wiring (see internal/api/server.go::discoveryTrampoline); confirm the audit log shows an earlier `iac.check_run.created` for this `recommendation_id`; if the run is already `completed`, the design doc §7 invariant intentionally prevents overwriting the final conclusion |
@@ -474,24 +474,24 @@ behavior you can rely on as of v0.89.44.
 
 ## Cross-references
 
-- [GitHub Checks API back-signal — design doc](./proposals/checks-api-back-signal.md) —
+- [GitHub Checks API back-signal, design doc](./proposals/checks-api-back-signal.md),
   the design rationale, the slice-1 contract, the slice-2 candidate
   list, and the threat model.
-- [GitHub webhook listener](./webhook-listener.md) — the inverse
+- [GitHub webhook listener](./webhook-listener.md), the inverse
   direction: GitHub tells Squadron when a PR merges. The chunk-3
   half of this arc rides on the webhook handler; the runbook there
   documents the inbound side.
-- [Discovery IaC first-time setup](./discovery-iac-first-time-setup.md) —
+- [Discovery IaC first-time setup](./discovery-iac-first-time-setup.md),
   prerequisite for both arcs. Walks the IaC connection wizard plus
   the "Open PR" loop. The check run is the value-add on top of the
   PR-open flow documented there.
-- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md),
   the verdict-learning context the check-run summary cites comes
   from chunk 6 of #531 slice 2. The bridge layer reads the same
   `verdict_examples_used_by_state` map both surfaces consume.
-- [Audit log](./audit-log.md) — full catalog of audit event types
+- [Audit log](./audit-log.md), full catalog of audit event types
   and target types. The `iac.check_run.created`,
   `iac.check_run.updated`, and `iac.check_run.failed` trio
   documents alongside the rest of the IaC arc.
-- [API reference](./api-reference.md) — the REST surface for
+- [API reference](./api-reference.md), the REST surface for
   `/api/v1/audit/events` (the source of the curl examples above).

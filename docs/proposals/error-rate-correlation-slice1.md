@@ -1,4 +1,4 @@
-# Error rate correlation slice 1 — substrate's third diagnostic
+# Error rate correlation slice 1, substrate's third diagnostic
 
 **Status:** design doc, locked for slice 1 implementation.
 Third diagnostic running on the cold-start latency substrate
@@ -19,16 +19,16 @@ After cold-start latency slices 1+2 and sampling rate slice 1,
 Squadron measures two of the three classic serverless health
 dimensions:
 
-- **Cold-start latency** — is the workload's startup
+- **Cold-start latency**, is the workload's startup
   performance regressed?
-- **Sampling rate** — is enough of the traffic actually being
+- **Sampling rate**, is enough of the traffic actually being
   observed?
 
 The third dimension is **error rate**. Operators care about
 this independently of the other two:
 
 > A Lambda function with healthy cold-start P95, healthy
-> sampling rate, healthy traces — but the error rate jumped
+> sampling rate, healthy traces, but the error rate jumped
 > from 0.3% to 12% after yesterday's deploy. The traces show
 > the expected mix of success and failure spans but the
 > failure share is wrong. The dashboard doesn't surface
@@ -61,7 +61,7 @@ fire when:
 
 The substrate from cold-start slice 1+2 already implements
 per-cloud `MetricQuerier`. Error rate correlation adds one
-new metric name per cloud (the error count) — `MetricQuerier`
+new metric name per cloud (the error count), `MetricQuerier`
 stays stable. The invocation count metric from sampling rate
 slice 1 (v0.89.122) is reused.
 
@@ -90,7 +90,7 @@ the substrate compounds is now demonstrated twice over.
   independently. Slice 2+ may add caller/callee
   correlation.
 - **Per-language error fingerprinting.** Same as cold-start
-  / sampling rate — operator picks the failure mode in
+  / sampling rate, operator picks the failure mode in
   the 3-failure-mode reasoning.
 - **Auto-fix.** Squadron remains a recommender.
 
@@ -111,14 +111,14 @@ For each serverless resource at scan time:
 6. **Fire when ALL conditions hold:**
    - `current_error_rate > baseline_error_rate * 2.0`
    - `current_invocation_count >= 1000` (noise filter)
-   - `current_error_count >= 50` (absolute floor — avoid
+   - `current_error_count >= 50` (absolute floor, avoid
      firing on 1-2 errors that happen to be 2x baseline of
      0.5 errors)
    - Not on exclusion list
 
 ### 3.1 Why 2.0x ratio?
 
-Error rates are inherently noisier than latency metrics — a
+Error rates are inherently noisier than latency metrics, a
 healthy function may have a baseline rate of 0.5% that
 occasionally spikes to 1% during deploys or backend issues
 without being a regression. A 2.0x ratio catches genuine
@@ -131,12 +131,12 @@ Error rate gets the looser threshold.
 ### 3.2 Why 50 absolute error count minimum?
 
 A function with baseline of 1 error/day that has 3 errors
-today shows a 3x ratio — but the absolute count is so low
+today shows a 3x ratio, but the absolute count is so low
 that the ratio is statistical noise. The 50-error floor
 ensures we only fire when the error count is large enough to
 be operationally meaningful.
 
-50 errors in 24h corresponds to roughly 2/hour sustained —
+50 errors in 24h corresponds to roughly 2/hour sustained,
 a real signal worth surfacing.
 
 ### 3.3 Why current_error_rate, not current_error_count alone?
@@ -267,7 +267,7 @@ has 6 columns. Adding error rate would push it to 7. The
 brief's 1500-line soft cap means the UI work has tradeoffs.
 
 Slice 1 of error rate: do NOT add error rate to the SPAN
-QUALITY panel — error rate isn't a span-quality issue per
+QUALITY panel, error rate isn't a span-quality issue per
 se, it's a workload-health issue. Instead:
 
 - Add "Error rate (24h)" column on each cloud's Serverless
@@ -290,7 +290,7 @@ span-quality-error-rate-spike
 ```
 
 Reuses the existing `span-quality-` webhook prefix from
-v0.89.86 — NO new webhook routing.
+v0.89.86, NO new webhook routing.
 
 Reasoning template:
 
@@ -316,10 +316,10 @@ Reasoning template:
 >    raises memory + concurrency limits to give the function
 >    headroom. Merge if (3).
 >
-> If your cause is (1) or (2), decline this PR — the verdict
+> If your cause is (1) or (2), decline this PR, the verdict
 > learning loop records."
 
-Terraform pattern per cloud (slice 1 ships case (3) — the
+Terraform pattern per cloud (slice 1 ships case (3), the
 resource-exhaustion mitigation):
 
 - AWS Lambda: raise `memory_size` from current to current * 1.5,
@@ -367,7 +367,7 @@ are the more common causes and should be declined.
 
 ## 10. Implementation chunks
 
-- **Chunk 1: Foundation — storage migration + per-cloud
+- **Chunk 1: Foundation, storage migration + per-cloud
   error metric support.** ~900-1100 lines. v14→v15
   migration, store CRUD, per-cloud error metric routing in
   `MetricQuerier`. **v0.89.127.**
@@ -380,7 +380,7 @@ are the more common causes and should be declined.
 - **Chunk 4: Operator runbook + README index.**
   ~300-400 lines. **v0.89.130.**
 
-Total: 4 release tags. No parallel scanner fan-out —
+Total: 4 release tags. No parallel scanner fan-out,
 substrate already exists per-cloud.
 
 ## 11. Acceptance tests
@@ -390,13 +390,13 @@ substrate already exists per-cloud.
 3. **GCP QueryAggregate supports execution_count{status!=ok}.**
 4. **Azure QueryAggregate supports FunctionErrors.**
 5. **OCI QueryAggregate supports function_invocation_count{result=error}.**
-6. **Detection — 3x ratio at 3000 invocations + 90 errors
+6. **Detection, 3x ratio at 3000 invocations + 90 errors
    fires recommendation.**
-7. **Detection — 1.9x ratio at 3000 invocations does NOT
+7. **Detection, 1.9x ratio at 3000 invocations does NOT
    fire** (below ratio threshold).
-8. **Detection — 3x ratio at 500 invocations does NOT fire**
+8. **Detection, 3x ratio at 500 invocations does NOT fire**
    (below minimum invocations).
-9. **Detection — 3x ratio at 3000 invocations + 30 errors
+9. **Detection, 3x ratio at 3000 invocations + 30 errors
    does NOT fire** (below absolute error minimum).
 10. **Storage migration v14 → v15 idempotent.**
 11. **error_rate_observation rows persist + retrieve.**
@@ -405,7 +405,7 @@ substrate already exists per-cloud.
     on Serverless rows for all 4 providers.**
 14. **UI Error rate column renders amber when exceeds
     threshold.**
-15. **Cold-start parity preserved** — all 4 providers
+15. **Cold-start parity preserved**, all 4 providers
     cold-start prompts byte-identical to v0.89.125 when no
     error rate rows trigger recommendations.
 
@@ -434,8 +434,8 @@ Per-cloud rate limits (AWS 10 RPS, GCP 60 RPM, Azure
 scan comfortably for typical fleets.
 
 For a 1000-function fleet scanned every 24h:
-- AWS: 5000 queries / 24h = ~0.06 RPS — trivial
-- GCP: 5000 queries / 24h = ~0.06 RPM — trivial
+- AWS: 5000 queries / 24h = ~0.06 RPS, trivial
+- GCP: 5000 queries / 24h = ~0.06 RPM, trivial
 - Azure / OCI: similar
 
 **Cost surface.** Error rate adds 2 metric queries per
@@ -495,16 +495,16 @@ demonstrated three ways:
 After error rate slice 1, the substrate supports a
 complete serverless health diagnostic suite:
 
-- **Cold-start latency** — is the workload's startup
+- **Cold-start latency**, is the workload's startup
   performance regressed? (slice 1 + slice 2)
-- **Sampling rate** — is enough of the traffic actually
+- **Sampling rate**, is enough of the traffic actually
   being observed? (slice 1)
-- **Error rate** — is the workload failing at an unusual
+- **Error rate**, is the workload failing at an unusual
   rate? (this arc)
 
 Together, these answer the operator's "is this workload
 healthy?" question with three independent signals. The
-universal claim doesn't grow a new verb — MEASURES gains
+universal claim doesn't grow a new verb, MEASURES gains
 a third sub-diagnostic.
 
 The Tuesday LinkedIn drumbeat narrative gains another

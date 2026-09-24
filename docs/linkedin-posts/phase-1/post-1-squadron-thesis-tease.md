@@ -5,7 +5,7 @@
 **Visual evidence:** A single screenshot of the Squadron Dashboard
 (`/`) from the live deployment, taken right after a real proposer
 run. The screenshot shows fleet state, recent rollouts, and the
-audit timeline strip — three surfaces in one frame that make the
+audit timeline strip, three surfaces in one frame that make the
 "control plane" claim concrete on first glance.
 **Hashtags:** #OpenTelemetry #ObservabilityControlPlane
 **Target word count:** 200-400
@@ -15,7 +15,7 @@ audit timeline strip — three surfaces in one frame that make the
 Squadron is the OSS control plane for OpenTelemetry.
 
 It is not a backend. Datadog, Honeycomb, Grafana, Splunk own that
-slot. It is not an SDK either — OpenTelemetry owns that. Squadron
+slot. It is not an SDK either, OpenTelemetry owns that. Squadron
 sits between the two: the layer that decides what to observe, how
 to shape the collector config, and when to roll the change out.
 
@@ -30,7 +30,7 @@ plane real:
   once; the engine sequences the rest.
 - An audit timeline that records every plan, proposal, approval,
   and rollback as one humanized chain. Two-person approval is
-  enforced server-side — the AI is the requester; a human is the
+  enforced server-side, the AI is the requester; a human is the
   approver.
 
 What Squadron does not do is also load-bearing. It does not hold
@@ -59,7 +59,7 @@ reasoning loop, the bench, and the playground.
   the brand line in the hero area; the fleet status summary; the
   recent rollouts strip showing at least one plan with multiple
   steps; the audit timeline strip showing a `plan.created` →
-  `proposal.created` chain. One frame, four signals — that's the
+  `proposal.created` chain. One frame, four signals, that's the
   whole "control plane" claim made concrete.
 - **Annotations:** none. The first post lets the surface speak. No
   red arrows, no callouts. A clean screenshot at 1920x1080,
@@ -71,7 +71,7 @@ Resists **the vision dump** from linkedin-rollout.md "Anti-patterns
 to avoid". The post tees the thesis in one paragraph, names what
 ships today at v0.84.0, names what Squadron does not do, and points
 the reader at the repo. It does not paste the whole `docs/thesis.md`
-into LinkedIn — the audience earns the full pitch by following the
+into LinkedIn, the audience earns the full pitch by following the
 drumbeat. The closing line ("Coming next: posts on the proposer
 reasoning loop, the bench, and the playground.") sets cadence
 expectations without committing to dates.

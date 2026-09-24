@@ -9,7 +9,7 @@ verbatim in the code block with the per-deployment ExternalId
 already substituted in. The copy-to-clipboard button is visible.
 A second smaller frame in the same image shows the relevant lines
 from `internal/discovery/aws/scanner.go` listing the API calls
-the slice-1 scanner actually makes — every one of them is a
+the slice-1 scanner actually makes, every one of them is a
 Describe / List / Get / GetCallerIdentity.
 **Hashtags:** #OpenTelemetry #SRE
 **Target word count:** 200-400
@@ -37,7 +37,7 @@ escalate to write actions in the customer's account.
 Recommendations land as Terraform snippets the customer's
 existing IaC pipeline runs. Squadron orchestrates; the customer
 executes. The proposer's system prompt states this to the model
-in plain English — open
+in plain English, open
 `internal/ai/proposer_discovery_prompt.go` and read the line
 that begins SQUADRON DOES NOT EXECUTE THE TERRAFORM. The model
 is told never to suggest an auto-apply path and never to imply
@@ -55,8 +55,8 @@ schema. There is no field for them. A future contribution that
 tries to add one gets rejected.
 
 A security reviewer can verify all of this from the architecture
-alone — the trust policy, the permissions policy, the prompt,
-the scanner's import surface — without reading every code path.
+alone, the trust policy, the permissions policy, the prompt,
+the scanner's import surface, without reading every code path.
 That is what "no cloud write credentials" actually buys: a
 review that takes weeks instead of quarters.
 
@@ -68,7 +68,7 @@ Repo at the v0.85.0 tag. The wizard is at
 ## Visual asset spec
 
 - **Filename:** `assets/post-12-trust-policy-wizard-plus-scanner-surface.png`
-- **Surface — main frame:** the connector wizard's Step 2
+- **Surface, main frame:** the connector wizard's Step 2
   ("Create the IAM role with this trust policy") on the live
   deployment at the v0.85.0 tag, opened via the Account tab's
   "Connect new account" button. The trust-policy JSON code block
@@ -76,15 +76,15 @@ Repo at the v0.85.0 tag. The wizard is at
   the copy-to-clipboard button is visible; the inline "why this
   step?" panel mentioning the confused-deputy problem is at
   least partially in frame.
-- **Surface — inset frame:** a code-block screenshot from
+- **Surface, inset frame:** a code-block screenshot from
   `internal/discovery/aws/scanner.go` showing the API calls
   the scanner makes. The `GetCallerIdentity`,
   `DescribeInstances`, and `ListFunctions` invocations are
   visible; together they prove the call surface is
   read-only.
 - **Annotations:** one small marker on the trust-policy JSON's
-  `sts:ExternalId` condition, captioned "per-deployment secret
-  — defeats confused deputy". One marker on the inset code
+  `sts:ExternalId` condition, captioned "per-deployment secret,
+defeats confused deputy". One marker on the inset code
   block's `DescribeInstances` line, captioned "every call is
   Describe / List / Get". Two markers total, both factual.
 - **Crop:** include the wizard's step counter (Step 2 of 5) so

@@ -8,27 +8,27 @@ commercial edition never takes away what's already open.
 ## The open-core model
 
 The OSS / enterprise line is a **build-time boundary, not a runtime license
-check** — and never a fork. The open core defines extension-point interfaces
+check**, and never a fork. The open core defines extension-point interfaces
 (under `extension/`) and compiles **no-op providers**; the enterprise and
 compliance packs supply the real providers, dropped into the build tree and
 picked up under an edition build tag. The entitlement is *which code is compiled
-in* — an OSS binary cannot be turned into an enterprise binary by flipping a
+in*, an OSS binary cannot be turned into an enterprise binary by flipping a
 config flag.
 
 ```mermaid
 flowchart TB
-    subgraph core[OSS open core — Apache 2.0]
+    subgraph core[OSS open core, Apache 2.0]
         SEAM["extension/ interfaces<br/>identity - policy - changewindow<br/>siem - detectors - tracebudget"]
         NOOP[No-op / limited<br/>default providers]
         SEAM --- NOOP
     end
 
-    subgraph ent[Enterprise Pack — enterprise tag]
+    subgraph ent[Enterprise Pack, enterprise tag]
         IDN[Identity: SSO/SCIM, RBAC,<br/>multi-tenant isolation]
         DET[Commercial-tier<br/>detectors]
     end
 
-    subgraph comp[Compliance Pack — compliance tag]
+    subgraph comp[Compliance Pack, compliance tag]
         POL[Group approval policy<br/>+ change windows]
         SIEM[SIEM export]
         AUD[API-access audit]
@@ -70,7 +70,7 @@ seam contract.
 ## Where it fits
 
 Everything above lands behind a **capability seam** that is inert in the OSS
-build — the OSS test suite proves the inertness — and only becomes load-bearing
+build, the OSS test suite proves the inertness, and only becomes load-bearing
 when the enterprise wire files are compiled in. The result: the same codebase,
 the same architecture (see [Architecture](../concepts/architecture.md)), with
 governance and scale added on top rather than bolted on.

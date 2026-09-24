@@ -43,19 +43,19 @@ up in the agents list with a **Telemetry-only** badge.
 
 The collector needs to be reconfigured to include an OpAMP
 supervisor block pointing at Squadron, then restarted. This is
-necessarily out-of-band — Squadron can't push a new config to a
+necessarily out-of-band, Squadron can't push a new config to a
 collector it doesn't have a control channel for.
 
 Typical flows:
 
-1. **Ansible push** — your existing deploy pipeline (e.g.
+1. **Ansible push**, your existing deploy pipeline (e.g.
    `win_deploy.yml`) rewrites the collector config to include the
    OpAMP block and restarts the service. On next start the
    collector opens OpAMP, gets matched to the existing
    telemetry-only agent record by its `service.instance.id`, and
    gets promoted to fully-managed.
 
-2. **Manual conversion** — operator adds the OpAMP supervisor
+2. **Manual conversion**, operator adds the OpAMP supervisor
    block to the collector config on the host, restarts the
    binary. Same match-by-instance-id de-dupe applies.
 
@@ -73,7 +73,7 @@ service:
   extensions: [opamp]
 ```
 
-The `instance_uid` line is critical for the de-dupe — it ensures
+The `instance_uid` line is critical for the de-dupe, it ensures
 the OpAMP-connected agent reports the same UUID as the
 telemetry-only record, so Squadron updates rather than creates a
 new agent.
@@ -84,9 +84,9 @@ The discovery hot path has an in-process LRU cache that
 throttles re-upserts: once Squadron has seen an `agent_id`
 recently it short-circuits before hitting the store. The default
 window is 5 minutes, which is plenty for typical OTel collector
-reporting intervals (10–60s).
+reporting intervals (10-60s).
 
-There's no config knob today — if you need to tune the window,
+There's no config knob today, if you need to tune the window,
 open an issue and we'll add one in v0.36.2.
 
 ## Disabling discovery
@@ -156,12 +156,12 @@ call in `cmd/all-in-one/main.go`.
 
 ### Roadmap
 
-- **v0.36.2** — Active host probing. For expected hosts that
+- **v0.36.2**, Active host probing. For expected hosts that
   haven't checked in, Squadron tries scraping
   `http://<host>:8888/metrics` to detect collectors running
   without OpAMP. (Requires network reachability from Squadron to
   the hosts.)
-- **v0.36.3** — One-click "convert to managed" affordance that
+- **v0.36.3**, One-click "convert to managed" affordance that
   fires the deploy pipeline with an OpAMP-enabled config for a
   specific telemetry-only host.
 

@@ -17,9 +17,9 @@ An operator should be able to ask "what would the AI do here?"
 without seeding a fake cost spike into their application store.
 
 The v0.84 playground at `/playground/proposer` is that surface.
-Hand-craft a `CostSpikeContext` field by field — group, signal,
+Hand-craft a `CostSpikeContext` field by field, group, signal,
 baseline USD per month, peak USD per month, severity, top
-attributes — or one-click one of three starter scenarios from the
+attributes, or one-click one of three starter scenarios from the
 v0.83 bench corpus. Click Run. The proposer evaluates and the
 result panel shows kind, reasoning text in full, evidence chips,
 tokens-in, tokens-out, latency, and estimated USD from the actual
@@ -34,7 +34,7 @@ supposed to handle:
   existing target config.
 - **Two-attrs plan.** Two independent attributes argue for staging
   the drops. The proposer emits `Kind: plan` with two steps. This
-  is the v0.82 #550 reproducer — also the scenario screenshotted
+  is the v0.82 #550 reproducer, also the scenario screenshotted
   in the v0.84.0 release notes.
 - **Empty attribution → decline.** No top attributes supplied. The
   proposer is supposed to decline with a one-sentence reason. The
@@ -43,7 +43,7 @@ supposed to handle:
 The endpoint is `POST /api/v1/ai/proposer/preview`. Same
 agents-read scope as the other read-only AI surfaces (Ask,
 explain, fleet-query). The same code path that runs against a
-real spike runs here — only the persistence step is bypassed.
+real spike runs here, only the persistence step is bypassed.
 
 Use cases:
 
@@ -67,7 +67,7 @@ capabilities enabled.
 - **Recording flow (6-10 seconds, looped cleanly):**
   1. Start on the empty form with the three starter buttons
      visible.
-  2. Cursor clicks "Two attrs → plan" — the form fields populate
+  2. Cursor clicks "Two attrs → plan", the form fields populate
      with the 312% / $400 → $1,648 / `container.id` +
      `k8s.pod.uid` values.
   3. Cursor clicks Run. A brief loading spinner.
@@ -76,7 +76,7 @@ capabilities enabled.
      token-out / estimated USD.
   5. Hold on the result panel for ~2 seconds, then loop back.
 - **Annotations:** none baked into the recording. A small caption
-  below the post body reads "v0.84.0 dogfood run — real API
+  below the post body reads "v0.84.0 dogfood run, real API
   call, no rollouts created." The reasoning text and metering
   numbers are the point.
 - **Crop:** include the browser address bar with
@@ -89,9 +89,9 @@ Resists **the hype follow-up** from linkedin-rollout.md
 "Anti-patterns to avoid". Posts 2 and 3 already walked the
 proposer's reasoning loop and the plan-kind dispatch; the pull is
 to make this post louder ("now you can play with it yourself!").
-The post instead names a narrow operator workflow — preview a
+The post instead names a narrow operator workflow, preview a
 proposal before the daemon fires, validate a prompt change before
-CI, demo the framework without a real incident — and lists the
+CI, demo the framework without a real incident, and lists the
 three starter scenarios concretely. Same volume, longer duration.
 The playground is shown as a tool the operator actually uses, not
 a feature announcement.

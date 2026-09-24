@@ -11,7 +11,7 @@ should be in each recipe, and how the UI surfaces the output.
 
 ## What it does
 
-Every recommendation is generated from a fresh fleet snapshot — no
+Every recommendation is generated from a fresh fleet snapshot, no
 historical store, no background worker. Recipes are pure functions
 over the insights surface; the same fleet shape produces the same
 output across runs, which is also why dismissals work: the
@@ -25,7 +25,7 @@ to four narrowed to that agent.
 
 ## The v0.25 recipe set
 
-### Noisy attribute — `noisy_attribute`
+### Noisy attribute, `noisy_attribute`
 
 The single highest-ROI optimization in production OTel
 deployments. Looks at the sampled `/insights/volume/attributes`
@@ -35,21 +35,21 @@ output for each signal and flags any key whose `pct_of_signal` is
 Snippet: an `attributesprocessor` with an `action: delete` for the
 flagged key, plus a header comment showing where to wire it into
 `service.pipelines.<signal>.processors`. The snippet is not a
-drop-in replacement for your config — it's a fragment to merge.
+drop-in replacement for your config, it's a fragment to merge.
 
 Confidence: medium. The attribute size is sampled (~2000 rows per
 query) and extrapolated, so the byte estimate is a ballpark. The
 fact that the attribute is dominating, however, is usually
 trustworthy at any reasonable sample size.
 
-### Outlier agent — `outlier_agent`
+### Outlier agent, `outlier_agent`
 
 Flags any agent producing ≥ 2× the fleet median bytes (warn) or
 ≥ 5× (critical). Median is computed across the top 50 agents to
 avoid skewing the threshold with quiet/idle agents that aren't
 relevant to the question.
 
-No single snippet — outlier causes vary (missing sampling step,
+No single snippet, outlier causes vary (missing sampling step,
 exporter retry loop, verbose log severity, host running too many
 collectors). The recommendation points the operator at the agent
 and explains the common culprits.
@@ -57,10 +57,10 @@ and explains the common culprits.
 Confidence: high on detection, low on prescription. The agent IS
 loud relative to its peers; figuring out why takes a human.
 
-Recipe is skipped entirely on fleets with fewer than 4 agents —
+Recipe is skipped entirely on fleets with fewer than 4 agents,
 outlier detection is meaningless on N=2.
 
-### Drop hotspot — `drop_hotspot`
+### Drop hotspot, `drop_hotspot`
 
 Looks at the per-signal drop rate (`dropped_count` ÷
 `item_count + dropped_count`) and flags signals exceeding 1%
@@ -77,14 +77,14 @@ cause (undersized batch processor), but other causes (exporter
 queue saturation, network issues to the destination) need
 different fixes the engine doesn't currently distinguish.
 
-### Empty signal — `empty_signal`
+### Empty signal, `empty_signal`
 
 Per agent, flags any signal type the agent has zero bytes of
 during the window while the rest of the fleet emits it. Suggests
 pruning the receiver/exporter pair from the agent's config to cut
 memory and connection overhead.
 
-No snippet — there's no single right way to delete a pipeline
+No snippet, there's no single right way to delete a pipeline
 branch; the operator edits their config directly.
 
 Confidence: high. If the agent's reporting zero bytes for a
@@ -94,21 +94,21 @@ Recipe is skipped on fleets with fewer than 3 agents, and on
 agents with less than 10 KB of total volume (avoids
 false-positives on idle agents).
 
-### High cardinality — `high_cardinality` (v0.28)
+### High cardinality, `high_cardinality` (v0.28)
 
 The other axis of telemetry cost: metric series count. Many
 backends bill not by ingested bytes but by *active series* (one
 unique combination of metric name + labels = one series). A
 metric that's modest in bytes can still be ruinous if its label
-set explodes — a `request_duration` with `user_id` tagged blows
+set explodes, a `request_duration` with `user_id` tagged blows
 up to one series per user.
 
 The recipe runs a sampled `COUNT(DISTINCT metric_attributes)` per
 metric name over the window:
 
-- **critical** — ≥ 10,000 distinct attribute combinations in the
+- **critical**, ≥ 10,000 distinct attribute combinations in the
   window.
-- **warn** — ≥ 2,000 distinct attribute combinations.
+- **warn**, ≥ 2,000 distinct attribute combinations.
 
 Snippet: a `metricstransform` processor entry that drops the
 highest-cardinality label on the offending metric. The recipe
@@ -117,7 +117,7 @@ single key with the most distinct values; that's the one the
 snippet's `action: drop_label` targets.
 
 Confidence: medium-high for the detection (DISTINCT counts are
-exact within the sampling window). Lower for the snippet — the
+exact within the sampling window). Lower for the snippet, the
 "wrong" label depends on what the metric is *for*. Always review
 the suggested drop against your dashboards.
 
@@ -131,14 +131,14 @@ surface, just without a $ figure.
 
 Each card on the Cost Insights page offers three actions:
 
-- **Copy snippet** — clipboard write of the suggested YAML.
+- **Copy snippet**, clipboard write of the suggested YAML.
   Useful when you have the target config open in your own editor.
-- **Open in editor** — deep-links to the new-config form
+- **Open in editor**, deep-links to the new-config form
   (`/configs/new`) with the snippet prefilled inside a clearly-
   marked recommendation banner, on top of the baseline scaffolding.
   The operator names it, optionally lints it, and saves it as a
   normal config. No auto-create, no auto-rollout.
-- **Dismiss** — POST to `/api/v1/recommendations/:id/dismiss`.
+- **Dismiss**, POST to `/api/v1/recommendations/:id/dismiss`.
   Suppresses the recommendation on subsequent evaluates without
   affecting other operators' views.
 
@@ -146,11 +146,11 @@ Dismissals persist in the application store; restore via the
 `/api/v1/recommendations/:id/restore` endpoint or by deleting the
 row from `recommendation_dismissals`.
 
-## Estimates are sampled — read this once
+## Estimates are sampled, read this once
 
 Every recommendation carries `estimated: true` and every byte
 figure ends up in the panel labeled accordingly. The sampler is
-~2000 rows per query, ORDER BY random() — fine for
+~2000 rows per query, ORDER BY random(), fine for
 "this attribute dominates" calls; ballpark for absolute byte
 forecasts. Validate against your own bill before adopting a fix
 that affects production.
@@ -172,20 +172,20 @@ Those are tracked for v0.25.x and v0.26+.
 
 Everything lives in `internal/recommendations/`:
 
-- `recommendations.go` — types, recipes, engine, helpers
-- `recommendations_test.go` — recipe behavior + stable-ID
+- `recommendations.go`, types, recipes, engine, helpers
+- `recommendations_test.go`, recipe behavior + stable-ID
   + dismissal regression tests
 
 Adding a recipe is a small change:
 
 1. Add a `Category` constant.
-2. Write a `func (e *Engine) recipeXXX(...) []Recommendation` —
+2. Write a `func (e *Engine) recipeXXX(...) []Recommendation`,
    pure function over the insights snapshot.
 3. Call it from `Evaluate`.
-4. Use `idFor("recipe_name", ...scope_fields)` so dismissals stay
+4. Use `idFor("recipe_name"...scope_fields)` so dismissals stay
    stable across runs.
 
-The UI doesn't need a deploy for new categories — unknown
+The UI doesn't need a deploy for new categories, unknown
 categories render with the default treatment (severity stripe +
 title + actions). The card has hooks for future per-category icon
 or color routing if you decide that's worth the per-render switch.

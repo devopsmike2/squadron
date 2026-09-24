@@ -1,4 +1,4 @@
-# Proposer learning loop — operator runbook
+# Proposer learning loop, operator runbook
 
 This is the operator-facing runbook for the v0.89.17 + v0.89.18
 feedback loop ([#531](./proposals/531-proposer-learns-from-accepted-rejected.md)
@@ -23,7 +23,7 @@ seed history before the loop has anything to cite.
 
 A simple proposition: today's cost-spike proposer makes the
 same mistakes twice on the same group. The fix isn't fine-
-tuning, it isn't an embedding store, and it isn't RAG —
+tuning, it isn't an embedding store, and it isn't RAG,
 it's the most boring possible mechanism. Before each new
 proposal, fetch the operator's recent verdicts (approvals and
 rejections) on past AI rollouts for the same group, attach
@@ -53,7 +53,7 @@ Concretely:
    (matches the storage column default of 1). Flippable via
    the Groups UI, the API, or settings JSON.
 5. **One audit field.** The `proposal.created` payload gains
-   `verdict_examples_used: []string{...}` — the rollout IDs
+   `verdict_examples_used: []string{...}`, the rollout IDs
    actually shown to the model. Empty array (not omitted) on
    cold start so SIEM consumers can filter cold-start cases
    without joining tables.
@@ -74,7 +74,7 @@ verdicts are present.
 - **Group-specific shape signals stay group-specific.** A
   group running an experimental workload where 100% rollouts
   are acceptable doesn't get punished for what the production
-  group rejected — examples are pulled from the same group
+  group rejected, examples are pulled from the same group
   only.
 - **Honest history outranks the system prompt.** Operator
   verdicts are denser preference signal than any prompt edit
@@ -136,20 +136,20 @@ limitations.
   the column.
 - The cost-spike proposer enabled. If you've never seen a
   `proposal.created` event in your audit timeline, the
-  proposer isn't wired up — see [ai-features.md](./ai-features.md)
+  proposer isn't wired up, see [ai-features.md](./ai-features.md)
   for the cost-spike setup.
 - At least one AI-originated rollout in the target group's
   history, either approved or rejected, within the last 30
   days. Without a seed history the loop has nothing to cite
   and the prompt falls back to v0.79's shape (cold start).
-  This is by design — the cold-start parity test exists
+  This is by design, the cold-start parity test exists
   precisely to guarantee the loop is a no-op until there's
   signal to share.
 - An auth token with `groups:write` if you intend to flip
   the toggle through the API. UI users authenticated to the
   Groups page already have the scope.
 
-## Step 1 — Decide the per-group policy
+## Step 1, Decide the per-group policy
 
 The flag is per-group, not per-deployment. The decision is
 "should the proposer reading verdicts from this group's
@@ -175,7 +175,7 @@ operator team has just changed convention. The model sees
 old conventions as positive signal until the new ones
 accumulate enough verdicts to outvote them.
 
-## Step 2 — Flip the toggle
+## Step 2, Flip the toggle
 
 Three paths, all of which write the same `LearnFromVerdicts`
 column on the same row:
@@ -197,11 +197,11 @@ column on the same row:
 
 `squadronctl groups` does not yet have a subcommand for the
 flag. If you need to flip the policy from a script, hit the
-API directly — `curl -X PUT -d '{"learn_from_verdicts":false}'
+API directly, `curl -X PUT -d '{"learn_from_verdicts":false}'
 http://squadron/api/v1/groups/<id>` is the one-liner. A
 CLI subcommand is a candidate follow-on once we see usage.
 
-## Step 3 — Understand the selection policy
+## Step 3, Understand the selection policy
 
 When the policy is enabled and the group has verdict history,
 `Bridge.assembleVerdicts` picks examples per §5 of the spec.
@@ -217,14 +217,14 @@ The full constants live in `internal/proposer/bridge.go`:
 Selection mechanics:
 
 - The SQL fetches rows ordered by
-  `COALESCE(approved_at, rejected_at) DESC` — newest verdict
+  `COALESCE(approved_at, rejected_at) DESC`, newest verdict
   first across both states.
 - The bridge walks the result, fills the rejected bucket up
   to 2 entries, fills the approved bucket up to 2 entries,
   and stops when both are full or the row list runs out.
 - **Rejections render first in the prompt.** The §5 design
-  says rejections are denser signal — "don't do this again"
-  beats "this was fine" — so the prompt puts them at the top
+  says rejections are denser signal, "don't do this again"
+  beats "this was fine", so the prompt puts them at the top
   where the model reads them first.
 - Each reasoning string is truncated to 240 characters with
   a trailing ellipsis (per the existing `summarize` helper),
@@ -239,7 +239,7 @@ the model sees the 2 newest of each. If the group has 1
 rejection and 0 approvals, the model sees just the 1
 rejection.
 
-## Step 4 — What the prompt looks like
+## Step 4, What the prompt looks like
 
 The user message grows a "Prior verdicts" block immediately
 before the final "Return your proposal" line. Verbatim:
@@ -249,7 +249,7 @@ Prior verdicts for this group (operator decisions on past AI proposals):
 
 [REJECTED] rollout_id=rlt_7q12
   reasoning: dropped k8s.pod.uid plus k8s.namespace in one step.
-  rejecter_notes: "too aggressive — split into a plan, drop one attr per step"
+  rejecter_notes: "too aggressive, split into a plan, drop one attr per step"
 
 [REJECTED] rollout_id=rlt_6m08
   reasoning: 100% rollout in a single stage, no canary.
@@ -261,14 +261,14 @@ Prior verdicts for this group (operator decisions on past AI proposals):
 
 Use these as preference signal. Match the shape of approved
 proposals; avoid the shape of rejected ones. Do NOT cite these
-rollout_ids in your evidence — they're operator history, not
+rollout_ids in your evidence, they're operator history, not
 evidence for this spike.
 ```
 
 A few subtleties worth knowing:
 
 - **Rejections precede approvals.** This is intentional per
-  §5 — denser signal first. Don't try to "fix" the ordering;
+  §5, denser signal first. Don't try to "fix" the ordering;
   the cold-start parity test pins it.
 - **Empty notes are omitted.** If the operator approved or
   rejected without typing a note, the `approver_notes` /
@@ -277,22 +277,22 @@ A few subtleties worth knowing:
 - **The `Do NOT cite these rollout_ids in your evidence` line
   is load-bearing.** Without it, the model sometimes
   hallucinates evidence references like "see rlt_6m08 for
-  why" — which is real signal pollution because the audit
+  why", which is real signal pollution because the audit
   consumer expects evidence_refs to point at telemetry, not
   prior rollouts. The instruction keeps the buckets separate.
 
 When the verdict list is empty (cold start, opt-out, or
-nothing in the 30-day window), the entire block — header,
-examples, and instruction line — is omitted. The prompt is
+nothing in the 30-day window), the entire block, header,
+examples, and instruction line, is omitted. The prompt is
 byte-for-byte identical to v0.79's. This is what the
 `TestProposerVerdicts_ColdStartParity` acceptance test
 exists to enforce.
 
-## Step 5 — Reading the audit timeline
+## Step 5, Reading the audit timeline
 
 The `proposal.created` audit event grows one new field:
 
-- **`verdict_examples_used`** — `[]string` of rollout IDs
+- **`verdict_examples_used`**, `[]string` of rollout IDs
   shown to the model. Empty array (not omitted) on cold
   start so SIEM consumers can filter cold-start cases with
   `verdict_examples_used:[]`.
@@ -332,7 +332,7 @@ Example payload (cold start):
 
 The field is additive. If you've written external log parsers
 or SIEM rules against the v0.79 `proposal.created` shape, they
-don't need to change — the new field is appended and the
+don't need to change, the new field is appended and the
 existing top-level keys are unchanged.
 
 The Timeline page does not currently render a special
@@ -341,15 +341,15 @@ key under the event's expanded view. A humanizer that surfaces
 "This proposal cited 2 prior verdicts (1 rejection, 1
 approval)" is a candidate follow-on.
 
-## Step 6 — Worked example
+## Step 6, Worked example
 
 A maintenance-style cost spike on `web-prod`. The group has
 two prior AI-originated rollouts:
 
-- `rlt_6m08` — REJECTED 5 days ago. Reasoning: "100% rollout
+- `rlt_6m08`, REJECTED 5 days ago. Reasoning: "100% rollout
   in a single stage, no canary." Operator note: "always
   canary at 10% first."
-- `rlt_8ax9` — APPROVED 3 days ago. Reasoning: "container.id
+- `rlt_8ax9`, APPROVED 3 days ago. Reasoning: "container.id
   was driving 60% of the spike; canary 10% / 600s." Operator
   note: "good plan, ship it."
 
@@ -370,20 +370,20 @@ A new spike fires on `web-prod`. Walking the call:
    plus the instruction to match approved shapes and avoid
    rejected ones.
 6. **Model returns a proposal.** Shape: canary at 10% for
-   600s, then 100%, with reasoning "drop container.id —
+   600s, then 100%, with reasoning "drop container.id,
    same root cause as rlt_8ax9; staging the rollout
    matches the team convention from rlt_6m08."
 7. **Bridge emits `proposal.created` audit.** Payload
    includes `verdict_examples_used: ["rlt_6m08", "rlt_8ax9"]`.
 
 The operator sees a proposal that already obeys the team
-convention — without anyone having to retype "always canary
+convention, without anyone having to retype "always canary
 at 10%" or tell the model about it directly. The next time
 this same group spikes, both this new rollout's verdict + the
 two existing ones become candidates for the next call. The
 loop closes.
 
-## Step 7 — Disable, re-enable, and verify
+## Step 7, Disable, re-enable, and verify
 
 If you decide a group should opt out:
 
@@ -397,19 +397,19 @@ If you decide a group should opt out:
 
 If you decide to re-enable, the row's chip flips back to
 `Learning` and the next proposal pulls verdicts again.
-There is no warmup period and no cached state — the
+There is no warmup period and no cached state, the
 selection runs fresh on every call.
 
 ## Per-rollout suppression
 
-The group flag is a coarse lever — it disables the whole
+The group flag is a coarse lever, it disables the whole
 loop for an entire fleet. v0.89.26 (#642, slice 2 of #531
 §10 Q3) adds a finer-grained per-rollout lever:
 `Rollout.ExcludeFromLearning`. Use it when ONE AI proposal's
 reasoning or rejection note contains material that should
-not flow into the next proposal — a customer name typed
+not flow into the next proposal, a customer name typed
 into an approval comment, an internal incident identifier,
-a PII fragment — but the rest of the group's history is
+a PII fragment, but the rest of the group's history is
 still safe to learn from.
 
 The two filters compose: the group-level
@@ -423,7 +423,7 @@ history is off limits"; use the per-rollout flag for
 **UI.** Open the rollout drawer. AI-originated rollouts
 (those with `proposed_by === "ai"`) show a green
 `Included in learning` chip next to the AI reasoning
-panel. Click it once — it flips to a muted
+panel. Click it once, it flips to a muted
 `Excluded from learning` chip and the next AI proposal
 for the same group will not cite this rollout in its
 few-shot block. Click again to re-include it. The chip
@@ -435,23 +435,23 @@ flag a no-op there, so the surface stays focused.
 takes `{"excluded": true|false, "reason": "optional"}`.
 The `reason` is omitted by the UI but available to
 scripted callers (squadronctl, automation) for forensic
-context — when non-empty it lands verbatim on the
+context, when non-empty it lands verbatim on the
 audit payload's `reason` field. Auth: `rollouts:write`
 scope (same as approve/reject).
 
 **Audit.** Each toggle emits one
 `rollout.excluded_from_learning` row. Payload contract:
 `{rollout_id, previous_state, new_state, reason?}`. SIEM
-consumers can fan out on the row's `action` verb —
+consumers can fan out on the row's `action` verb,
 `"exclude_from_learning"` when `new_state=true`,
-`"include_in_learning"` when `new_state=false` — without
+`"include_in_learning"` when `new_state=false`, without
 cracking the payload.
 
 **Spec reference.** This closes
 [`docs/proposals/531-proposer-learns-from-accepted-rejected.md`
 §10 Q3](proposals/531-proposer-learns-from-accepted-rejected.md).
 Slice 1's `verdict_examples_used` wire shape on
-`proposal.created` is preserved — the new filter changes
+`proposal.created` is preserved, the new filter changes
 which IDs land in the array, not the array's shape, so
 external SIEM rules parsing slice 1's contract keep
 working unchanged.
@@ -468,8 +468,8 @@ internal incident names), the right move is to flip
 `LearnFromVerdicts=false` for that group and accept the
 slightly cold-start-like behavior.
 
-Redaction handles a specific set of secrets — passwords, API
-keys, AWS tokens, and other well-known shapes — but it is
+Redaction handles a specific set of secrets, passwords, API
+keys, AWS tokens, and other well-known shapes, but it is
 NOT a general PII scrubber and you should not trust it as
 one. The operator owns the policy decision.
 
@@ -500,7 +500,7 @@ The slice-1 trade-offs most likely to shift in later slices:
   the constant with a per-deployment setting on the AI
   service block. Useful for teams with slow-changing
   conventions who want a longer memory.
-- **Discovery proposer integration** — **SHIPPED in v0.89.28**.
+- **Discovery proposer integration**, **SHIPPED in v0.89.28**.
   See [discovery-proposer-learning.md](./discovery-proposer-learning.md)
   for the operator runbook and
   [#643](./proposals/643-discovery-proposer-verdict-learning.md)
@@ -510,7 +510,7 @@ The slice-1 trade-offs most likely to shift in later slices:
   positive signal. Rejected signal on the discovery side is
   now locked as slice 2 work in
   [#531 slice 2](./proposals/531-proposer-learning-slice2.md).
-- **#531 slice 2 — unified verdict learning across surfaces**
+- **#531 slice 2, unified verdict learning across surfaces**
   (design DOC LOCKED in v0.89.33,
   [./proposals/531-proposer-learning-slice2.md](./proposals/531-proposer-learning-slice2.md)).
   Adds negative signal on the discovery side
@@ -531,22 +531,22 @@ describes slice 1 behavior you can rely on today.
 
 ## Cross-references
 
-- [#531 proposal](./proposals/531-proposer-learns-from-accepted-rejected.md) —
+- [#531 proposal](./proposals/531-proposer-learns-from-accepted-rejected.md),
   the locked slice-1 spec this implementation promotes.
   Read this if you want the exact storage shape, the §5
   selection policy reasoning, or the §11 acceptance tests
   by name.
-- [AI features overview](./ai-features.md) — the cost-spike
+- [AI features overview](./ai-features.md), the cost-spike
   proposer's broader context (where it fires, what the
   system prompt teaches, how the JSON contract works).
-- [Multi-step plans — design](./multi-step-plans-design.md) —
+- [Multi-step plans, design](./multi-step-plans-design.md),
   the proposer can now also emit `kind=plan` proposals; if
   the proposer cites a verdict on a plan-kind rejection,
   this is the doc that explains the plan shape.
-- [Audit log](./audit-log.md) — the `proposal.created`
+- [Audit log](./audit-log.md), the `proposal.created`
   event-type docs, including the additive
   `verdict_examples_used` payload field this release adds.
-- [Connect IaC repo first-time setup](./discovery-iac-first-time-setup.md) —
+- [Connect IaC repo first-time setup](./discovery-iac-first-time-setup.md),
   the parallel example of a discovery-side feedback loop
   that doesn't yet feed verdicts; useful background for
   where the discovery proposer integration is heading.

@@ -18,7 +18,7 @@ over OpAMP. Squadron tracks:
 - A stable UUID assigned at first registration.
 - The resource attributes from the collector's config (host, service.name,
   deployment.environment, etc.). These become the agent's **labels**.
-- Connection status (online / offline / error) — driven by the OpAMP
+- Connection status (online / offline / error), driven by the OpAMP
   heartbeat.
 - The currently-effective config (what Squadron last pushed) and the
   reported config hash (what the agent says it's running).
@@ -30,7 +30,7 @@ with filters for status, group, and drift.
 ### Labels
 
 Agent labels are the same key/value pairs the collector reports on its
-OpAMP heartbeat. Squadron doesn't invent labels — whatever your collector
+OpAMP heartbeat. Squadron doesn't invent labels, whatever your collector
 config declares (via `resource_attributes`, the OS attributes processor, or
 explicit `labels` in the OpAMP extension config) is what shows up.
 
@@ -40,7 +40,7 @@ agent or sub-environment as the canary for a staged rollout. See
 
 ## Groups
 
-A **group** is a named collection of agents you want to manage together —
+A **group** is a named collection of agents you want to manage together,
 typically by environment, region, or workload type.
 
 - Agents are assigned to at most one group.
@@ -87,17 +87,17 @@ The lint engine is also exposed at `/api/v1/configs/lint` for CI.
 running and what the agent says it's actually running. The drift state
 machine has three positions:
 
-- **synced** — the agent's reported config hash matches the latest config
+- **synced**, the agent's reported config hash matches the latest config
   Squadron has for it. Healthy.
-- **drifted** — hashes don't match. The agent is either still applying a
+- **drifted**, hashes don't match. The agent is either still applying a
   pending push, has rejected the new config, or is running something
   Squadron didn't send it.
-- **unknown** — the agent hasn't reported a hash yet (just-registered or
+- **unknown**, the agent hasn't reported a hash yet (just-registered or
   recently-reconnected).
 
 Drift transitions are recorded as `agent.drift.drifted` /
 `agent.drift.synced` audit events with `from` and `to` hash payloads.
-That's what feeds the rollout engine's auto-abort criteria — a stage's
+That's what feeds the rollout engine's auto-abort criteria, a stage's
 canary going drifted past the threshold flips the rollout to aborted
 and rolls back to the previous config.
 

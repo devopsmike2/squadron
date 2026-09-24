@@ -12,24 +12,24 @@
 
 Squadron is one place to see every collector in your fleet, change
 its config safely, catch drift before it pages you, and keep the
-whole fleet healthy — with a governed change loop and a
+whole fleet healthy, with a governed change loop and a
 tamper-evident audit trail behind every move.
 
 **Squadron sits between your agents and your observability
-backend — it is not another place your telemetry lands.** Your
+backend. It is not another place your telemetry lands.** Your
 data keeps flowing to Grafana, Prometheus, Mimir, Loki, Tempo, or
 Datadog exactly as it does today. Squadron manages the fleet that
 feeds them: the collectors, their config, their drift, their
 health. It's a **control plane, not a data plane.**
 
 That's the gap it fills. Observability tools own the *data*. IaC
-tools own *provisioning*. Nobody owns the question in between — *is
+tools own *provisioning*. Nobody owns the question in between: *is
 my collector fleet configured safely, is it drifting, is it
 actually healthy?* That's Squadron.
 
 <!-- LinkedIn narrated videos: embed via GitHub user-attachments URLs (BlindSpots, ProveIt) -->
 
-Self-hosted. Free. One Docker command to start — no clone, no build:
+Self-hosted. Free. One Docker command to start, no clone, no build:
 
 ```bash
 docker run -d -p 8080:8080 -p 4320:4320 -p 4317:4317 -p 4318:4318 \
@@ -39,18 +39,18 @@ open http://localhost:8080/quickstart
 
 ## See it in action
 
-**Fleet Status** — the control plane's home view: every collector,
+**Fleet Status**, the control plane's home view: every collector,
 its health, drift, alerts, and recent activity, updating live.
 
 ![Fleet Status](./marketing/gifs/sqd_fleet_populated.gif)
 
-More screens — the Fleet Map, per-agent drift, and groups — appear
+More screens, the Fleet Map, per-agent drift, and groups, appear
 next to the capabilities they belong to below.
 
 ## The core loop
 
 A control plane is only as trustworthy as the way it changes
-things. Squadron's is one governed change loop — every config
+things. Squadron's is one governed change loop: every config
 change to your OTel fleet moves through the same stages, and
 nothing skips them:
 
@@ -68,7 +68,7 @@ nothing skips them:
   approval policy. Nothing rolls out unreviewed.
 - **Rollout.** Staged deploys (percent or label) with per-stage
   dwell and **auto-abort** on drift, drop-rate, or exporter
-  errors — pausable, resumable, and reversible. Multiple changes
+  errors, pausable, resumable, and reversible. Multiple changes
   can be grouped into a single **plan** under one approval and one
   audit arc.
 - **Verify.** Drift detection, per-agent **Pipeline Health**, and
@@ -81,20 +81,20 @@ simply off and the deterministic loop still runs.
 
 ## More screens
 
-A wider tour of the control plane — cost, config, discovery,
+A wider tour of the control plane, cost, config, discovery,
 rollouts, and audit:
 
 | | |
 |---|---|
-| **Quickstart** — fresh install or adopt your existing collectors. | **Savings** — projected $/month spend + recommendations ranked by $ saved. |
+| **Quickstart**, fresh install or adopt your existing collectors. | **Savings**, projected $/month spend + recommendations ranked by $ saved. |
 | ![Quickstart](./marketing/scenes/01-quickstart-landing.png) | ![Savings dashboard](./marketing/scenes/02-savings-hero.png) |
-| **Cost Insights** — where your bytes are going, by signal, by agent, by attribute. | **Recommendations** — actionable fixes with copy-snippet + apply-via-rollout. |
+| **Cost Insights**, where your bytes are going, by signal, by agent, by attribute. | **Recommendations**, actionable fixes with copy-snippet + apply-via-rollout. |
 | ![Cost Insights](./marketing/scenes/03-cost-insights.png) | ![Recommendations](./marketing/scenes/04-recommendations.png) |
-| **Config Editor** — Monaco-powered with AI Assist + Squadron Lint + live pipeline view. | **Discovery** — scan AWS · GCP · Azure · OCI for what's running and what's missing OpenTelemetry (compute, functions, databases). |
+| **Config Editor**, Monaco-powered with AI Assist + Squadron Lint + live pipeline view. | **Discovery**, scan AWS · GCP · Azure · OCI for what's running and what's missing OpenTelemetry (compute, functions, databases). |
 | ![Config Editor](./marketing/scenes/06-config-editor.png) | ![Discovery inventory](./marketing/scenes/07-discovery-inventory.png) |
-| **AI recommendations** — a merge-ready Terraform fix per gap; review it, then open a PR (or copy the snippet). | **Staged rollouts** — deploy config changes in stages with AI reasoning and approval gates; drift is caught and reversible. |
+| **AI recommendations**, a merge-ready Terraform fix per gap; review it, then open a PR (or copy the snippet). | **Staged rollouts**, deploy config changes in stages with AI reasoning and approval gates; drift is caught and reversible. |
 | ![AI recommendations](./marketing/scenes/08-discovery-recommendations.png) | ![Staged rollouts](./marketing/scenes/09-rollouts.png) |
-| **Audit log** — every state change: incidents, drift transitions, alerts, rollouts, approvals — hash-chained and verifiable. | |
+| **Audit log**, every state change: incidents, drift transitions, alerts, rollouts, approvals, hash-chained and verifiable. | |
 | ![Audit log](./marketing/scenes/10-audit.png) | |
 
 > Squadron is a fork of and derivative work based on
@@ -104,7 +104,7 @@ rollouts, and audit:
 
 ## What you get
 
-Everything below is a capability of the control plane — ways to
+Everything below is a capability of the control plane, ways to
 see the fleet, change it safely, and prove what happened. None of
 it moves your telemetry off its existing path to your backend.
 
@@ -112,13 +112,13 @@ it moves your telemetry off its existing path to your backend.
 (AWS, GCP, Azure, or OCI) and Squadron inventories compute,
 databases, Kubernetes, serverless, object stores, load balancers,
 and event sources, flags what's un- or under-instrumented, and
-opens a **merge-ready Terraform PR** against your IaC repo —
+opens a **merge-ready Terraform PR** against your IaC repo,
 HCL-aware merged, `terraform validate`-gated, with verdict
 learning (a decline teaches the next scan). It also generates
 `env → Terraform` import blocks for un-managed resources. This is
 the most battle-tested path in the product. No cloud account? Open
 any Discovery page and click **Try the demo** for a built-in
-sample inventory across all four clouds — no credentials, no cloud
+sample inventory across all four clouds, no credentials, no cloud
 calls.
 
 **Cost optimization in dollars, not bytes.** The Savings dashboard
@@ -131,14 +131,14 @@ that drops you into the config editor with the fix pre-filled.
 (port `4320`), report status, capabilities, and effective config,
 and show live on the Fleet Map with pipeline / data-flow /
 topology views. Passive OTLP discovery means any standard
-collector pointed at Squadron registers itself — even without a
+collector pointed at Squadron registers itself, even without a
 UUID `service.instance.id`.
 
 ![Fleet Map / topology](./marketing/gifs/sqd_fleetmap.gif)
 
 **Pipeline Health from collector self-metrics.** Squadron reads
-the collector's built-in `otelcol_*` self-metrics — no extra
-agents, no sidecars, no scraping infra — and gives every agent a
+the collector's built-in `otelcol_*` self-metrics, no extra
+agents, no sidecars, no scraping infra, and gives every agent a
 verdict (`healthy` / `degraded` / `broken` / `unknown`) with a
 plain-English signal list (queue 92% full, `send_failed > 0`,
 processor dropping points), plus a fleet-level stacked-bar summary
@@ -151,10 +151,10 @@ health signals, and drift from its intended config:
 ![Agents and drift](./marketing/gifs/sqd_agents.gif)
 
 **AI-assisted config editing.** Click "Explain" on any
-recommendation to get a 2–3 sentence summary of what a YAML
+recommendation to get a 2-3 sentence summary of what a YAML
 fragment does. Open the config editor's "Merge snippet" flow to
-have the model integrate a fix into your existing collector config
-— running through Squadron's lint, diff preview, and staged
+have the model integrate a fix into your existing collector config,
+running through Squadron's lint, diff preview, and staged
 rollout before it reaches production. For cost spikes the proposer
 can emit a whole **multi-step plan** (progressive attribute drop,
 sample-rate ratchet, pipeline split, dual-write-then-cut) as a
@@ -164,12 +164,12 @@ in by setting `ANTHROPIC_API_KEY`.
 **Safe rollouts with approvals and auto-abort.** Stages (percent
 or label-based), per-stage dwell, abort criteria (drift, drop
 rate, error logs, exporter errors), pause/resume, webhook
-notifications, trace-instrumented engine — plus **N-of-M
+notifications, trace-instrumented engine, plus **N-of-M
 approvals** with rule-based approver roles and per-group rollback
 policy. The grown-up deployment story, shipped as OSS.
 
-Groups are how you slice the fleet — by environment, team, or
-label — so config and approval policy apply to the right
+Groups are how you slice the fleet, by environment, team, or
+label, so config and approval policy apply to the right
 collectors:
 
 ![Groups](./marketing/gifs/sqd_groups.gif)
@@ -179,14 +179,14 @@ per-tenant **hash chain**: every state change (incidents, drift
 transitions, alerts, rollouts, approvals) links to the previous
 one, and Squadron can self-verify the chain. The bundled
 `squadron-audit-verify` CLI lets an auditor re-verify an exported
-chain **offline, with zero secrets** — re-hash the rows, confirm
+chain **offline, with zero secrets**, re-hash the rows, confirm
 the tip matches the attestation. An in-UI Integrity panel surfaces
 the result.
 
 **Optional action runner.** An opt-in, separately deployed
 component (`squadron-action-runner`) that executes a narrow,
-allowlisted set of actions — `restart-k8s-workload`,
-`restart-docker`, `restart-systemd`, `run-shell` (allowlist) —
+allowlisted set of actions, `restart-k8s-workload`,
+`restart-docker`, `restart-systemd`, `run-shell` (allowlist),
 where every request is Ed25519-signed by Squadron and verified by
 the runner before it runs. Ships as a standalone image; wiring it
 into rollout plans is on the roadmap.
@@ -205,7 +205,7 @@ Squadron with the same tools you debug everything else with.
 
 You're probably a fit if:
 
-- You're 1–3 engineers running OpenTelemetry collectors and
+- You're 1-3 engineers running OpenTelemetry collectors and
   paying a SaaS observability vendor (Datadog, Honeycomb, New
   Relic, Grafana Cloud, SigNoz, or similar).
 - The telemetry bill has gotten everyone's attention.
@@ -223,7 +223,7 @@ You're probably **not** the target operator if:
   telemetry backend. Squadron does the first job; the second is
   better handled by Honeycomb / Datadog / Tempo / Loki / Mimir.
 
-Need SSO/RBAC, multi-tenancy, and tamper-evident audit — or are
+Need SSO/RBAC, multi-tenancy, and tamper-evident audit, or are
 you heading toward multi-region HA and SOC 2? That's **Squadron
 Enterprise**. SSO/OIDC + SCIM provisioning, resource-aware RBAC,
 real per-tenant isolation, and cross-tenant tamper-evident audit
@@ -233,7 +233,7 @@ Enterprise roadmap. See
 
 ## Quick start
 
-Fastest — no clone, one command:
+Fastest, no clone, one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/devopsmike2/squadron/main/install.sh | sh
@@ -281,12 +281,12 @@ sees the key.
 
 ### Explore cloud discovery without a cloud account
 
-Squadron's cloud discovery — inventory plus instrumentation-gap
-recommendations — normally needs a connected AWS / GCP / Azure / OCI
+Squadron's cloud discovery, inventory plus instrumentation-gap
+recommendations, normally needs a connected AWS / GCP / Azure / OCI
 account. To try it with zero credentials, open **any** of the four cloud
 pages under Discovery (AWS, GCP, Azure, or OCI) and click **Try the demo**.
-Squadron loads a built-in sample inventory for that cloud — a mix of
-instrumented and uninstrumented compute and databases — and generates the
+Squadron loads a built-in sample inventory for that cloud, a mix of
+instrumented and uninstrumented compute and databases, and generates the
 matching Terraform recommendations, with no cloud account, no API key, and
 no cloud calls. Remove it any time from the connection list.
 
@@ -294,19 +294,19 @@ no cloud calls. Remove it any time from the connection list.
 
 Squadron runs as a single process composed of:
 
-- **OpAMP server** on port `4320` — manages collectors via
+- **OpAMP server** on port `4320`, manages collectors via
   WebSocket, distributes configurations, tracks status, effective
   config, and capabilities.
-- **OTLP receiver** on ports `4317`/`4318` — accepts traces,
+- **OTLP receiver** on ports `4317`/`4318`, accepts traces,
   metrics, and logs over gRPC and HTTP. A bounded worker pool
   parses + enriches + persists.
-- **REST + UI** on port `8080` — Gin-based JSON API, embedded
+- **REST + UI** on port `8080`, Gin-based JSON API, embedded
   React UI, Prometheus `/metrics` surface.
-- **Storage** — SQLite for application data (agents, groups,
+- **Storage**, SQLite for application data (agents, groups,
   configs, audit, dismissals), DuckDB for telemetry + rollups.
   An external Postgres backend for larger/HA deployments is in
   progress.
-- **CLI** — `squadronctl` for CI scripting + management
+- **CLI**, `squadronctl` for CI scripting + management
   automation; `squadron-audit-verify` for offline audit
   attestation.
 
@@ -319,7 +319,7 @@ Optional: enable `ai.enabled` + `pricing.enabled` in
 Squadron is **open core**. The principle: **breadth and the core
 loop are OSS and free for any fleet size; depth, scale,
 governance, and support are the future commercial tier.** The
-boundary is a **build-time** seam — the open core compiles no-op
+boundary is a **build-time** seam, the open core compiles no-op
 providers and the enterprise edition supplies the real ones, so an
 OSS binary can't be flipped into an enterprise one with a config
 flag. Confirm the edition of any running instance via the
@@ -336,9 +336,12 @@ CSV/JSON export, Bearer-token auth + scopes, the action runner.
 enterprise edition supplies the real providers):
 
 - *Available today:* SSO/OIDC with PKCE + SCIM 2.0 provisioning;
-  store-backed, deny-by-default, resource-aware RBAC; real
-  per-tenant multi-tenancy isolation; tamper-evident audit with
-  cross-tenant export/review and sealed-attestation verify.
+  store-backed, deny-by-default, resource-aware RBAC, including
+  cluster/environment-scoped roles (a prod-only or single-cluster
+  operator) with authenticated env/cluster binding on the enrollment
+  token; real per-tenant multi-tenancy isolation; tamper-evident audit
+  with cross-tenant export/review, cluster/environment-scoped access
+  views, and sealed-attestation verify.
 - *On the Enterprise roadmap (in development):* multi-region HA and
   the managed-store / Postgres backend (Enterprise runs single-node
   SQLite today), validated scale beyond ~1,000 agents, and formal
@@ -356,63 +359,63 @@ Full detail: [what's OSS vs Enterprise](./docs/oss-vs-enterprise.md).
 Full docs under [`/docs`](./docs/README.md):
 
 **Start here**
-- [Quickstart](./docs/quickstart.md) — the wizard flow walked
+- [Quickstart](./docs/quickstart.md), the wizard flow walked
   through in detail
-- [Getting started](./docs/getting-started.md) — installing,
+- [Getting started](./docs/getting-started.md), installing,
   connecting your first collector
-- [Deployment guide](./docs/deployment.md) — the 4 deployment
+- [Deployment guide](./docs/deployment.md), the 4 deployment
   shapes (single VM, Compose, Kubernetes, OpenShift), required
   vs optional components, production checklist
-- [Concepts](./docs/concepts.md) — agents, groups, configs, drift
+- [Concepts](./docs/concepts.md), agents, groups, configs, drift
 
 **Save money**
-- [Savings](./docs/savings.md) — dollar projections, pricing
+- [Savings](./docs/savings.md), dollar projections, pricing
   rules, Quick Wins
-- [Recommendations](./docs/recommendations.md) — the cost recipes
+- [Recommendations](./docs/recommendations.md), the cost recipes
   + how to add new ones
-- [AI assist](./docs/ai-assist.md) — Explain + Merge + what gets
+- [AI assist](./docs/ai-assist.md), Explain + Merge + what gets
   sent to Anthropic + cost shape
 
 **Manage your fleet**
-- [Rollouts](./docs/rollouts.md) — staged deploys, N-of-M
+- [Rollouts](./docs/rollouts.md), staged deploys, N-of-M
   approvals, abort criteria, preview/diff, multi-step plans
-- [Pipeline Health](./docs/pipeline-health.md) — per-agent
+- [Pipeline Health](./docs/pipeline-health.md), per-agent
   verdicts from collector self-metrics
-- [Alerts](./docs/alerts.md) — threshold rules over fleet state
+- [Alerts](./docs/alerts.md), threshold rules over fleet state
   + webhooks
-- [Audit log](./docs/audit-log.md) — every state change,
+- [Audit log](./docs/audit-log.md), every state change,
   filterable; hash-chain integrity + offline verifier
-- [Authentication](./docs/auth.md) — Bearer tokens, scopes,
+- [Authentication](./docs/auth.md), Bearer tokens, scopes,
   expiration
-- [Operating Squadron](./docs/operating.md) — env vars, prod
+- [Operating Squadron](./docs/operating.md), env vars, prod
   checklist, backup, upgrade
 
 **Reference**
-- [Scale testing](./docs/scale-testing.md) — fleetsim, 1000-agent
+- [Scale testing](./docs/scale-testing.md), fleetsim, 1000-agent
   numbers, perf gates
-- [Self-monitoring](./docs/self-monitoring.md) — Squadron's own
+- [Self-monitoring](./docs/self-monitoring.md), Squadron's own
   OTel traces
-- [squadronctl CLI](./docs/squadronctl.md) — command-line client
-- [API reference](./docs/api-reference.md) — REST endpoints
-- [What's OSS vs Enterprise](./docs/oss-vs-enterprise.md) — what's
+- [squadronctl CLI](./docs/squadronctl.md), command-line client
+- [API reference](./docs/api-reference.md), REST endpoints
+- [What's OSS vs Enterprise](./docs/oss-vs-enterprise.md), what's
   free forever vs the planned commercial tier
-- [Detection coverage](./docs/detection-coverage.md) — exactly
+- [Detection coverage](./docs/detection-coverage.md), exactly
   which signals are real vs proxy vs deferred, per cloud
-- [Self-hosting security](./docs/security-self-hosting.md) — turn
+- [Self-hosting security](./docs/security-self-hosting.md), turn
   auth on, what data leaves the box, credentials
 
 ## How Squadron compares
 
-Honest, audience-specific notes — see
+Honest, audience-specific notes, see
 [`docs/positioning.md`](./docs/positioning.md) for the longer
 version.
 
-**vs Bindplane.** Squadron is the OSS-first, OTel-native option —
+**vs Bindplane.** Squadron is the OSS-first, OTel-native option,
 AI-assisted, cost-first, modern UX, minutes to set up, and free
 for any fleet size. Bindplane leans on a larger curated processor
 library and a longer enterprise track record. When you need
-org-scale readiness — SSO/RBAC, multi-tenancy, and tamper-evident
-audit today, multi-region HA and SOC 2 on the roadmap — that's
+org-scale readiness, SSO/RBAC, multi-tenancy, and tamper-evident
+audit today, multi-region HA and SOC 2 on the roadmap, that's
 **Squadron Enterprise**, not a third-party tool. Small team with a
 painful telemetry bill → Squadron OSS. Org-scale governance and
 compliance → Squadron Enterprise.
@@ -420,7 +423,7 @@ compliance → Squadron Enterprise.
 **vs Grafana Fleet Management.** Grafana Fleet lives inside the
 Grafana Cloud / Loki / Tempo / Mimir ecosystem and Alloy. Squadron
 is standalone, OTel-first, and doesn't pull you into a broader
-ecosystem — it complements Grafana on the control-plane side
+ecosystem, it complements Grafana on the control-plane side
 rather than competing on telemetry storage.
 
 **vs Datadog Observability Pipelines / Cribl.** Those are
@@ -432,7 +435,7 @@ the OTel-specific cost story, that's Squadron's lane.
 
 ## Known limitations
 
-We're upfront about where Squadron is deep and where it isn't —
+We're upfront about where Squadron is deep and where it isn't,
 lead with this when you evaluate it:
 
 - **Detection coverage is not uniform across tiers/clouds.** Some
@@ -441,7 +444,7 @@ lead with this when you evaluate it:
   [detection coverage](./docs/detection-coverage.md). Notably, AWS
   Lambda and Azure Functions cold-start detection need paid
   telemetry layers (Lambda Insights / Application Insights), and OCI
-  queue poison-rate has no native metric — these are flagged, not
+  queue poison-rate has no native metric, these are flagged, not
   silently wrong.
 - **Cost projections are directional.** Dollar figures come from
   observed ingest × the per-GB backend rates you configure; validate
@@ -450,7 +453,7 @@ lead with this when you evaluate it:
   Merge, and incident drafting require `ANTHROPIC_API_KEY`; with no
   key they're simply off. The deterministic Terraform snippets are
   correctness-audited, but free-form LLM reasoning should be reviewed
-  before you merge — which is the design: every fix is a PR gated by
+  before you merge, which is the design: every fix is a PR gated by
   your review + CI.
 - **The action runner is opt-in and not yet wired into plans.** It
   runs as a separate, allowlisted, signature-verified component; AI
@@ -466,7 +469,7 @@ pre-GA train into a **GA v1.0 candidate**. The OSS core under
 Apache 2.0 is free for any size fleet and self-hostable forever. A
 future commercial tier will target enterprise concerns
 (multi-tenancy, HA, SSO/RBAC depth, audit retention SLAs, priority
-support) — the SMB experience stays free. See
+support), the SMB experience stays free. See
 [RELEASE-NOTES.md](RELEASE-NOTES.md) for the themed changelog and
 [what's OSS vs Enterprise](./docs/oss-vs-enterprise.md) for the
 boundary.
@@ -513,7 +516,7 @@ guide.
 - **Questions / ideas:** [GitHub Discussions](https://github.com/devopsmike2/squadron/discussions).
 - **Bugs:** open a [bug report](https://github.com/devopsmike2/squadron/issues/new?template=bug_report.yml).
 - **Feature requests:** open a [feature request](https://github.com/devopsmike2/squadron/issues/new?template=feature_request.yml).
-- **Security:** report privately per [SECURITY.md](SECURITY.md) — please don't file a public issue.
+- **Security:** report privately per [SECURITY.md](SECURITY.md), please don't file a public issue.
 - **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) (commits need a DCO `Signed-off-by`, added by `git commit -s`).
 - All participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -521,7 +524,7 @@ More help routing in [SUPPORT.md](SUPPORT.md).
 
 ## License
 
-Squadron is © 2025–2026 PeptidePal LLC and licensed under the Apache
+Squadron is © 2025-2026 PeptidePal LLC and licensed under the Apache
 License 2.0. It is a fork of and derivative work based on
 [Lawrence OSS](https://github.com/getlawrence/lawrence-oss)
 (Apache 2.0); all upstream attribution is retained. See

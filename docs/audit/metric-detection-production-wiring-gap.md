@@ -4,10 +4,10 @@
 v0.89.331, GCP v0.89.332. See "Resolution" below.
 **Confidence:** high (static evidence below; grep + read across the scanner
 packages and the production factory).
-**Severity:** high — a whole detection feature class was dormant in production
+**Severity:** high, a whole detection feature class was dormant in production
 for GCP/OCI, and for AWS unless the commercial flag was on.
 
-## Resolution (option 2 — opt-in flag, default off)
+## Resolution (option 2, opt-in flag, default off)
 
 The maintainer chose **option 2**: a single config switch,
 **`serverless_metric_detection.enabled`** (default false), that constructs the
@@ -15,8 +15,8 @@ per-cloud metric client and activates the **native-metric** serverless
 detectors. The OSS default stays at zero billed metric reads; the operator opts
 in (and grants the metric IAM/scope) to turn them on. The add-on-dependent
 detectors (AWS Lambda **cold-start** via Lambda Insights; **all** Azure Functions
-detection via Application Insights) remain under `commercial_detectors.enabled`
-— they need a paid telemetry add-on, not just a native metric, so they are out
+detection via Application Insights) remain under `commercial_detectors.enabled`,
+they need a paid telemetry add-on, not just a native metric, so they are out
 of scope for this flag.
 
 Shipped in three slices:
@@ -60,12 +60,12 @@ Shipped in three slices:
   ```
 
   (Or pass `SQUADRON_GCP_FILTER`/`SQUADRON_GCP_ALIGNER` to point the harness at
-  any metric with data — how the v0.89.335 verification was run, against a custom
+  any metric with data, how the v0.89.335 verification was run, against a custom
   metric round-tripped through Cloud Monitoring on an otherwise-empty project.)
   The SA/ADC principal needs `roles/monitoring.viewer`.
 
 Follow-up (✅ resolved, v0.89.334): OCI Functions **inventory** discovery is now
-**unconditional** — `scanServerlessTier` always walks Functions (an inventory
+**unconditional**, `scanServerlessTier` always walks Functions (an inventory
 tier like compute/db/OKE) and populates `result.Serverless`; only the
 native-metric cold-start/error-rate **detection** passes stay gated on the
 monitoring client. This also un-inerts the structural OCI serverless
@@ -76,32 +76,32 @@ The original finding (unchanged) follows.
 
 ## Summary
 
-The serverless **regression detectors** — cold-start latency (24h vs 168h P95)
-and error-rate spike (24h vs 168h error ratio) — run inside each cloud
+The serverless **regression detectors**, cold-start latency (24h vs 168h P95)
+and error-rate spike (24h vs 168h error ratio), run inside each cloud
 scanner's `Scan()` pass, but every one of them is **nil-tolerant on its metric
 client and short-circuits when that client is nil**. In production the metric
 client is nil for GCP and OCI (always) and for AWS (unless
 `commercial_detectors.enabled`), because the **production scanner factory never
-constructs a metric client** — only the test suites do, via the `With*Client`
+constructs a metric client**, only the test suites do, via the `With*Client`
 seams. So in a normal deployment these detectors never run, never write the
 `cold_start_observation` / `error_rate_observation` tables, and therefore
 nothing downstream of them produces data.
 
 ## Evidence
 
-Production scanner construction — `internal/discovery/scannerfactory/factory.go`:
+Production scanner construction, `internal/discovery/scannerfactory/factory.go`:
 
-- `GCPFactory.Build` → `&gcp.Scanner{ProjectID, SAJSON, Region}` — no
+- `GCPFactory.Build` → `&gcp.Scanner{ProjectID, SAJSON, Region}`, no
   `metricsClient`.
-- `OCIFactory.Build` → `&oci.Scanner{TenancyOCID, ...}` — no `monitoringClient`.
-- `AzureFactory.Build` / AWS factory — no metric client either; AWS's CloudWatch
+- `OCIFactory.Build` → `&oci.Scanner{TenancyOCID...}`, no `monitoringClient`.
+- `AzureFactory.Build` / AWS factory, no metric client either; AWS's CloudWatch
   client is built only on the commercial path (below).
 
 The metric-client setters are **test-only** (no production call site anywhere):
 
-- `gcp.Scanner.WithMetricsClient` — referenced only in `gcp/*_test.go`.
-- `oci.Scanner.WithMonitoringClient` — referenced only in `oci/*_test.go`.
-- `aws.Scanner.WithCloudWatchClient` — referenced only in `aws/*_test.go`.
+- `gcp.Scanner.WithMetricsClient`, referenced only in `gcp/*_test.go`.
+- `oci.Scanner.WithMonitoringClient`, referenced only in `oci/*_test.go`.
+- `aws.Scanner.WithCloudWatchClient`, referenced only in `aws/*_test.go`.
 
 There is no production constructor of a Cloud Monitoring / OCI Monitoring client
 in `internal/discovery/{gcp,oci}` (grep for `monitoring.NewMetricClient` etc.
@@ -109,20 +109,20 @@ returns only test files).
 
 The detection passes run but short-circuit on the nil client:
 
-- `gcp/error_rate.go:141` — `if s.metricsClient == nil || s.errorRateStore == nil || s.connectionID == "" { return }`
-- `gcp/cold_start.go:249` — same shape.
-- `oci/error_rate.go:128`, `oci/cold_start.go:227` — `if s.monitoringClient == nil || ...`
-- `aws/error_rate.go:158`, `aws/cold_start.go:260` — `if !s.commercialDetectors && s.cwClient == nil { return }`
+- `gcp/error_rate.go:141`, `if s.metricsClient == nil || s.errorRateStore == nil || s.connectionID == "" { return }`
+- `gcp/cold_start.go:249`, same shape.
+- `oci/error_rate.go:128`, `oci/cold_start.go:227`, `if s.monitoringClient == nil || ...`
+- `aws/error_rate.go:158`, `aws/cold_start.go:260`, `if !s.commercialDetectors && s.cwClient == nil { return }`
 
 `gcp/scanner.go:347,356` call `runColdStartDetectionForServerless` /
 `runErrorRateDetectionForServerless`, with the in-code comment explicitly noting
-the passes are "nil-tolerant on metricsClient" — i.e. the nil case is the
+the passes are "nil-tolerant on metricsClient", i.e. the nil case is the
 designed-for path, not an accident.
 
 The AWS exception: `aws/commercial_activation.go` builds the CloudWatch client
 (`cloudWatchForRegion`) only inside the commercial path
 (`EnableCommercialDetectors`, gated on `config.CommercialDetectors.Enabled`). So
-AWS cold-start + error-rate run **only** when the commercial flag is on — which
+AWS cold-start + error-rate run **only** when the commercial flag is on, which
 is also the only reason the earlier live-verifications passed.
 
 ## Per-cloud production state
@@ -139,15 +139,15 @@ is also the only reason the earlier live-verifications passed.
 Because no observations are written, everything that reads them is inert in
 production for the dormant paths:
 
-- The cold-start + error-rate **regression recommendations** (v0.89.315–319) —
+- The cold-start + error-rate **regression recommendations** (v0.89.315-319),
   the recs only fire when an observation exists.
 - The **Workload Health** panel's cold-start + error-rate axes (v0.89.323) read
-  the persisted annotations — zero when detection never ran.
+  the persisted annotations, zero when detection never ran.
 - The **per-resource** cold-start / error-rate detail endpoints (now wired,
   v0.89.325) return "no observation".
 
-(The structural/config detections — trace-coverage presence, OTel-axis
-presence, poison-message DLQ depth via data-plane attributes — are NOT affected;
+(The structural/config detections, trace-coverage presence, OTel-axis
+presence, poison-message DLQ depth via data-plane attributes, are NOT affected;
 those don't depend on a metric client. Only the metric-based regression
 detectors are.)
 
@@ -175,7 +175,7 @@ matrix verdicts should be reconciled once the decision below is made.
 1. **Wire the metric clients in the factories (activate).** Build a Cloud
    Monitoring / OCI Monitoring / CloudWatch client from the connection creds in
    each `Build`, decouple AWS error-rate from the cold-start commercial gate
-   (error-rate uses the native `AWS/Lambda Errors` metric — no add-on), and
+   (error-rate uses the native `AWS/Lambda Errors` metric, no add-on), and
    accept the per-scan metric-read cost. Highest value (activates the whole
    detection→rec→Workload-Health pipeline); adds cost.
 

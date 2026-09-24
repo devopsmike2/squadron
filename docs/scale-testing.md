@@ -3,7 +3,7 @@
 Squadron ships with `fleetsim`, a synthetic OpAMP load generator,
 so you can validate behavior at fleet sizes that are inconvenient
 to assemble for real. Each simulated agent is a real `opamp-go`
-client speaking the standard protocol — they exercise the same
+client speaking the standard protocol, they exercise the same
 server code path a production OpenTelemetry Collector would.
 
 This page documents how to run it and what to expect.
@@ -28,7 +28,7 @@ Flags worth knowing:
 | `--offline-pct` | 0 | Percent of agents that connect once, then disconnect. Useful for testing offline-status detection. |
 | `--version` | `0.119.0` | `service.version` reported in `AgentDescription`. |
 | `--group` | empty | `agent.group_name` label applied to every simulated agent. |
-| `--label-prefix` | `fleetsim` | Value of the `simulated.fleet` label — filterable in the UI to distinguish sim agents from real ones. |
+| `--label-prefix` | `fleetsim` | Value of the `simulated.fleet` label, filterable in the UI to distinguish sim agents from real ones. |
 | `--health-interval` | 15s | How often each simulated agent sends a health ping. |
 
 Stop with `Ctrl+C`. Connection drains cleanly; agents transition to
@@ -59,7 +59,7 @@ fixes land in the right release rather than as ad-hoc patches.
 #### 1. `/api/v1/agents` returns the full record map
 
 Today's endpoint serializes every agent into one JSON object keyed
-by ID. At 1000 agents that's a 594 KB payload — fine on localhost,
+by ID. At 1000 agents that's a 594 KB payload, fine on localhost,
 painful on a slow link or with 10× the fleet.
 
 **Recommended fix:** add `offset` + `limit` query params and a
@@ -85,7 +85,7 @@ fleets don't pay the abstraction cost.
 At 1000 agents, every health-ping cycle (15s in fleetsim) generates
 a burst of WebSocket frames. Some agents end up with a
 `last_seen` skew of >30s, which Squadron currently classifies as
-"offline" — even though the connection is still open.
+"offline", even though the connection is still open.
 
 This was visible in the 1000-agent run: 871 online / 11 offline at
 steady state, where ~10 of the offline agents were actually
@@ -94,8 +94,8 @@ healthy but had recently-stale `last_seen` due to ping batching.
 **Recommended fix:** decouple "is the WebSocket connected?" from
 "did we hear from this agent in the last N seconds?". Today
 they're conflated. Two distinct states:
-- **connected** — TCP/WS is alive (cheap to know).
-- **reporting** — recent telemetry within the threshold.
+- **connected**, TCP/WS is alive (cheap to know).
+- **reporting**, recent telemetry within the threshold.
 
 A configurable threshold + `online_threshold` server setting
 (default 60s) would fix this.
@@ -121,7 +121,7 @@ shows up as `drift_status=no_intent`.
 During 1000-agent runs, the demo group's "agent count" in the
 sidebar showed `1002 agents` rather than just the 2 real ones.
 Cause: the demo-group's label matcher treats empty/missing labels
-permissively — likely matches every agent that doesn't explicitly
+permissively, likely matches every agent that doesn't explicitly
 opt out.
 
 Worth confirming in a focused test before patching; could be a
@@ -140,7 +140,7 @@ fleetsim scenario:
 | First-page `/agents` response   | 30 ms       | 20 ms           | −33% |
 | Agents page time-to-first-paint | ~2 s        | <1 s            | Snappy |
 | DOM nodes at 1000 agents        | ~10k        | ~2k (virtualized) | −80% |
-| Memory while scrolling          | grows w/ DOM | bounded         | — |
+| Memory while scrolling          | grows w/ DOM | bounded         |, |
 
 The UI now loads the first 100 agents in a single round-trip,
 then fetches subsequent pages on scroll (200 → 300 → 400 …). At
@@ -152,7 +152,7 @@ overhead).
 The header summary line ("980/1002 reporting · 1 drifted") uses
 three small `limit=1` queries against the new pagination
 endpoint to read fleet-wide totals without re-fetching every
-agent — those queries cost about 5 ms each.
+agent, those queries cost about 5 ms each.
 
 Trade-off worth noting: the response payload now contains both
 the new `items` array AND the legacy `agents` map, so the
@@ -173,7 +173,7 @@ metrics every ~30ms over 24h:
 
 | Endpoint                                  | Window | Result |
 |-------------------------------------------|--------|--------|
-| `/insights/volume?window=24h`             | 24h    | 863 MB / 4.35M items / 3 agents — fleet-wide totals |
+| `/insights/volume?window=24h`             | 24h    | 863 MB / 4.35M items / 3 agents, fleet-wide totals |
 | `/insights/volume?window=1h`              | 1h     | 158.8 MB / metrics-dominated (~100%) |
 | `/insights/volume/agents?window=1h`       | 1h     | Outlier ranking: top agent at 158.7 MB (99.9%) |
 | `/insights/volume/agents/:id?window=24h`  | 24h    | otelcol-contrib: 690.2 KB (588.8 KB metrics / 101.4 KB logs) |
@@ -183,7 +183,7 @@ Bug caught and fixed while wiring this up: DuckDB widens
 `SUM(BIGINT)` to **HUGEINT** (128-bit), which the
 `marcboeker/go-duckdb` driver reifies as `*big.Int`. The first cut
 of the insights service unboxed rows through a tolerant type-switch
-that only knew native int types — so every aggregated column read
+that only knew native int types, so every aggregated column read
 as zero, even though `otlp_batches` had real rows. Fixed two ways
 (defense in depth): every `SUM()` in the insights queries is now
 wrapped in `CAST(... AS BIGINT)` to collapse the HUGEINT at the DB
@@ -212,7 +212,7 @@ immediate re-call:
 **Headline: agent-detail at 16ms is >6× under the 100ms gate;
 worst fleet-overview at 13ms is >38× under the 500ms gate.** The
 15s in-process cache makes warm reads effectively free (~1ms),
-which matches the UI's polling interval — most user-visible
+which matches the UI's polling interval, most user-visible
 refreshes will be cache hits.
 
 For reference at the same fleet size, the existing
@@ -225,7 +225,7 @@ columns, no JSON), the composite indexes on `(agent_id, time)` and
 AS BIGINT)` shrinks the SUM result before it crosses the cgo
 boundary. The top-attributes endpoint pays a slightly higher cost
 (the sampler ORDER BY random() LIMIT 2000 has to actually read
-rows) but is still 10ms cold — well below where caching becomes a
+rows) but is still 10ms cold, well below where caching becomes a
 correctness concern rather than a perf optimization.
 
 What's NOT in this measurement: this is steady-state read latency
@@ -237,7 +237,7 @@ worth doing before any enterprise GA claim.
 ### After v0.89: OTLP ingest under load (otlpsim)
 
 The three OTLP-side deferrals below were closed in v0.89 by
-`otlpsim` — a synthetic OTLP/HTTP load generator, sibling of
+`otlpsim`, a synthetic OTLP/HTTP load generator, sibling of
 fleetsim (`make otlpsim`; shares fleetsim's deterministic agent
 UUIDs so the two compose). Full methodology, findings, and the
 regression bar live in `stress-tests/otlp-ingest-v0.89.md`.
@@ -246,7 +246,7 @@ Headlines: clean at moderate load (zero loss, exact
 client-vs-`otlp_batches` reconciliation, p99 6ms); at saturation
 the receiver accepts ~5-10× faster than the 3-worker DuckDB write
 path persists, leaving up to ~500k 202-acked items volatile in the
-queue for 60-90+s — previously invisible because the queue-depth
+queue for 60-90+s, previously invisible because the queue-depth
 gauge and `otlp_http_*` metrics were declared but never wired
 (fixed in that pass, along with the missing `otlp_batches`
 retention sweep). Insights queries during a heavy burst stayed
@@ -257,10 +257,10 @@ writes, item/byte-based queue bounds, per-batch enricher memo.
 
 | Path | Why deferred |
 |------|--------------|
-| ~~OTLP receiver under load~~ | **Done in v0.89** — see `stress-tests/otlp-ingest-v0.89.md`. |
-| ~~DuckDB telemetry write throughput~~ | **Measured in v0.89, then fixed** — per-row Exec was ~6-11k items/s; the Appender rework lifted it to ~50k items/s sustained (see the report's "After the Appender rework"). |
-| ~~Insights API under concurrent ingest~~ | **Done in v0.89** — ≤23ms cold during saturation bursts. |
-| ~~Rollout engine under N agents~~ | **Done in v0.89** — see `stress-tests/rollout-engine-v0.89.md`. Found + fixed serial ack-blocking stage pushes (full-fleet stage ~2h → 84s) and added tick-duration metrics. |
+| ~~OTLP receiver under load~~ | **Done in v0.89**, see `stress-tests/otlp-ingest-v0.89.md`. |
+| ~~DuckDB telemetry write throughput~~ | **Measured in v0.89, then fixed**, per-row Exec was ~6-11k items/s; the Appender rework lifted it to ~50k items/s sustained (see the report's "After the Appender rework"). |
+| ~~Insights API under concurrent ingest~~ | **Done in v0.89**, ≤23ms cold during saturation bursts. |
+| ~~Rollout engine under N agents~~ | **Done in v0.89**, see `stress-tests/rollout-engine-v0.89.md`. Found + fixed serial ack-blocking stage pushes (full-fleet stage ~2h → 84s) and added tick-duration metrics. |
 | Long-running stability (24h+) | Not a single-session test. Run fleetsim + otlpsim under a sustained-load harness for a day before any GA claim. |
 
 ### Reproducing

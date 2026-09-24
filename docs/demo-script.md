@@ -4,7 +4,7 @@ For the landing-page hero video / Twitter-X demo / conference
 intro. Total runtime: ~90 seconds. Voice-over and on-screen text
 in alternating columns; cuts at section breaks.
 
-## Cold open (0–8s)
+## Cold open (0-8s)
 
 **Visual:** macOS terminal, fullscreen. Operator types:
 
@@ -19,14 +19,14 @@ open http://localhost:8080
 ```
 
 Browser opens to the Squadron Dashboard with the orange "No agents
-yet — let's get your first one connected" banner.
+yet, let's get your first one connected" banner.
 
 **Voice-over:**
 > "Squadron is an open-source OpenTelemetry control plane. One
 > Docker command to start. Designed for small teams paying too
 > much for telemetry."
 
-## Quickstart (8–25s)
+## Quickstart (8-25s)
 
 **Visual:** Operator clicks the banner. Lands on `/quickstart`.
 Click "I have collectors running" (Path B). Snippet appears.
@@ -41,11 +41,11 @@ spinner flips to the green "Agent connected!" celebration.
 > snippet into your existing config, restart, and they show up in
 > Squadron within seconds. No re-deploy. No vendor lock-in."
 
-## Cost insights (25–45s)
+## Cost insights (25-45s)
 
 **Visual:** Operator clicks the "Open Fleet Status" button.
 Dashboard fills in: online agents, drift status, recent activity.
-Cut to the Cost Insights page — shows the Volume panel (158 MB
+Cut to the Cost Insights page, shows the Volume panel (158 MB
 metrics), Outlier Agents, Top Attributes with `code.stacktrace`
 at 50%, `processor` dominating metrics.
 
@@ -55,7 +55,7 @@ at 50%, `processor` dominating metrics.
 > attribute. Sampled estimates so you can spot the noisy keys
 > before they spike your bill."
 
-## Savings + recommendations (45–65s)
+## Savings + recommendations (45-65s)
 
 **Visual:** Operator clicks "Savings" in the sidebar.
 
@@ -64,7 +64,7 @@ Two hero cards appear:
 - Potential monthly savings: **$312/month** (green)
 
 Below, the Quick Wins panel. Top recommendation: "Drop attribute
-`http.url` from traces" — **CRITICAL** — saves **$211/month**.
+`http.url` from traces", **CRITICAL**, saves **$211/month**.
 
 Operator clicks "Apply".
 
@@ -74,7 +74,7 @@ Operator clicks "Apply".
 > the config editor with the change pre-staged. Nothing rolls out
 > until you review the diff and approve."
 
-## AI assist (65–82s)
+## AI assist (65-82s)
 
 **Visual:** The config editor opens with the recommendation
 banner at the top and the processor block already inserted. The
@@ -84,7 +84,7 @@ Modal opens; operator pastes a custom snippet about k8s labels.
 Click "Merge into editor". A 2-second spinner. Editor updates;
 the diff highlights the new processor in the pipeline.
 
-Cut to the Cost Insights page — operator clicks "Explain" on a
+Cut to the Cost Insights page, operator clicks "Explain" on a
 recommendation. Inline AI panel appears with a 2-sentence
 explanation.
 
@@ -95,7 +95,7 @@ explanation.
 > and Squadron's existing staged rollout before it touches
 > production."
 
-## Close (82–90s)
+## Close (82-90s)
 
 **Visual:** Cut back to the Savings page. The hero number ticks
 down: $847 → $635/month. Banner: "Saved $212/month".
@@ -131,7 +131,7 @@ squadron.dev   github.com/devopsmike2/squadron
   cuts; pick something instrumental and recede-into-background.
 - **B-roll backup:** Record 2-3 minutes of footage at each stage
   so the editor has overlap. Re-record the cold open if any
-  errors flash in the docker compose logs — operators notice.
+  errors flash in the docker compose logs, operators notice.
 - **Numbers:** Use a fleetsim run before recording so the Cost
   Insights / Savings numbers are non-trivial. The default demo
   fleet's numbers ($33/month) are fine but a $847 → $635

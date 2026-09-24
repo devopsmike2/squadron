@@ -1,4 +1,4 @@
-# Event source tier slice 1 — sixth tier across four clouds
+# Event source tier slice 1, sixth tier across four clouds
 
 **Status:** design doc, locked for slice 1 implementation.
 Builds on the existing compute / database / kubernetes /
@@ -24,7 +24,7 @@ Squadron scans goes:
 - **Serverless / compute / k8s** → execution layer
 - **Database** → persistence layer
 
-Today Squadron sees layers 2-5. Layer 1 — the event source —
+Today Squadron sees layers 2-5. Layer 1, the event source,
 is invisible. That matters because the event source is where
 the trace ID is created (or fails to be created). An
 EventBridge rule that doesn't propagate the X-Ray sampling
@@ -61,7 +61,7 @@ Slice 1 adds a sixth tier across all four clouds:
 - **OCI**: Streaming (Kafka-compatible streams)
 
 For each, slice 1 detects whether the event source has the
-cloud-native trace primitive enabled at the SOURCE level —
+cloud-native trace primitive enabled at the SOURCE level,
 NOT whether each individual message carries traceparent. The
 per-message propagation analysis is harder and slated for
 slice 2.
@@ -76,7 +76,7 @@ slice 2.
   consumer-side observation) isn't trivial. Slice 2.
 - **Cross-cloud event flows.** A message published to AWS
   EventBridge that flows out via SNS to a GCP Pub/Sub topic
-  (or via an event hub federation) — that's a real
+  (or via an event hub federation), that's a real
   architecture but the trace correlation across cloud
   boundaries is its own arc. Slice 3+.
 - **Per-target trace propagation analysis.** EventBridge
@@ -137,7 +137,7 @@ Detection axes:
 | Message storage policy | Topic has `messageStoragePolicy.allowedPersistenceRegions` not empty | `pubsub-storage-policy`     |
 
 GCP Pub/Sub has a first-class `tracingConfig.samplingRatio`
-field — set this above 0 and Cloud Trace receives spans for
+field, set this above 0 and Cloud Trace receives spans for
 publish operations. Squadron treats > 0 as HasTraceAxis; the
 recommendation drafts a PR setting it to 1.0 (or operator-
 configured floor).
@@ -274,7 +274,7 @@ providers:
 ### 6.4 Trace coverage endpoint extension
 
 `GET /api/v1/discovery/trace_coverage` per-provider response
-gains `event_source_pct` field — % of inventoried event
+gains `event_source_pct` field, % of inventoried event
 sources emitting in 24h. All 4 providers populate.
 
 ## 7. UI
@@ -318,7 +318,7 @@ eventbridge-logging-enable
 ```
 
 (pubsub-storage-policy not slated as a recommendation kind in
-slice 1 — it's informational only because storage region
+slice 1, it's informational only because storage region
 choice is operator policy, not observability.)
 
 Webhook kind-prefix routing extends:
@@ -362,7 +362,7 @@ The 4 new prefixes extend the existing kind-prefix switch in
 
 - **Chunk 1: Foundation + AWS EventBridge scanner.**
   EventSourceInstanceSnapshot struct, storage migration
-  v12→v13, AWS EventBridge scanner (simplest of the 4 — single
+  v12→v13, AWS EventBridge scanner (simplest of the 4, single
   API surface), scan endpoint tier extension. ~900-1100 lines.
   **v0.89.100.**
 - **Chunk 2: GCP Pub/Sub scanner.** Parallel-eligible with
@@ -382,30 +382,30 @@ count.
 
 ## 11. Acceptance tests
 
-1. **AWS EventBridge scanner — bus with Schemas discoverer
+1. **AWS EventBridge scanner, bus with Schemas discoverer
    enabled.** Mock `events:ListEventBuses` to return a bus
    with `schemasDiscoverer = "Active"`. Assert: HasTraceAxis=true.
-2. **AWS EventBridge scanner — bus without Schemas.** Assert:
+2. **AWS EventBridge scanner, bus without Schemas.** Assert:
    HasTraceAxis=false.
-3. **AWS EventBridge scanner — bus with log-target rule.**
+3. **AWS EventBridge scanner, bus with log-target rule.**
    Mock `events:ListRules` for the bus with a rule pointing
    at a CloudWatch Logs target. Assert: HasLogAxis=true.
-4. **GCP Pub/Sub scanner — topic with samplingRatio=1.0.**
+4. **GCP Pub/Sub scanner, topic with samplingRatio=1.0.**
    Assert: HasTraceAxis=true.
-5. **GCP Pub/Sub scanner — topic with samplingRatio=0.**
+5. **GCP Pub/Sub scanner, topic with samplingRatio=0.**
    Assert: HasTraceAxis=false.
-6. **GCP Pub/Sub scanner — topic with schemaSettings set.**
+6. **GCP Pub/Sub scanner, topic with schemaSettings set.**
    Assert: snapshot Detail includes the schema reference.
-7. **Azure Service Bus — namespace with diagnostic settings
+7. **Azure Service Bus, namespace with diagnostic settings
    to App Insights.** Assert: HasTraceAxis=true.
-8. **Azure Service Bus — namespace with diagnostic settings
+8. **Azure Service Bus, namespace with diagnostic settings
    to Log Analytics.** Assert: HasTraceAxis=true (either
    destination satisfies).
-9. **Azure Service Bus — namespace without diagnostic
+9. **Azure Service Bus, namespace without diagnostic
    settings.** Assert: HasTraceAxis=false.
-10. **OCI Streaming — stream with Logging log group.**
+10. **OCI Streaming, stream with Logging log group.**
     Assert: HasLogAxis=true.
-11. **OCI Streaming — stream without Logging.** Assert:
+11. **OCI Streaming, stream without Logging.** Assert:
     HasLogAxis=false.
 12. **Storage migration v12→v13 idempotent.** Run migration
     twice; no error, table exists.
@@ -498,7 +498,7 @@ Squadron's universal claim grows from five tiers to six:
 Four clouds. Six tiers. Four verbs. One control plane.
 Twenty-four scanner surfaces (4 clouds × 5 prior tiers + 4
 new event source surfaces). The honest framing: slice 1
-covers ONE event source surface per cloud — there are more
+covers ONE event source surface per cloud, there are more
 (SNS / SQS / EventHubs / Event Grid / Cloud Tasks /
 Notification Service) which slice 2+ will add.
 

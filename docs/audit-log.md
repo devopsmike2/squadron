@@ -34,17 +34,17 @@ which agents got which stage, when an alert fired.
 }
 ```
 
-- **actor** — `system`, `opamp`, or `operator:<email>` if you front
+- **actor**, `system`, `opamp`, or `operator:<email>` if you front
   Squadron with auth. Today it's effectively always `system` since there's
   no auth layer.
-- **event_type** — dotted name like `agent.drift.drifted`,
+- **event_type**, dotted name like `agent.drift.drifted`,
   `rollout.stage_applied`, `alert.fired`. Stable; UIs/automations can
   switch on this.
-- **target_type** — `agent`, `group`, `config`, `rule`, `rollout`. Used
+- **target_type**, `agent`, `group`, `config`, `rule`, `rollout`. Used
   to scope queries.
-- **target_id** — the affected entity's ID. May be empty for fleet-wide
+- **target_id**, the affected entity's ID. May be empty for fleet-wide
   events.
-- **payload** — freeform JSON. Each event type documents what it puts
+- **payload**, freeform JSON. Each event type documents what it puts
   here.
 
 ## What's recorded
@@ -64,14 +64,14 @@ which agents got which stage, when an alert fired.
 | `rollout.created`         | Rollout created                          | name, stage_count, diff_added_lines, diff_removed_lines, previous_config_id |
 | `rollout.stage_applied`   | Engine pushed a stage to its canary set  | stage, mode, canary_size, agent_ids[], percentage or label_selector |
 | `rollout.empty_canary`    | Stage resolved to 0 agents               | (informational)                               |
-| `rollout.paused`          | Operator paused a rollout                | —                                             |
-| `rollout.resumed`         | Operator resumed a rollout               | —                                             |
+| `rollout.paused`          | Operator paused a rollout                |, |
+| `rollout.resumed`         | Operator resumed a rollout               |, |
 | `rollout.aborted`         | Auto-abort or manual abort               | reason                                        |
-| `rollout.rolled_back`     | Rollback push completed                  | —                                             |
-| `rollout.succeeded`       | Final stage cleared dwell                | —                                             |
+| `rollout.rolled_back`     | Rollback push completed                  |, |
+| `rollout.succeeded`       | Final stage cleared dwell                |, |
 
 The list grows as Squadron does. A new event type is one line of code at
-the recording site plus a UI tweak in the timeline — adding more is
+the recording site plus a UI tweak in the timeline, adding more is
 cheap and we use that liberally.
 
 ## Filtering
@@ -105,7 +105,7 @@ entity you're looking at:
 - The agent detail drawer (filtered to that agent) for "what's the
   history with this host?".
 - The rollout card's **Show history** toggle (filtered to that rollout)
-  for inline post-mortems — every stage application, every state
+  for inline post-mortems, every stage application, every state
   transition, with the resolved agent IDs surfaced as chip clouds for
   the `stage_applied` and `empty_canary` events.
 
@@ -114,7 +114,7 @@ revalidates whichever timelines are mounted, so you don't have to refresh.
 
 ## Retention
 
-The audit log is **append-only and unbounded by default** — it is never
+The audit log is **append-only and unbounded by default**, it is never
 pruned unless you explicitly turn on retention. This is deliberate: the
 audit log is your compliance/evidence record, and silently deleting it
 would be the wrong default for anyone who relies on it after the fact.
@@ -130,7 +130,7 @@ one-size retention window doesn't fit real regimes:
 | SOX                              | ~7 years                 |
 | GDPR                             | keep only as long as needed; honor erasure obligations |
 
-These are rough industry rules of thumb, not legal advice — confirm your
+These are rough industry rules of thumb, not legal advice, confirm your
 own obligations before choosing a window.
 
 ### Enabling retention
@@ -159,7 +159,7 @@ than `now - retention_days`. Startup logs `audit-log retention GC started
 ### Safety behavior
 
 - **Default off.** Omit the block (or leave `enabled: false`) and the log
-  grows unbounded — nothing is ever deleted.
+  grows unbounded, nothing is ever deleted.
 - **Misconfiguration never wipes the log.** `enabled: true` with a
   non-positive `retention_days` (0 or negative) is treated as *inactive*,
   not "delete everything." You must set a real positive window for pruning
@@ -169,7 +169,7 @@ than `now - retention_days`. Startup logs `audit-log retention GC started
 
 If your regime requires longer retention than a single Squadron instance
 should hold, export the audit log to your SIEM/warehouse and enable a
-shorter local window — the two are independent.
+shorter local window, the two are independent.
 
 ## API reference
 

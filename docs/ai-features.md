@@ -27,7 +27,7 @@ on what.
 
 The service-wide `max_tokens` cap in `squadron.yaml` (default
 `1024`) governs the upper bound on response length for the short
-surfaces — explain, ask, merge — where the model is expected to
+surfaces, explain, ask, merge, where the model is expected to
 emit a couple of paragraphs and stop. The proposer is the
 exception: it carries a per-call override (`ai.ProposerMaxTokens`)
 because plan-kind responses can include a complete inline
@@ -35,13 +35,13 @@ OpenTelemetry Collector YAML per step (the v0.78
 inline\_config\_snippet contract). At the 1024 default those
 responses would truncate mid-config and the bridge would silently
 drop the spike (this is what `#550` was). v0.82 set the override
-to 4096 — enough for JARVIS 2-3 step plans. v0.88.2 bumped to 8192
+to 4096, enough for JARVIS 2-3 step plans. v0.88.2 bumped to 8192
 because slice 3a's discovery proposer emits plan steps for FIVE
 service categories (compute / functions / databases / object stores
 / load balancers), each carrying its own `inline_config_snippet`;
 the 4096 ceiling truncated discovery responses against a 17-resource
 live AWS account (#597). The trade-off:
-the cap is a ceiling, not a per-call bill — the model only uses
+the cap is a ceiling, not a per-call bill, the model only uses
 what it needs, so raising the ceiling adds no cost on short
 responses. A future release that wants to drop the cap should
 convert `inline_config_snippet` from a complete YAML to a diff
@@ -159,13 +159,13 @@ proposal. The proposal lands in the rollouts table with
 `proposed_by=ai` and `require_approval=true`. A human approves
 before the rollout engine touches a single agent.
 
-### Cost spike proposer — plan output mode (v0.79)
+### Cost spike proposer, plan output mode (v0.79)
 
-The v0.58–v0.78 proposer emitted exactly one rollout per spike. v0.79
+The v0.58, v0.78 proposer emitted exactly one rollout per spike. v0.79
 extends the structured output schema with a discriminated union:
 
 ```
-{ "kind": "rollout" | "plan", ... }
+{ "kind": "rollout" | "plan"... }
 ```
 
 The model picks one of two shapes per spike. The prompt provides a
@@ -178,7 +178,7 @@ decision framework:
   regression risk (multi-attribute drops, sample rate ratchets,
   staged pipeline splits).
 
-The plan branch produces N steps (2–4 in practice), each carrying an
+The plan branch produces N steps (2-4 in practice), each carrying an
 `inline_config_snippet` instead of `target_config_id`. The v0.78
 plan create path materializes each snippet as a new `Config` row in
 storage before persisting the rollout. The proposer never has to
@@ -196,9 +196,9 @@ step 0, the engine sequences the cascade through step N, and if any
 step fails the v0.72 backwards rollback walk undoes every succeeded
 predecessor. One approval, full sequenced fix, automatic rollback.
 
-What plans **don't** do (yet): every plan step is a rollout — a
+What plans **don't** do (yet): every plan step is a rollout, a
 config push. Plans cannot include action-runner calls (verify,
-notify, page on-call). That's queued as a separate arc — adding
+notify, page on-call). That's queued as a separate arc, adding
 action-runner-as-plan-step requires engine logic to dispatch actions,
 wait for completion before advancing, and handle action failures.
 See [docs/multi-step-plans-design.md](./multi-step-plans-design.md)
@@ -208,7 +208,7 @@ for the v0.80+ roadmap.
 
 The cost-spike proposer now reads prior accepted/rejected AI
 rollouts for the same group as in-context few-shot examples on
-the next call. No fine-tuning, no embedding store — just a
+the next call. No fine-tuning, no embedding store, just a
 prompt-only feedback loop. Up to 4 examples (≤2 approved + ≤2
 rejected, newest-first within each bucket) from the past 30 days,
 redacted through the existing secrets pipeline. Per-group toggle

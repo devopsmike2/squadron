@@ -1,4 +1,4 @@
-# OSS 100% Verification — checklist + running results
+# OSS 100% Verification, checklist + running results
 
 _Goal: every advertised OSS feature is either verified working end-to-end on a
 **clean install as a new user**, or explicitly relabeled partial in the docs.
@@ -14,9 +14,9 @@ PAT/connection.
 
 ## A. First-run / onboarding (deps: none)
 - [ ] Clean boot from published image: `/healthz` ok, UI loads, **empty** first-run state (no sim agents)
-- [ ] `/quickstart` — Start-fresh: pick backend → starter config + Docker/systemd/Helm install cmd
-- [ ] `/quickstart` — "I have collectors": OpAMP snippet copy
-- [ ] `/quickstart` — bulk mode: per-host ssh one-liner
+- [ ] `/quickstart`, Start-fresh: pick backend → starter config + Docker/systemd/Helm install cmd
+- [ ] `/quickstart`, "I have collectors": OpAMP snippet copy
+- [ ] `/quickstart`, bulk mode: per-host ssh one-liner
 - [ ] Auth: token off→loud warning; `/settings/tokens` create token + scopes; authed request works
 - [ ] `/settings/siem` renders + saves
 - [ ] ⌘K command palette + dark/light theme
@@ -28,36 +28,36 @@ PAT/connection.
 - [ ] Disable demo mode → state clears
 
 ## C. Fleet / agents / rollouts (deps: agent)
-- [ ] `/agents` — real collector registers, online, last-seen fresh
-- [ ] `/fleet-map` — pipeline / dataflow / topology tabs render
-- [ ] `/groups` — create group, assign, group config + restart
-- [ ] `/rollouts` — create staged rollout (percent + label), dwell, abort criteria, pause/resume
+- [ ] `/agents`, real collector registers, online, last-seen fresh
+- [ ] `/fleet-map`, pipeline / dataflow / topology tabs render
+- [ ] `/groups`, create group, assign, group config + restart
+- [ ] `/rollouts`, create staged rollout (percent + label), dwell, abort criteria, pause/resume
 - [ ] `/telemetry` + `/topology` render
 - [ ] pipeline-health (fleet + per-agent) returns bounded + sane
 - [ ] `/deploy`, `/runners`, `/actions` render + basic flow
 
 ## D. Config editor + AI (deps: key)
-- [ ] `/configs`, `/configs/new` — Monaco loads, Squadron Lint, diff preview, live pipeline view
-- [ ] AI Assist — Explain returns 2-3 sentence summary
-- [ ] AI Assist — Merge snippet integrates into existing YAML
-- [ ] `/playground/proposer` — proposer playground runs
+- [ ] `/configs`, `/configs/new`, Monaco loads, Squadron Lint, diff preview, live pipeline view
+- [ ] AI Assist, Explain returns 2-3 sentence summary
+- [ ] AI Assist, Merge snippet integrates into existing YAML
+- [ ] `/playground/proposer`, proposer playground runs
 
 ## E. Cost / savings (deps: agent for real numbers)
-- [ ] `/cost-insights` — volume, outlier agents, top attributes populate
-- [ ] `/savings` — $/mo projection, Quick Wins ranked, one-click Apply → editor pre-filled
+- [ ] `/cost-insights`, volume, outlier agents, top attributes populate
+- [ ] `/savings`, $/mo projection, Quick Wins ranked, one-click Apply → editor pre-filled
 
 ## F. Ops surfaces (deps: mixed)
-- [ ] `/alerts` — rule CRUD + evaluator loop fires
-- [ ] `/audit` + `/timeline` — events render humanized; AI explain (key)
-- [ ] `/incidents` — AI-drafted summary (key)
+- [ ] `/alerts`, rule CRUD + evaluator loop fires
+- [ ] `/audit` + `/timeline`, events render humanized; AI explain (key)
+- [ ] `/incidents`, AI-drafted summary (key)
 - [ ] `/inventory` renders
 
 ## G. Real cloud discovery → remediation (deps: cloud, key, gh)
-- [ ] `/discovery/aws` — connect (read-only) → scan vs oracle → inventory tabs → recs (real LLM) → exclusion
-- [ ] `/discovery/gcp` — connect → scan vs oracle → recs (spot)
-- [ ] `/discovery/azure` — connect → scan vs oracle → recs (spot)
-- [ ] `/discovery/oci` — connect → scan vs oracle → recs (spot)
-- [ ] `/discovery/iac/github` — connect repo → open **real** merge-ready PR → merge → verdict learning (decline→citation)
+- [ ] `/discovery/aws`, connect (read-only) → scan vs oracle → inventory tabs → recs (real LLM) → exclusion
+- [ ] `/discovery/gcp`, connect → scan vs oracle → recs (spot)
+- [ ] `/discovery/azure`, connect → scan vs oracle → recs (spot)
+- [ ] `/discovery/oci`, connect → scan vs oracle → recs (spot)
+- [ ] `/discovery/iac/github`, connect repo → open **real** merge-ready PR → merge → verdict learning (decline→citation)
 - [ ] env→Terraform import-block generation → PR
 - [ ] Continuous discovery: scan persistence + history + scheduled re-scan + drift
 
@@ -70,56 +70,56 @@ PAT/connection.
 ## Results log
 _(filled as phases run)_
 
-### Phase 1 (clean-room boot) — PASS
+### Phase 1 (clean-room boot), PASS
 Published image booted healthy on empty volume; first-run state correct (0 agents,
 AI disabled, auth-off warning); /healthz,/health,/readyz all 200; 15 key GET
 endpoints 200 (no first-user 5xx).
 
-### Phase 2 (no-cloud sweep) — PASS (no-key surface)
+### Phase 2 (no-cloud sweep), PASS (no-key surface)
 - Quickstart: backends, starter-config, opamp-snippet, adoption-snippet all return real content. PASS
 - Demo mode: AWS enable→scan(seeded inventory inline)→recommendations **succeed with no LLM**; GCP/Azure/OCI seed connections. PASS
 - Collector → Fleet: throwaway collector registered (0 export errors, agent online). PASS
 - Savings/realized, insights/volume(+attributes w/ signal param), audit/events, pipeline-health (fleet + per-agent): real JSON. PASS
 - Config lint: real findings (missing-batch-processor w/ line+path). PASS
-- Alerts: CRUD at /api/v1/alerts/rules — create→list→delete all work; rigorous field validation. PASS
+- Alerts: CRUD at /api/v1/alerts/rules, create→list→delete all work; rigorous field validation. PASS
 
 **Fixes found + shipped this phase**
-- FIX: unknown /api/* routes returned the SPA index.html (200) instead of 404 JSON — masked wrong paths (made a typo'd endpoint look like a pass). Now 404 JSON. (committed addb2f2)
+- FIX: unknown /api/* routes returned the SPA index.html (200) instead of 404 JSON, masked wrong paths (made a typo'd endpoint look like a pass). Now 404 JSON. (committed addb2f2)
 
 **Minor notes (backlog, not blockers)**
 - API shape inconsistency: AWS demo connection uses `connection_id`; GCP/Azure/OCI use `id`.
 - Demo scan returns inventory inline but is not persisted to scan history (`/scans` stays empty under demo).
 
 **Still needs intervention**
-- AI features (config-editor Explain/Merge, proposer playground, incident AI drafts, audit AI explain) — need ANTHROPIC_API_KEY on the clean-room.
-- Phase 3 real-cloud (AWS/GCP/Azure/OCI scans, IaC PR, env→TF) — cloud creds + GitHub PAT + OCI key + minimal test-infra spend.
+- AI features (config-editor Explain/Merge, proposer playground, incident AI drafts, audit AI explain), need ANTHROPIC_API_KEY on the clean-room.
+- Phase 3 real-cloud (AWS/GCP/Azure/OCI scans, IaC PR, env→TF), cloud creds + GitHub PAT + OCI key + minimal test-infra spend.
 - Phase 4 staged rollout.
 
-### Phase 2b (AI features, key enabled on clean-room) — PASS, 1 bug fixed
+### Phase 2b (AI features, key enabled on clean-room), PASS, 1 bug fixed
 Reused the dev ANTHROPIC_API_KEY on the clean-room (ai_enabled:true).
 - /ai/status: enabled (explain=haiku, merge=sonnet). PASS
 - /ai/explain-config: real summary + token counts. PASS
 - /ai/explain (snippet): real explanation. PASS
 - /ai/merge: inserted resource processor AND wired it into the pipeline ([resource, batch]). PASS
-- /audit/:id/explain: **was broken** — returned "AI assist is not configured" even with AI on.
+- /audit/:id/explain: **was broken**, returned "AI assist is not configured" even with AI on.
   Root cause: registerRoutes() runs before SetAIService(); the audit handler captured a nil
-  aiService eagerly (the #104/#105 eager-nil-capture class — that audit covered appStore/
+  aiService eagerly (the #104/#105 eager-nil-capture class, that audit covered appStore/
   actionStore, not aiService). FIX: late-bind aiService at request time. Verified live on dev:
   now returns a real explanation. (committed 59eb254)
 
 **Fixes shipped this pass: 2**
-- addb2f2 — unknown /api/* → 404 JSON (was SPA 200 HTML)
-- 59eb254 — audit-event AI explain late-binds aiService (was always "not configured")
+- addb2f2, unknown /api/* → 404 JSON (was SPA 200 HTML)
+- 59eb254, audit-event AI explain late-binds aiService (was always "not configured")
 
-### Phase 4 (staged rollout) — PASS
+### Phase 4 (staged rollout), PASS
 On the clean-room: created config → group → assigned the registered agent →
 created a rollout from the "cautious-percent-ramp" template (1%→10%→50%→100%
 with dwells) + strict-canary abort criteria. Engine picked it up:
 state=in_progress, current_stage=0. PASS.
 
-### Phase 3 (real cloud, current code, live connections) — PASS (scan path)
+### Phase 3 (real cloud, current code, live connections), PASS (scan path)
 Real scans against the live accounts on current main:
-- AWS: completed, partial=false, full tier structure (account near-empty post-teardown — correct). PASS
+- AWS: completed, partial=false, full tier structure (account near-empty post-teardown, correct). PASS
 - Azure: completed, partial=false. PASS
 - OCI: completed, partial=false, found 2 real compute instances. PASS
 - GCP: scan path reachable but >13s (many regions); verified live recently (#140).
@@ -138,13 +138,13 @@ Not re-verified head-to-toe *today* (proven live in the last few days): full
 deploy→scan-vs-oracle for all 4 clouds, GCP scan completion, and the live IaC
 GitHub PR loop (needs a PAT to re-run).
 
-## ADDENDUM — fresh deploy→PR run (Phase 3 full), with creds
+## ADDENDUM, fresh deploy→PR run (Phase 3 full), with creds
 Deployed slice-3a-test (full multi-tier env: 4 EC2 [2 otel/2 bare] + Lambdas +
 RDS + ALB + S3) to the real AWS account; existing GitHub IaC connection
 (PAT) present for repo squadron-test-aws-terraform.
-- DEPLOY: PASS. SCAN: **PASS, spot-on** — detected 4 EC2, correctly flagged the
+- DEPLOY: PASS. SCAN: **PASS, spot-on**, detected 4 EC2, correctly flagged the
   2 bare ones (has_otel=false), partial=false.
-- RECS (real LLM): **FAILED — found BUG #259.** Single giant proposer call for
+- RECS (real LLM): **FAILED, found BUG #259.** Single giant proposer call for
   the multi-tier inventory (1) timed out at 90s [mitigated to 180s, a778443],
   then (2) returned invalid JSON (max_tokens truncation / bad string escape).
   Marquee discovery→recs→PR loop does NOT survive a large multi-tier scan.
@@ -154,32 +154,32 @@ RDS + ALB + S3) to the real AWS account; existing GitHub IaC connection
 
 ### REVISED VERDICT
 Not 100%. The marquee discovery→AI-recs→PR loop works for **normal/small scans**
-(single-tier, handful of resources — verified live), but **fails on large
-multi-tier scans** (BUG #259: proposer single-call doesn't scale — timeout +
+(single-tier, handful of resources, verified live), but **fails on large
+multi-tier scans** (BUG #259: proposer single-call doesn't scale, timeout +
 invalid/truncated JSON). Everything else verified this pass remains solid
-(Phases 1–2, AI explain/merge, staged rollout, real-cloud scan detection across
+(Phases 1-2, AI explain/merge, staged rollout, real-cloud scan detection across
 AWS/Azure/OCI). Fixes shipped this pass: gzip receiver (v0.89.302), audit-explain
 nil-aiService, API-404 hygiene, proposer 90→180s timeout. The blocker to a
 confident "100%" is BUG #259 (proposer large-scan robustness: max_tokens +
 JSON-repair + chunk-by-tier).
 
-## #259 FIXED — chunk-by-tier discovery proposer (c1ea3d6)
+## #259 FIXED, chunk-by-tier discovery proposer (c1ea3d6)
 The proposer now fans out one LLM call per non-empty tier when a scan spans ≥3
 tiers or >12 resources (small scans keep the single call). Per-tier plans merge
 into one ProposalResult; per-tier failures tolerated.
 **Live-verified:** re-ran the *exact* multi-tier AWS scan that failed twice
-(timeout + invalid/truncated JSON) — now `succeeded` with 8 valid plan steps
+(timeout + invalid/truncated JSON), now `succeeded` with 8 valid plan steps
 across EC2 / Lambda / RDS / S3 / ALB / EventBridge. Unit tests cover
 split/merge/size/threshold.
 
 ### FINAL VERDICT (updated)
 The blocker is resolved. The marquee discovery → AI-recommendations loop now
 works end-to-end on a realistic multi-tier account (the hard, previously-broken
-part). Everything verified this pass holds: Phases 1–2 (boot, no-cloud, AI
+part). Everything verified this pass holds: Phases 1-2 (boot, no-cloud, AI
 explain/merge), staged rollouts, real-cloud scan detection (AWS/Azure/OCI), and
 now large-scan recommendations. The final deterministic step (open-PR from a
 recommendation) is proven live recently (#187) and takes the now-valid recs as
 input. **5 real bugs found + fixed this verification pass:** gzip receiver
 (v0.89.302), audit-explain nil-aiService, API-404 hygiene, proposer 90→180s
-timeout, and the #259 chunk-by-tier proposer — every one passed all unit tests
+timeout, and the #259 chunk-by-tier proposer, every one passed all unit tests
 before this pass.

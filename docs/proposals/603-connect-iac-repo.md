@@ -1,4 +1,4 @@
-# #603 — Connect IaC repo for PR-based recommendation handoff
+# #603, Connect IaC repo for PR-based recommendation handoff
 
 **Status:** proposal, slice-1 scoping. Slice 5+ candidate.
 **See also:** [universal-discovery-design.md](../universal-discovery-design.md),
@@ -15,7 +15,7 @@ returns each plan step's `InlineConfigSnippet` (from
 as a `recommendations.IaCSnippet`. The Recommendations tab renders it
 behind a "Copy" button. The operator pastes into their terraform
 repo, opens a PR by hand, their CI runs `terraform apply`. The
-copy-paste step is the entire friction — operators drop the workflow
+copy-paste step is the entire friction, operators drop the workflow
 there.
 
 "Connect IaC repo" closes the loop: the operator connects their
@@ -44,17 +44,17 @@ never runs terraform.
 Reuses the declarative `ConnectorWizard` shell from Stream 2D
 (`universal-discovery-design.md` §"Connector workflow design").
 Routes mirror AWS: `POST /api/v1/iac/github/validate`
-(test-before-commit, zero records — same shape as `HandleAWSValidate`,
+(test-before-commit, zero records, same shape as `HandleAWSValidate`,
 [`discovery.go:264`](../../internal/api/handlers/discovery.go)) and
-`POST /api/v1/iac/github/connections` (Save — mirrors
+`POST /api/v1/iac/github/connections` (Save, mirrors
 `HandleAWSSaveConnection`,
 [`discovery.go:379`](../../internal/api/handlers/discovery.go)).
 
 Wizard steps: (1) Provider = GitHub. (2) Install Squadron App
 (deep-link to `/installations/new` on the operator's org; PAT lives
-behind an Advanced disclosure — §4). (3) Pick repo from the install's
+behind an Advanced disclosure, §4). (3) Pick repo from the install's
 granted set, single-select. (4) Pick default branch, pre-filled from
-`default_branch`. (5) Declare placement map (§6). (6) Validate —
+`default_branch`. (5) Declare placement map (§6). (6) Validate,
 confirms repo + branch + every declared file exists, renders one
 preflight row per resource kind, same shape as
 `awsValidatePreflightRow`
@@ -69,7 +69,7 @@ humanized errors with `SuggestedStep` jump-backs.
 
 **Preferred: a Squadron GitHub App, installed per-repo.**
 `contents:write` + `pull_requests:write` ONLY on the repos the
-operator ticked at install — a PAT with `repo` is org-wide.
+operator ticked at install, a PAT with `repo` is org-wide.
 Installation tokens are short-lived (1h, GitHub-issued); Squadron
 mints them on-demand from the App private key, parallel to STS-token
 minting on the AWS path (`universal-discovery-design.md`
@@ -89,7 +89,7 @@ opaque-ciphertext shape
 marshalling helpers `MarshalGitHubAppCreds` /
 `MarshalGitHubPATCreds` parallel `MarshalAWSCredentials`
 ([`aws.go:48`](../../internal/discovery/credstore/aws.go)), sealed by
-the same `credstore.Key`. No plaintext token in any audit payload —
+the same `credstore.Key`. No plaintext token in any audit payload,
 the ExternalID invariant generalizes.
 
 ## 5. Recommendation → PR flow
@@ -103,15 +103,15 @@ the ExternalID invariant generalizes.
    branch `squadron/rec-<scan_id>-<step_idx>` off the default
    branch, commits the snippet appended to the declared file (§7),
    opens the PR with base = default branch, head = new branch.
-   **Squadron never pushes to the default branch — invariant.**
+   **Squadron never pushes to the default branch, invariant.**
 4. **Operator reviews in GitHub.** Branch protection (CODEOWNERS,
    required reviewers, required CI checks) is the gate. **This is
    where the operator's hand is required and where the security
-   thesis is preserved** — exactly as the operator's hand was the
+   thesis is preserved**, exactly as the operator's hand was the
    gate in the copy-paste pattern.
 5. Operator merges (or closes).
 6. **Operator's existing CI runs `terraform plan`/`apply`.** Squadron
-   is uninvolved. Their CI is the executor — same as the copy-paste
+   is uninvolved. Their CI is the executor, same as the copy-paste
    pattern.
 7. Next scan re-walks; the proposer stops surfacing the
    recommendation because the resource now shows as covered.
@@ -162,22 +162,22 @@ New event types, registered alongside the `discovery.aws.*` family
 ([`discovery.go:534`](../../internal/api/handlers/discovery.go) for
 the pattern):
 
-- `iac.github.connection_created` — payload: `connection_id`,
+- `iac.github.connection_created`, payload: `connection_id`,
   `repo_full_name`, `default_branch`, `auth_kind` (`app`|`pat`),
   `placement_map`. NEVER the token.
-- `iac.github.connection_validated` — payload: `repo_full_name`,
+- `iac.github.connection_validated`, payload: `repo_full_name`,
   `default_branch`, `preflight_results[]`.
-- `recommendation.pr_opened` — payload: `scan_id`, `step_idx`,
+- `recommendation.pr_opened`, payload: `scan_id`, `step_idx`,
   `account_id`, `repo_full_name`, `pr_number`, `pr_url`, `branch`,
-  `commit_sha`, `file_path`, `actor`. NEVER the snippet content —
+  `commit_sha`, `file_path`, `actor`. NEVER the snippet content,
   audit rows must not scale with snippet size (same rule as
   `discovery.aws.recommendations_generated`,
   [`discovery.go:1446`](../../internal/api/handlers/discovery.go)).
-- `recommendation.pr_open_failed` — adds `error_code` +
+- `recommendation.pr_open_failed`, adds `error_code` +
   `humanized_message`.
-- `recommendation.pr_merged` — webhook-driven. Drives "marked
+- `recommendation.pr_merged`, webhook-driven. Drives "marked
   applied" status without a manual click.
-- `recommendation.pr_closed` — webhook, closed without merge.
+- `recommendation.pr_closed`, webhook, closed without merge.
 
 Family uses a new `TargetTypeIaCRecommendation` so the timeline
 humanizer groups them.
@@ -187,12 +187,12 @@ humanizer groups them.
 | Threat | Mitigation |
 | ------ | ---------- |
 | Host compromise leaks the GitHub App private key. | Per-repo install scope already bounds blast radius to the ticked repos. Compliance Pack adds HSM-backed key (parallel to `universal-discovery-design.md` §"Compliance Pack hardening"). One-click revoke in org admin. |
-| Host compromise leaks a PAT. | Worse — org-wide `repo` scope. Mitigation: PAT is behind an Advanced disclosure with a visible warning; Compliance Pack disables it entirely. |
+| Host compromise leaks a PAT. | Worse, org-wide `repo` scope. Mitigation: PAT is behind an Advanced disclosure with a visible warning; Compliance Pack disables it entirely. |
 | Operator renames or transfers the repo. | GitHub returns 404 on next "Open PR". Humanized error names the recovery step ("re-run the IaC connect wizard"). Audit `recommendation.pr_open_failed`. |
 | Operator force-pushes the default branch between Squadron's read and write. | Our branch is off the new HEAD; PR body notes the rebase. We never write `main` directly. |
 | Operator-side bot auto-merges Squadron PRs. | A thesis violation but the operator's choice. PR-body footer names the risk. Compliance Pack can require a `squadron/manual-merge` label bots won't satisfy. |
 | Malicious recommendation injection (poisoned scan → bad HCL → PR). | Same threat as today's snippet-injection path (`universal-discovery-design.md` §"Threat: malicious recommendation injection"). The PR is reviewable in GitHub. The operator's review is the same operator-in-the-loop defense as the copy-paste pattern. No auto-merge. |
-| Compromised Squadron force-pushes the default branch (escalation attempt). | Operator's GitHub branch protection prevents it. The GitHub-client wrapper additionally refuses any write to the default-branch ref the same way the AWS scanner refuses write-action call sites — defense in depth at the code layer, not just GitHub-side policy. |
+| Compromised Squadron force-pushes the default branch (escalation attempt). | Operator's GitHub branch protection prevents it. The GitHub-client wrapper additionally refuses any write to the default-branch ref the same way the AWS scanner refuses write-action call sites, defense in depth at the code layer, not just GitHub-side policy. |
 | Bot impersonation in the operator's repo. | App identity is the PR author on the App path; PAT-owner on the PAT path. `recommendation.pr_opened.actor` carries the Squadron operator identity for cross-system trace. |
 
 ## 10. Slice 1 contract

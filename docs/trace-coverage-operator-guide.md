@@ -1,4 +1,4 @@
-# Trace coverage — operator guide
+# Trace coverage, operator guide
 
 This is the operator-facing runbook for the v0.89.73 through
 v0.89.78 trace integration arc that just closed slice 1.
@@ -16,7 +16,7 @@ adjacent question that operators care about more: "is telemetry
 actually flowing." Slice 2 will turn the visibility into
 recommendation kinds; slice 1 ships the visibility.
 
-For a first test, the walkthrough takes about 20 minutes — most
+For a first test, the walkthrough takes about 20 minutes, most
 of it spent confirming your OTel collectors point at Squadron's
 endpoint. For a production deployment with mature OTel coverage
 already in place, the trace coverage panel populates in seconds.
@@ -31,7 +31,7 @@ already in place, the trace coverage panel populates in seconds.
   uniformly.
 - An auditor who needs to correlate "Squadron flagged this
   cluster as instrumented in scan X" with "Squadron received N
-  spans from that cluster in audit Y" — both signals live in the
+  spans from that cluster in audit Y", both signals live in the
   same audit timeline now.
 
 ## What this is NOT (slice 1)
@@ -66,7 +66,7 @@ The [trace integration slice 1 design doc](./proposals/trace-integration-slice1.
 
 Squadron receives spans on the existing OTLP HTTP endpoint
 (port 4318) and gRPC endpoint (port 4317). Both receivers are
-part of the standard `all-in-one` build — no separate setup.
+part of the standard `all-in-one` build, no separate setup.
 
 For each incoming span batch, Squadron extracts the resource
 attributes (`host.id`, `cloud.resource_id`,
@@ -90,7 +90,7 @@ The six tiers in priority order:
    database workloads using the OTel DB instrumentation. Key
    shape: `<provider>:<account>:db:<db_system>:<db_name>`. Strong.
 5. **`host.name` alone.** Useful when no cloud-aware host
-   detector is enabled. Match confidence: **weak** — the
+   detector is enabled. Match confidence: **weak**, the
    discovery dashboard surfaces a caveat indicator on this row.
 6. **`service.name` alone.** Last-resort fallback. Operators
    should not see weak-match-via-service-name in production
@@ -123,7 +123,7 @@ The receiver still accepts traces; the index just doesn't
 update. Discovery dashboard's trace coverage panel reports
 zero in this state.
 
-## Step 1 — Point your collectors at Squadron's OTLP endpoint
+## Step 1, Point your collectors at Squadron's OTLP endpoint
 
 If you're already running OTel collectors emitting elsewhere
 (Tempo, Honeycomb, Datadog), add Squadron as a SECOND export
@@ -152,7 +152,7 @@ receiver port; auth tokens are roadmap work. Operators with
 strict posture should put Squadron's receiver behind a TLS-
 terminating reverse proxy.
 
-## Step 2 — Run a discovery scan to populate the denominator
+## Step 2, Run a discovery scan to populate the denominator
 
 Open the Squadron UI, navigate to Discovery, pick one of your
 connected clouds, and run a scan. The scan populates the
@@ -161,7 +161,7 @@ inventory tables that the trace coverage view joins against.
 Without scans, the trace coverage panel shows "Run a discovery
 scan to populate the trace coverage view."
 
-## Step 3 — Open the Discovery dashboard
+## Step 3, Open the Discovery dashboard
 
 Navigate to `/discovery`. Look for the **Trace coverage** panel
 below the existing instrumentation coverage ring.
@@ -178,7 +178,7 @@ The panel shows:
 - **Caveat indicator** (yellow icon): appears next to any chip
   where weak matches exceed 20%. Hover for explanation.
 
-## Step 4 — Drill into a per-cloud Inventory tab
+## Step 4, Drill into a per-cloud Inventory tab
 
 Click the "View details" link on one of the provider cards (or
 navigate to `/discovery/aws`, `/discovery/gcp`, etc.). The
@@ -187,10 +187,10 @@ sub-tab (Compute, Databases, Kubernetes).
 
 Values:
 
-- "2m ago" / "1h ago" / "3d ago" — relative time in compact form
-- "1w ago" / "2w ago" — for older but recent emissions
+- "2m ago" / "1h ago" / "3d ago", relative time in compact form
+- "1w ago" / "2w ago", for older but recent emissions
 - A literal date (YYYY-MM-DD) for emissions older than 30 days
-- "never" — never emitted; a yellow indicator invites investigation
+- "never", never emitted; a yellow indicator invites investigation
 
 The "never" rows are the actionable signal. They are resources
 Squadron has discovered (so the scanner can see them) but has
@@ -213,18 +213,18 @@ prevalence order:
    correct detector set is `host`, `os`, `ec2`. The dashboard's
    weak-match caveat usually correlates with this failure mode.
 
-## Step 5 — Reading the audit signal
+## Step 5, Reading the audit signal
 
 Open the Timeline page. Filter by event type for the new trace
 integration events:
 
-- **`trace_index.background_flushed`** — fires every 30 seconds
+- **`trace_index.background_flushed`**, fires every 30 seconds
   (default flush interval) when there are rows to write. Payload
   carries `rows_written`, `rows_evicted`, `duration_ms`,
   `interval_s`. Useful for confirming the index is healthy.
   Empty cycles do NOT emit; this keeps the timeline clean during
   low-traffic windows.
-- **`discovery.trace_coverage.requested`** — fires once per
+- **`discovery.trace_coverage.requested`**, fires once per
   cache miss on the `/api/v1/discovery/trace_coverage` endpoint.
   Cache TTL is 30 seconds, so a rapid burst of dashboard refreshes
   yields one audit event, not N.
@@ -232,7 +232,7 @@ integration events:
 No span content in either payload. Squadron's existing DuckDB
 store keeps full span data; audit captures only the meta-shape.
 
-## Step 6 — (Optional) Tune the row cap
+## Step 6, (Optional) Tune the row cap
 
 The traceindex has a hard cap (default 100,000 rows) with LRU
 eviction. This prevents a high-cardinality attribute set (a span
@@ -248,7 +248,7 @@ export SQUADRON_TRACEINDEX_MAX_ROWS=500000
 The flush audit event's `rows_evicted` field is non-zero when
 the cap is being hit; that's the signal to raise it. If
 operators routinely see eviction in steady state, investigate
-the cardinality of your service.name attribute first — high
+the cardinality of your service.name attribute first, high
 service.name churn is the most common cause and usually
 indicates a misconfigured exporter or auto-instrumentation
 labeling pods rather than services.
@@ -258,11 +258,11 @@ labeling pods rather than services.
 | Symptom | Likely cause | Remedy |
 |---|---|---|
 | Trace coverage panel shows 0% for all providers | No spans received yet | Confirm collectors point at Squadron's OTLP endpoint; check `trace_index.background_flushed` audit events fire |
-| Trace coverage panel shows 0% but `/v1/traces` requests are arriving | Resource attributes too sparse — slice 1 can't extract a key | Enable cloud-aware host detector in your OTel SDK (`host`, `os`, cloud detector for your provider) |
+| Trace coverage panel shows 0% but `/v1/traces` requests are arriving | Resource attributes too sparse, slice 1 can't extract a key | Enable cloud-aware host detector in your OTel SDK (`host`, `os`, cloud detector for your provider) |
 | Most rows show "never" but you know your service emits | host.id / cloud.account.id mismatch with what scanner sees | Verify host.id is the instance ID (i-... for EC2); for GCE use numeric ID |
 | Weak match percentage is high (> 20%) | Many spans key on host.name or service.name | Enable the cloud-aware host detector; spans without `cloud.account.id` always fall to weak match |
 | `rows_evicted` consistently non-zero | Index cap is being hit | Either raise `SQUADRON_TRACEINDEX_MAX_ROWS` or audit `service.name` cardinality |
-| Trace coverage shows N% strong + M% weak but doesn't add to 100 | Some inventory rows have NO match at all — strong+weak ≤ 100 | This is correct — the gap is the uncovered portion |
+| Trace coverage shows N% strong + M% weak but doesn't add to 100 | Some inventory rows have NO match at all, strong+weak ≤ 100 | This is correct, the gap is the uncovered portion |
 | Last seen column shows "1w ago" for actively-running services | Bug or stale traceindex | Restart Squadron; the in-memory cache reseeds on receiver activity |
 | Audit shows `trace_index.background_flushed` but discovery summary doesn't update | Discovery dashboard cache is 30s; refresh after the next cycle | Click the dashboard's refresh button or wait |
 
@@ -285,7 +285,7 @@ slice 2 operator workflow.
 
 ---
 
-# Slice 2 — recommendation kinds (v0.89.79 through v0.89.83)
+# Slice 2, recommendation kinds (v0.89.79 through v0.89.83)
 
 Slice 1 of trace integration shipped VISIBILITY: the dashboard
 panel, the per-Inventory-row `Last seen` column. Slice 2 ships
@@ -335,14 +335,14 @@ probably has a real issue).
 
 For each tier:
 
-- **Compute**: `primitive_enabled` = "has otel* tag" — the slice
+- **Compute**: `primitive_enabled` = "has otel* tag", the slice
   1 detection rule. An EC2 with the `otel-collector` tag but no
   spans in 24h fires `trace-emission-aws-compute`.
-- **Database**: `primitive_enabled` = per-cloud database axis —
+- **Database**: `primitive_enabled` = per-cloud database axis,
   `PerformanceInsightsEnabled` for RDS, `QueryInsightsEnabled`
   for Cloud SQL, etc.
 - **Kubernetes**: `primitive_enabled` = per-cloud observability
-  addon — ADOT for EKS, Managed Prometheus for GKE, Azure
+  addon, ADOT for EKS, Managed Prometheus for GKE, Azure
   Monitor for AKS, Ops Insights for OKE.
 
 ## The three failure modes the recommendation acknowledges
@@ -361,7 +361,7 @@ and the verdict learning loop records it.
    running but pointed at the wrong OTLP endpoint, has a
    broken authentication token, or has been throttled by the
    collector. Check the agent's exporter configuration before
-   merging — the PR is wrong for this case. Decline with a
+   merging, the PR is wrong for this case. Decline with a
    note like "SDK already deployed; checking exporter config."
 
 3. **SDK running but attribute mismatch.** The agent is
@@ -369,7 +369,7 @@ and the verdict learning loop records it.
    values that don't match Squadron's expectation. Squadron
    sees spans, just not attributed to this inventory row.
    Decline with a note like "spans flowing under different
-   host.name — investigating resource detector config."
+   host.name, investigating resource detector config."
 
 The verdict learning loop records decline reasons and feeds
 them into the next proposal cycle. After 3-5 declines in a
@@ -382,7 +382,7 @@ Below the existing TRACE COVERAGE panel ring + per-provider
 chips, slice 2 adds a sub-indicator line:
 
 > ⚠ N resources have the primitive enabled but no recent
-> emission — see Recommendations on each provider for the
+> emission, see Recommendations on each provider for the
 > drafts.
 
 The count is the sum of pending trace-emission recommendations
@@ -417,7 +417,7 @@ to extend an existing block or introduce a new one. Falls back
 to a documented default when it can't parse the repo or finds
 no related block.
 
-For Azure AKS — the most contested tier — the picker uses a
+For Azure AKS, the most contested tier, the picker uses a
 deterministic three-way disjunction:
 
 1. **If the existing `azurerm_kubernetes_cluster` block has
@@ -436,14 +436,14 @@ in 1-2 sentences for the proposer's prompt context. You'll see
 it in the recommendation reasoning text on the
 Recommendations tab.
 
-The 12 per-cloud Terraform patterns the picker emits — copy
+The 12 per-cloud Terraform patterns the picker emits, copy
 these into your IaC review checklist:
 
 - **AWS EC2** (`trace-emission-aws-compute`):
   `aws_ssm_association` with the `AWS-ConfigureAWSPackage` doc
   installing the ADOT Collector via the AWS-managed
   `AWSDistroOTel-Collector` package (auto-selects arm64/amd64). This
-  is the ADOT Collector, not the CloudWatch Agent — the latter does
+  is the ADOT Collector, not the CloudWatch Agent, the latter does
   not emit OpenTelemetry traces.
 - **AWS RDS** (`trace-emission-aws-db`):
   `performance_insights_retention_period = 731` on
@@ -470,7 +470,7 @@ these into your IaC review checklist:
   decision rule above.
 - **OCI Instance** (`trace-emission-oci-compute`):
   cloud-init script in `oci_core_instance.metadata.user_data`.
-  ⚠ Cloud-init only runs on first boot — the recommendation
+  ⚠ Cloud-init only runs on first boot, the recommendation
   flags this as upgrade-during-maintenance. You'll need to
   re-launch or migrate to a fresh instance with the new
   user_data.
@@ -486,8 +486,8 @@ prefix and extracts the provider from the kind itself
 (`trace-emission-{provider}-{tier}`). All 12 kinds route to the
 correct provider's audit scope without any wiring changes on
 your end. The kind-prefix detection sits at the top of the
-switch — more specific than the existing single-segment prefixes
-(`gce-`, `vm-`, `compute-`, etc.) — so the routing stays
+switch, more specific than the existing single-segment prefixes
+(`gce-`, `vm-`, `compute-`, etc.), so the routing stays
 deterministic even when kinds share a vague provider hint.
 
 If you've set up a SIEM consumer to filter on
@@ -498,7 +498,7 @@ single regex for the new arc:
 recommendation_kind ~= "^trace-emission-"
 ```
 
-## Workflow — first trace-emission recommendation
+## Workflow, first trace-emission recommendation
 
 1. Open the Discovery dashboard at `/discovery`. Confirm the
    TRACE COVERAGE panel renders. If the sub-indicator line
@@ -530,7 +530,7 @@ recommendation_kind ~= "^trace-emission-"
   the agent yesterday.** The 24h window may not have elapsed yet
   with the agent live, OR the agent is emitting under a
   different `host.name` / `cloud.resource_id` than Squadron
-  expects. Check the audit timeline for spans from your scope —
+  expects. Check the audit timeline for spans from your scope,
   if Squadron is receiving them but the inventory's `Last seen`
   is still empty, you're in case (3) attribute-mismatch.
 - **The dashboard sub-indicator says 5 but the per-provider
@@ -540,7 +540,7 @@ recommendation_kind ~= "^trace-emission-"
   force a scan; the recommendations should populate.
 - **The iacpicker recommended `monitor_metrics` but my AKS
   cluster has `oms_agent` already.** Check the picker's
-  Reasoning field — if it says "fallback to default; couldn't
+  Reasoning field, if it says "fallback to default; couldn't
   parse repo content," your IaC content wasn't supplied to
   the picker. Either the connect-IaC-repo wizard didn't run
   through for this repo, or the picker hit an HCL parse
@@ -599,19 +599,19 @@ After slice 2, Squadron's positioning reads:
 Three verbs. One control plane. Squadron has gone from
 discovery + recommendation (the v0.85 era) to discovery +
 recommendation + reconciliation (today). The Tuesday LinkedIn
-drumbeat narrative — "make the postmortem about the proposal
-the operator turned down" — is now operator-visible at every
+drumbeat narrative, "make the postmortem about the proposal
+the operator turned down", is now operator-visible at every
 layer of the stack.
 
 ## Cross-references
 
-- [Trace integration slice 1 design doc](./proposals/trace-integration-slice1.md) —
+- [Trace integration slice 1 design doc](./proposals/trace-integration-slice1.md),
   the locked spec this runbook operationalizes.
-- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md) —
+- [Unified Discovery dashboard slice 1](./proposals/unified-discovery-dashboard-slice1.md),
   the dashboard the new TRACE COVERAGE panel sits on.
-- [Database tier slice 2](./proposals/database-tier-slice2.md) —
+- [Database tier slice 2](./proposals/database-tier-slice2.md),
   one of the tiers whose Inventory tab gains a Last seen column.
-- [Kubernetes tier slice 2](./proposals/kubernetes-tier-slice2.md) —
+- [Kubernetes tier slice 2](./proposals/kubernetes-tier-slice2.md),
   same.
-- [Audit log](./audit-log.md) — full catalog of event types
+- [Audit log](./audit-log.md), full catalog of event types
   including the two new trace integration events.

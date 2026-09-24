@@ -37,7 +37,7 @@ service:
 ```
 
 The collector reads its config from disk, and Squadron watches. Squadron shows the
-agent, its health, and its effective config, but the config still lives on the host —
+agent, its health, and its effective config, but the config still lives on the host,
 Squadron cannot change it. This is the right model when config is owned elsewhere
 (GitOps, Ansible, a golden image) and you only want visibility.
 
@@ -68,10 +68,10 @@ makes Squadron a **control plane**, not just a dashboard.
      config_files:
        - /collector.yaml               # base config, merged under Squadron's push
    storage:
-     directory: /var/lib/opamp         # persistent — see instance_uid below
+     directory: /var/lib/opamp         # persistent, see instance_uid below
    ```
 
-3. Run the **supervisor** as your service (systemd, container entrypoint, etc.) —
+3. Run the **supervisor** as your service (systemd, container entrypoint, etc.),
    **not** the collector directly. The process tree is:
 
    ```
@@ -94,7 +94,7 @@ This is enforced server-side, not a UI convention:
 
 - The reconcile loop skips any agent that does not advertise the capability
   (`internal/opamp/reconciler.go`).
-- The config sender refuses to send to such an agent — *"agent does not support
+- The config sender refuses to send to such an agent, *"agent does not support
   remote config"* (`internal/opamp/config_sender.go`).
 
 So until the supervisor advertises `accepts_remote_config`, creating a config in
@@ -104,13 +104,13 @@ begins delivering.
 ## Persistent identity: fixing duplicate agent cards
 
 Squadron keys an agent's card on the OpAMP instance UID. A collector that does not
-persist its instance UID gets a **new UID — and therefore a new card — on every
+persist its instance UID gets a **new UID, and therefore a new card, on every
 restart**, which shows up as duplicate agents for a single host.
 
 The supervisor fixes this natively. It stores a `persistent_state.yaml` in its
 `storage.directory` holding a stable instance UID (a UUIDv7), and reuses it across
 restarts (`cmd/opampsupervisor/supervisor/persistence.go`). As long as
-`storage.directory` is on **persistent** storage (a real path or a mounted volume —
+`storage.directory` is on **persistent** storage (a real path or a mounted volume,
 not an ephemeral tmpfs), the collector keeps **one identity** across restarts and
 redeploys. This is the correct, agent-side fix for duplicate cards; make sure
 `storage.directory` survives restarts.
@@ -120,7 +120,7 @@ redeploys. This is the correct, agent-side fix for duplicate cards; make sure
 A common real-world constraint: the collector needs secrets (backend tokens, mTLS
 material) that must be decrypted at start time and **never written to disk in
 cleartext**. Before adopting the supervisor, teams often make a credential wrapper
-the top-level launcher — it decrypts secrets, sets env, and then runs the collector.
+the top-level launcher, it decrypts secrets, sets env, and then runs the collector.
 
 That collides with the supervisor, because the supervisor wants to be the top-level
 process that owns the collector. The fix is to **invert** the arrangement: run the
@@ -129,8 +129,8 @@ supervisor launches as its `agent.executable`.
 
 The supervisor launches `agent.executable` as a single child process and passes it
 `--config <the-config-the-supervisor-wrote>`. Point `agent.executable` at the shim.
-The shim injects secrets into the environment, then `exec`s the collector —
-**replacing its own process image** — forwarding the supervisor's arguments verbatim.
+The shim injects secrets into the environment, then `exec`s the collector,
+**replacing its own process image**, forwarding the supervisor's arguments verbatim.
 Because `exec` replaces the process, the collector inherits the shim's pid, so the
 supervisor tracks the collector directly:
 
@@ -174,7 +174,7 @@ These are subtle and each one silently breaks the closed loop:
 1. **`exec`, not subprocess.** Use `exec` (bash) / `os.execv` (Python) so the
    collector inherits the shim's pid. If the shim instead spawns the collector as a
    child and stays alive (or forks it to the background), the supervisor tracks the
-   **shim**, not the collector — its restart/stop signals and health checks never
+   **shim**, not the collector, its restart/stop signals and health checks never
    reach the collector, which runs as an invisible grandchild.
 
 2. **Forward the supervisor's args verbatim (`"$@"` / `sys.argv[1:]`).** Do **not**
@@ -182,7 +182,7 @@ These are subtle and each one silently breaks the closed loop:
    its `storage.directory`) and passes it in. Hardcoding a path makes the collector
    run a different config than the one Squadron manages, silently breaking the loop.
 
-3. **Propagate the exit code.** With `exec`/`execv` this is automatic — the
+3. **Propagate the exit code.** With `exec`/`execv` this is automatic, the
    collector's exit status becomes the shim's. A wrapper that runs the collector as a
    subprocess and then `exit 0` (regardless of the child's status) **hides crashes**:
    systemd and the supervisor see a clean exit, so a bad config becomes a silent
@@ -191,7 +191,7 @@ These are subtle and each one silently breaks the closed loop:
 The environment set by the shim reaches the collector because `exec` preserves the
 process environment across the replacement. (The supervisor itself starts the shim
 with its own environment plus any static `agent.env` from `supervisor.yaml`, so
-credential-tool configuration — vault address, role id, etc. — can be supplied via
+credential-tool configuration, vault address, role id, etc., can be supplied via
 the service unit's `Environment=` / `EnvironmentFile=`.)
 
 ## Validate before push, and health-gate after
@@ -227,6 +227,6 @@ delivered" and "what is running" stay the same thing.
 
 ## See also
 
-- [Deployment guide](deployment.md) — exposing the OpAMP (4320) and OTLP (4318) endpoints.
-- [Staged rollouts](rollouts.md) — pushing a config change across a fleet safely.
-- [`examples/supervisor/`](https://github.com/DevOpsMike2/squadron/tree/main/examples/supervisor) — the reference supervisor, collector, and exec-shim.
+- [Deployment guide](deployment.md), exposing the OpAMP (4320) and OTLP (4318) endpoints.
+- [Staged rollouts](rollouts.md), pushing a config change across a fleet safely.
+- [`examples/supervisor/`](https://github.com/DevOpsMike2/squadron/tree/main/examples/supervisor), the reference supervisor, collector, and exec-shim.

@@ -1,15 +1,15 @@
-# Poison-Rate Substrate Integration — slice 4 (closes the §3.3 deferrals)
+# Poison-Rate Substrate Integration, slice 4 (closes the §3.3 deferrals)
 
 Status: chunk 1 shipping in v0.89.177 (#819 Stream 216).
 
 > **CORRECTION (v0.89.229):** Chunk 1's AWS SQS "real" detection was reverted.
 > It read the DLQ's `NumberOfMessagesSent` SUM as the poison rate, but messages
 > moved to a DLQ by the redrive policy (the actual poison messages) are NOT
-> counted by `NumberOfMessagesSent` — only manual `SendMessage` calls are (AWS
+> counted by `NumberOfMessagesSent`, only manual `SendMessage` calls are (AWS
 > docs). So it reported a confident 0/hour for DLQs filling via the normal
 > failed-processing path. AWS SQS is back on §3.3 honest framing (absent
 > sentinel + monitor recommendation). A depth-based detection using the
-> DLQ's `ApproximateNumberOfMessagesVisible` gauge is the planned fix — see
+> DLQ's `ApproximateNumberOfMessagesVisible` gauge is the planned fix, see
 > docs/audit/detection-metric-availability.md.
 
 ## 1. Why this arc exists
@@ -38,10 +38,10 @@ Cloud Monitoring / Azure Monitor / OCI Monitoring
 MetricQuerier substrate per cloud. The AWS substrate from
 that arc (`Scanner.QueryAggregate`, the `CloudWatchClient`
 interface, the per-account rate limiter, the throttle-retry
-loop) already exists and is reused here verbatim — this arc
+loop) already exists and is reused here verbatim, this arc
 adds metric names and a routing branch, not a new substrate.
 
-## 2. Scope of chunk 1 (this slice) — AWS SQS
+## 2. Scope of chunk 1 (this slice), AWS SQS
 
 Chunk 1 closes the AWS §3.3 deferral only. The other three
 clouds keep their honest-framing absent sentinels until
@@ -55,7 +55,7 @@ at a time.
    (`SQSMetricNamespace`, `SQSNumberOfMessagesSentMetricName`,
    `querySQSCounterSum`, `extractSQSQueueName`), reusing the
    existing rate limiter + throttle-retry scaffold.
-2. `DetectSQSPoisonRate(ctx, dlqARN)` — a real
+2. `DetectSQSPoisonRate(ctx, dlqARN)`, a real
    CloudWatch-backed detection that reads the DLQ's
    `NumberOfMessagesSent` SUM over a rolling 1-hour window.
 3. An enrichment pass in `scanRegionSQS` that, for every SQS
@@ -89,7 +89,7 @@ poison_rate_high_band = poison_rate_per_hour >= 60   (1/min)
 `NumberOfMessagesSent` on the DLQ is the proxy for "poison
 messages arriving in the DLQ over the last hour."
 `OCIPoisonRatePerHourHighThreshold` / `PoisonRatePerHourHighThreshold`
-(60, 1/min) is the shared cross-cloud band from slice 3 §4 —
+(60, 1/min) is the shared cross-cloud band from slice 3 §4,
 unchanged, now actually evaluated for AWS.
 
 ### 3.1 Real-zero vs absent
@@ -112,7 +112,7 @@ measured," never "measured as zero."
 ## 4. Honest-framing transition
 
 After chunk 1, AWS SQS no longer carries §3.3 framing for
-the poison-rate axis — it ships **real detection**. The
+the poison-rate axis, it ships **real detection**. The
 `sqs-poison-rate-monitor-add` recommendation still fires
 (operators still want the CloudWatch alarm wired by
 Terraform), but its reasoning text now reports the measured
@@ -136,35 +136,35 @@ observes byte-identical output to v0.89.176.
 
 Unchanged from the slice-4 SQS scanner plus the cold-start
 substrate: `cloudwatch:GetMetricStatistics` (already granted
-for the Lambda metric paths) covers the AWS/SQS namespace —
+for the Lambda metric paths) covers the AWS/SQS namespace,
 GetMetricStatistics is namespace-agnostic at the IAM layer.
 No new permission.
 
 ## 7. Chunk map
 
 - **Chunk 1 (this slice, v0.89.177): AWS SQS real detection.**
-- **Chunk 2 (v0.89.178): GCP Cloud Tasks real detection** —
+- **Chunk 2 (v0.89.178): GCP Cloud Tasks real detection**,
   Cloud Monitoring `task_attempt_count` failed-attempt rate
   (`response_code != "OK"`), measured on the queue itself (no
   DLQ primitive).
 - **Chunk 3a (v0.89.179): Azure Service Bus real detection,
-  NAMESPACE granularity** — Azure Monitor `DeadletteredMessages`
+  NAMESPACE granularity**, Azure Monitor `DeadletteredMessages`
   gauge, rate = max-min delta (net accumulation) over the window.
   Closes §3.3 (real metric). Per-queue attribution deferred.
 - **Chunk 3b (v0.89.180): Azure Service Bus per-queue
-  attribution** — splits `DeadletteredMessages` by the
+  attribution**, splits `DeadletteredMessages` by the
   `EntityName` dimension (`$filter="EntityName eq '*'"`, one
   call) to attribute the rate to the worst-offending queue
   (poison_rate_worst_queue). Closes the §3.2 scanner-coverage-gap
-  via the metric dimension itself — no separate ARM queue
+  via the metric dimension itself, no separate ARM queue
   enumeration was needed, so the planned scanner walk was
   unnecessary. Falls back to the 3a namespace reading when no
   per-entity series is returned.
-- **Chunk 4 (v0.89.181): OCI Queue Service real detection —
+- **Chunk 4 (v0.89.181): OCI Queue Service real detection,
   CLOSES the substrate arc.** OCI Monitoring `MessagesInDlq`
   dead-letter depth gauge (namespace `oci_queue`), rate = max-min
   delta over the window (same gauge-delta shape as Azure). Retires
-  the last §3.3 poison-rate deferral — all four clouds now read a
+  the last §3.3 poison-rate deferral, all four clouds now read a
   real metric. Honest caveat: the exact OCI metric name should be
   confirmed against OCI's Monitoring reference; a name mismatch
   returns no datapoints and degrades safely to the absent sentinel

@@ -1,4 +1,4 @@
-# Discovery AWS — first-time setup
+# Discovery AWS, first-time setup
 
 This is the operator-facing runbook for connecting a self-hosted
 Squadron deployment to a real AWS account for the first time. It
@@ -7,7 +7,7 @@ policy + access key + credentials file) plus the Squadron-side
 restart and the in-product wizard walk.
 
 If you're reading this as a Squadron developer wondering "wait, the
-wizard already walks the operator through this?" — yes, the wizard
+wizard already walks the operator through this?", yes, the wizard
 does the in-product steps, but it can't do the IAM clicks for the
 operator. This runbook fills the gap on the AWS side and frames the
 wizard inside the larger flow.
@@ -32,7 +32,7 @@ Three IAM objects in your AWS account:
    an `sts:ExternalId` condition).
 3. **An inline `AssumeSquadronDiscovery` policy** on the
    `squadron-bot` user that authorizes the assume-role call. Scoped
-   to the discovery role's ARN — not a wildcard.
+   to the discovery role's ARN, not a wildcard.
 
 This split is the AWS-recommended self-hosted bootstrap pattern. The
 long-lived credentials Squadron holds belong to a principal that can
@@ -47,14 +47,14 @@ through short-lived STS tokens minted on each scan.
   `http://localhost:8090` (or wherever you've configured it).
 - A terminal where you can write to `~/.aws/credentials`.
 
-## Step 1 — Open the wizard
+## Step 1, Open the wizard
 
 In the Squadron UI, open the **Discovery → AWS** page and click
 **Connect new account**. The wizard starts at step 1 (Enter your AWS
 account ID).
 
 Enter your 12-digit AWS account ID and click Next. **Do not close
-the wizard until you've finished step 6 (Save)** — the wizard holds
+the wizard until you've finished step 6 (Save)**, the wizard holds
 a per-deployment ExternalId in browser state. Closing or refreshing
 mid-flow regenerates the ExternalId and forces you to update the
 trust policy on the role to match.
@@ -66,12 +66,12 @@ paste your existing UUID instead of accepting the regenerated one.
 The wizard now sits on step 2 (the trust policy display). Leave the
 tab open and switch to AWS.
 
-## Step 2 — Create the `squadron-bot` IAM user
+## Step 2, Create the `squadron-bot` IAM user
 
 In AWS console, open IAM → Users → **Create user**.
 
 - User name: `squadron-bot`
-- **Uncheck** "Provide user access to the AWS Management Console" —
+- **Uncheck** "Provide user access to the AWS Management Console",
   this user is programmatic only.
 - Permissions: **skip** for now. We attach the assume-role policy
   after the discovery role exists, because the policy needs to
@@ -86,9 +86,9 @@ After creation, AWS shows you the user's ARN. It looks like:
 arn:aws:iam::<ACCOUNT_ID>:user/squadron-bot
 ```
 
-Note this — the next step needs it.
+Note this, the next step needs it.
 
-## Step 3 — Create the `SquadronDiscovery` IAM role
+## Step 3, Create the `SquadronDiscovery` IAM role
 
 Back in IAM, open Roles → **Create role**. Select
 **Custom trust policy**.
@@ -96,7 +96,7 @@ Back in IAM, open Roles → **Create role**. Select
 ### 3a. Trust policy
 
 Copy the trust policy from the Squadron wizard's step 2 (use the
-**Copy trust policy** button — this gets you the version with the
+**Copy trust policy** button, this gets you the version with the
 correct `<ACCOUNT_ID>` substitution and ExternalId).
 
 By default, the wizard's trust policy uses the AWS account root as
@@ -139,15 +139,15 @@ click **Next**.
 
 ### 3b. Permissions
 
-On the Add permissions page, **skip** selecting any managed policy
-— the inline policy we'll add after role creation is the cleaner
+On the Add permissions page, **skip** selecting any managed policy,
+the inline policy we'll add after role creation is the cleaner
 fit for a single-purpose role like this.
 
 Click **Next**.
 
 ### 3c. Name and create
 
-- Role name: `SquadronDiscovery` (exact case — Squadron's audit
+- Role name: `SquadronDiscovery` (exact case, Squadron's audit
   events expect this string)
 - Description: anything memorable, e.g. "Read-only discovery role
   for Squadron. Assumed by squadron-bot. Slice 1+2+3a
@@ -156,7 +156,7 @@ Click **Next**.
 Click **Create role**.
 
 AWS lands you on the role's detail page. You'll see a warning that
-the role has no permissions — that's expected.
+the role has no permissions, that's expected.
 
 ### 3d. Attach the permissions policy
 
@@ -226,7 +226,7 @@ All Describe/List/Get; no write actions. Click **Next**. Policy name:
 
 The role is now ready.
 
-## Step 4 — Attach the AssumeRole policy to `squadron-bot`
+## Step 4, Attach the AssumeRole policy to `squadron-bot`
 
 Back to IAM → Users → `squadron-bot`. Permissions tab → **Add
 permissions** → **Create inline policy** → JSON editor.
@@ -247,13 +247,13 @@ Paste:
 ```
 
 Replace `<ACCOUNT_ID>` with your 12-digit account ID. The Resource
-must point at the exact role ARN — not a wildcard. This is the
+must point at the exact role ARN, not a wildcard. This is the
 authoritative boundary on what `squadron-bot` can do beyond its own
 basic identity operations.
 
 Click Next. Policy name: `AssumeSquadronDiscovery`. Create.
 
-## Step 5 — Generate the access key
+## Step 5, Generate the access key
 
 On the `squadron-bot` user page, go to the **Security credentials**
 tab → **Create access key**.
@@ -270,7 +270,7 @@ reveal it.
 **Do not paste these values into any chat, message thread, or shared
 log.** AWS shows the secret access key exactly once.
 
-## Step 6 — Configure Squadron's credentials file
+## Step 6, Configure Squadron's credentials file
 
 In your terminal:
 
@@ -299,7 +299,7 @@ from AWS. Save the file. Click **Done** in the AWS console.
 (In AWS, you can now optionally also deactivate any older keys for
 this user; if this was your first key creation, skip.)
 
-## Step 7 — Restart Squadron with `AWS_PROFILE=squadron-bot`
+## Step 7, Restart Squadron with `AWS_PROFILE=squadron-bot`
 
 Squadron's AWS SDK chain reads credentials from `~/.aws/credentials`
 keyed by the `AWS_PROFILE` env var. Set it before launch.
@@ -319,58 +319,58 @@ If you use docker-compose, add `AWS_PROFILE=squadron-bot` to the
 service's environment and mount `~/.aws` read-only into the
 container.
 
-## Step 8 — Validate the connection
+## Step 8, Validate the connection
 
 Return to the Squadron wizard tab. Click through:
 
-- Step 2 (trust policy display) — Next.
-- Step 3 (permissions policy display) — Next.
-- Step 4 (role ARN) — paste
+- Step 2 (trust policy display), Next.
+- Step 3 (permissions policy display), Next.
+- Step 4 (role ARN), paste
   `arn:aws:iam::<ACCOUNT_ID>:role/SquadronDiscovery`. Next.
-- Step 5 (validate) — click **Validate connection**.
+- Step 5 (validate), click **Validate connection**.
 
 The "What just happened" panel should show eight green checks:
 
 - ✓ `sts:AssumeRole`
-- ✓ `ec2 probe` (with a sample count — 0 if you have no EC2
+- ✓ `ec2 probe` (with a sample count, 0 if you have no EC2
   instances yet)
 - ✓ `lambda probe`
 - ✓ `rds probe`
-- ✓ `s3 probe` (slice 3a, v0.88.0 — single `s3:ListAllMyBuckets`
+- ✓ `s3 probe` (slice 3a, v0.88.0, single `s3:ListAllMyBuckets`
   call)
-- ✓ `alb probe` (slice 3a, v0.88.0 — single
+- ✓ `alb probe` (slice 3a, v0.88.0, single
   `elasticloadbalancing:DescribeLoadBalancers` call with
   PageSize=1)
-- ✓ `eks probe` (slice 3b, v0.89.0 — single `eks:ListClusters`
+- ✓ `eks probe` (slice 3b, v0.89.0, single `eks:ListClusters`
   call with MaxResults=1)
-- ✓ `dynamodb probe` (slice 4, v0.89.6 — single
+- ✓ `dynamodb probe` (slice 4, v0.89.6, single
   `dynamodb:ListTables` call with Limit=1)
-- ✓ `ecs probe` (slice 5, v0.89.10 — single `ecs:ListClusters`
+- ✓ `ecs probe` (slice 5, v0.89.10, single `ecs:ListClusters`
   call with MaxResults=1)
 
 If any check fails, the panel renders a humanized error with a
-`SuggestedStep` jump-back button — click it, fix the IAM
+`SuggestedStep` jump-back button, click it, fix the IAM
 configuration named in the message, and re-validate.
 
 Common failure modes:
 
-- **`sts:AssumeRole` fails with "Access Denied"** — the
+- **`sts:AssumeRole` fails with "Access Denied"**, the
   `AssumeSquadronDiscovery` inline policy on `squadron-bot` is
   missing or scoped wrong. Re-check step 4 above.
-- **`sts:AssumeRole` fails with "Invalid ExternalId"** — the trust
+- **`sts:AssumeRole` fails with "Invalid ExternalId"**, the trust
   policy on `SquadronDiscovery` references a different ExternalId
   than the wizard's current state. Update one to match the other.
 - **`ec2 probe` / `lambda probe` / `rds probe` / `s3 probe` /
   `alb probe` / `eks probe` / `dynamodb probe` / `ecs probe` fails
-  with AccessDenied** — the `SquadronDiscoveryReadOnly` inline
+  with AccessDenied**, the `SquadronDiscoveryReadOnly` inline
   policy on the role is missing or scoped wrong. Re-check step 3d
   above.
 - **`sts:AssumeRole` hangs for 30+ seconds then fails with "no
-  credentials"** — Squadron didn't see `~/.aws/credentials`. Check
+  credentials"**, Squadron didn't see `~/.aws/credentials`. Check
   that `AWS_PROFILE=squadron-bot` is in the process environment
   (`ps eww -p <PID> | tr ' ' '\n' | grep AWS_`).
 
-## Step 9 — Save the connection
+## Step 9, Save the connection
 
 Once Validate is green, click Next → Step 6 (Save the connection) →
 **Save**. Squadron:
@@ -386,7 +386,7 @@ Once Validate is green, click Next → Step 6 (Save the connection) →
 Wizard closes. You should now see the connection in the "Connected
 accounts" list on `/discovery/aws`.
 
-## Step 10 — Trigger your first scan
+## Step 10, Trigger your first scan
 
 The Inventory tab on `/discovery/aws` triggers a scan against the
 connection. If your account has EC2 / Lambda / RDS / S3 / ALB / EKS
@@ -396,9 +396,9 @@ tables / ECS clusters sections. The Recommendations tab populates
 from the proposer's analysis of the inventory.
 
 If your account is empty (fresh test account), all eight sections
-will show "no resources found" — that's expected and confirms the
+will show "no resources found", that's expected and confirms the
 scanner walked the API successfully with no items to return. Spin
-up a free-tier t2.micro EC2 instance — or an empty S3 bucket — to
+up a free-tier t2.micro EC2 instance, or an empty S3 bucket, to
 see the inventory populate.
 
 ## Rotation and cleanup
@@ -428,14 +428,14 @@ If you connected your AWS account on an earlier Squadron release and
 have since upgraded, your inline `SquadronDiscoveryReadOnly` policy
 may be missing actions that newer releases need. The symptom is a
 partial scan: the audit event `discovery.aws.scan_completed` carries
-`partial: true` and `failed_services: ["s3", "alb", "eks", "dynamodb", "ecs", ...]`
+`partial: true` and `failed_services: ["s3", "alb", "eks", "dynamodb", "ecs"...]`
 naming the service walks that hit `AccessDenied`. (v0.88.3 surfaces every
-failed service in `partial_reason`, joined by `; ` — earlier releases
+failed service in `partial_reason`, joined by `; `, earlier releases
 only showed the last one.)
 
 The fix is operator-side: edit the inline policy in the IAM console
 and add the missing actions. **Squadron does not auto-migrate your
-role's IAM policy** — that's a write operation on your IAM, which
+role's IAM policy**, that's a write operation on your IAM, which
 Squadron's discovery role explicitly does not have permission to do.
 
 ### Slice-to-IAM mapping
@@ -443,13 +443,13 @@ Squadron's discovery role explicitly does not have permission to do.
 | Release | New actions added | Cumulative count |
 | ------- | ----------------- | :-: |
 | v0.85.0 (slice 1) | `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:DescribeRegions`, `ec2:DescribeTags`, `lambda:ListFunctions`, `lambda:GetFunction`, `lambda:GetFunctionConfiguration`, `lambda:ListTags` | 8 |
-| v0.87.0 (slice 2 — RDS) | `rds:DescribeDBInstances` | 9 |
-| v0.88.0 (slice 3a — S3 + ALB) | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketLogging`, `s3:GetBucketTagging`, `s3:GetBucketRequestPayment`, `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeLoadBalancerAttributes`, `elasticloadbalancing:DescribeTags` | 17 |
-| v0.89.0 (slice 3b — EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups`, `eks:ListFargateProfiles` | 23 |
-| v0.89.1 (hotfix — see #605) | (correction) v0.89.0 was published with 5 eks:* actions but the scanner also calls `eks:ListFargateProfiles`. Add the 6th action if you set up against the v0.89.0 template; no other change. | 23 |
-| v0.89.6 (slice 4 — DynamoDB) | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:DescribeContributorInsights`, `dynamodb:ListTagsOfResource` | 27 |
-| v0.89.10 (slice 5 — ECS/Fargate) | `ecs:ListClusters`, `ecs:DescribeClusters`, `ecs:ListTagsForResource` | 30 |
-| v0.89.207 (event-source tier — IAM fix) | `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sns:ListTopics`, `sns:GetTopicAttributes`, `events:ListEventBuses`, `events:ListRules`, `events:ListTargetsByRule`, `states:ListStateMachines`, `states:DescribeStateMachine` — **power the SQS/SNS/EventBridge/Step Functions event-source recommendation tier. That tier shipped in v0.89.149–160 but these actions were missing from this template until v0.89.207, so a role created against the earlier template returns AccessDenied + an empty event-source inventory at scan time. Add these 9 actions to an existing role to enable it.** | 39 |
+| v0.87.0 (slice 2, RDS) | `rds:DescribeDBInstances` | 9 |
+| v0.88.0 (slice 3a, S3 + ALB) | `s3:ListAllMyBuckets`, `s3:GetBucketLocation`, `s3:GetBucketLogging`, `s3:GetBucketTagging`, `s3:GetBucketRequestPayment`, `elasticloadbalancing:DescribeLoadBalancers`, `elasticloadbalancing:DescribeLoadBalancerAttributes`, `elasticloadbalancing:DescribeTags` | 17 |
+| v0.89.0 (slice 3b, EKS) | `eks:ListClusters`, `eks:DescribeCluster`, `eks:ListAddons`, `eks:DescribeAddon`, `eks:ListNodegroups`, `eks:ListFargateProfiles` | 23 |
+| v0.89.1 (hotfix, see #605) | (correction) v0.89.0 was published with 5 eks:* actions but the scanner also calls `eks:ListFargateProfiles`. Add the 6th action if you set up against the v0.89.0 template; no other change. | 23 |
+| v0.89.6 (slice 4, DynamoDB) | `dynamodb:ListTables`, `dynamodb:DescribeTable`, `dynamodb:DescribeContributorInsights`, `dynamodb:ListTagsOfResource` | 27 |
+| v0.89.10 (slice 5, ECS/Fargate) | `ecs:ListClusters`, `ecs:DescribeClusters`, `ecs:ListTagsForResource` | 30 |
+| v0.89.207 (event-source tier, IAM fix) | `sqs:ListQueues`, `sqs:GetQueueAttributes`, `sns:ListTopics`, `sns:GetTopicAttributes`, `events:ListEventBuses`, `events:ListRules`, `events:ListTargetsByRule`, `states:ListStateMachines`, `states:DescribeStateMachine`, **power the SQS/SNS/EventBridge/Step Functions event-source recommendation tier. That tier shipped in v0.89.149-160 but these actions were missing from this template until v0.89.207, so a role created against the earlier template returns AccessDenied + an empty event-source inventory at scan time. Add these 9 actions to an existing role to enable it.** | 39 |
 
 ### How to update
 
@@ -458,7 +458,7 @@ Squadron's discovery role explicitly does not have permission to do.
    **Edit**.
 3. Replace the entire JSON with the latest policy block from
    **Step 3d** of this runbook (which always reflects the most
-   recent shipped release). The full action list is cumulative —
+   recent shipped release). The full action list is cumulative,
    never delete an earlier slice's actions when adding a new
    slice's actions.
 4. Click **Next** → **Save changes**. The next `sts:AssumeRole`
@@ -475,7 +475,7 @@ A quick health check after the update:
 ```bash
 # Compares the action count in your live role to the expected
 # v0.89.207+ count (39 actions). Run as the squadron-terraform or
-# any IAM-read-capable profile (not squadron-bot — that profile
+# any IAM-read-capable profile (not squadron-bot, that profile
 # only has sts:AssumeRole, not iam:GetRolePolicy).
 AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
   --role-name SquadronDiscovery \
@@ -483,10 +483,10 @@ AWS_PROFILE=<your-iam-read-profile> aws iam get-role-policy \
   --query 'PolicyDocument.Statement[0].Action | length(@)'
 ```
 
-Expected output: `39` for v0.89.207+ (`30` for v0.89.10–v0.89.206 —
+Expected output: `39` for v0.89.207+ (`30` for v0.89.10, v0.89.206,
 these lacked the 9 event-source actions, so event-source discovery
-returned AccessDenied; v0.89.6–v0.89.9 expected `27`; v0.89.0–v0.89.5
-expected `23`; v0.85.0–v0.87.x ranged from 8 to 17). Anything less than
+returned AccessDenied; v0.89.6, v0.89.9 expected `27`; v0.89.0, v0.89.5
+expected `23`; v0.85.0, v0.87.x ranged from 8 to 17). Anything less than
 the expected value means you're missing actions for one of the shipped
 slices.
 
@@ -497,7 +497,7 @@ v0.85.0), slice 2 (+ RDS, v0.87.0), slice 3a (+ S3 + ALB,
 v0.88.0), slice 3b (+ EKS, v0.89.0), slice 4 (+ DynamoDB, v0.89.6),
 and slice 5 (+ ECS / Fargate, v0.89.10). ECS/Fargate landed in
 v0.89.10 as slice 5. Each future slice expands the
-permissions-policy template in the same place — the policy you
+permissions-policy template in the same place, the policy you
 copied in step 3d.
 
 **Honest scope limitation for DynamoDB (slice 4):** Squadron's
@@ -506,7 +506,7 @@ status (`dynamodb:DescribeContributorInsights`). Squadron does
 not detect SDK-side OpenTelemetry or X-Ray instrumentation in
 your application code. If your DynamoDB SDK is OTel-wrapped on
 the client side, Squadron will report the table as
-uninstrumented — this is a known limitation of cloud-API-only
+uninstrumented, this is a known limitation of cloud-API-only
 scanning. Operators in that posture can decline the
 recommendation; the rule is the right one for the cloud-API
 surface Squadron has access to, even when the operator's
@@ -514,15 +514,15 @@ application code is doing more.
 
 **Honest scope limitation for ECS / Fargate (slice 5):** Squadron
 detects cluster-level CloudWatch Container Insights. Squadron
-does not detect task-definition-level instrumentation — X-Ray
+does not detect task-definition-level instrumentation, X-Ray
 daemon sidecars, ADOT collector sidecars, or FireLens log routing
 in your task definitions. If your task defs include those
 sidecars but the cluster does not have Container Insights
-enabled, Squadron will report the cluster as uninstrumented —
+enabled, Squadron will report the cluster as uninstrumented,
 this is a known limitation of cluster-level scanning. A future
 slice can extend the rule to inspect task definitions if
 operators request it. Both Fargate and EC2 launch types are
-covered by the same per-cluster rule — Container Insights is
+covered by the same per-cluster rule, Container Insights is
 per-cluster, not per-launch-type.
 
 The role does **not** include any write or modify permission. The
@@ -540,14 +540,14 @@ you copying snippets by hand.
 
 See [discovery-iac-first-time-setup.md](discovery-iac-first-time-setup.md)
 for the GitHub PAT bootstrap and the IaC wizard walk. The IaC
-setup is independent of the AWS setup — you can keep scanning
-without it — but the close-the-loop demo Squadron is built around
+setup is independent of the AWS setup, you can keep scanning
+without it, but the close-the-loop demo Squadron is built around
 needs both halves wired.
 
 ## Scanning multiple accounts
 
 Once you've connected more than one AWS account (re-run the wizard
-once per account — same trust policy template, same external-ID
+once per account, same trust policy template, same external-ID
 generation, same Save flow), v0.89.7a's multi-account orchestrator
 lets you kick off scans across every connected account in one
 call:
@@ -570,18 +570,18 @@ account's lapsed role won't block the rest).
 
 Optional query parameters:
 
-- `regions=us-east-1,eu-west-1` — override the per-call region
+- `regions=us-east-1,eu-west-1`, override the per-call region
   list. Empty falls back to each connection's stored region list
   (the same posture as the per-account endpoint's empty-body
   branch).
-- `concurrency=N` — maximum simultaneous per-account scans.
+- `concurrency=N`, maximum simultaneous per-account scans.
   Values above 8 are clamped silently; the effective value is
   echoed back in the response.
 
 The audit timeline shows one
 `discovery.aws.scan_all_completed` event linked to N per-account
 `discovery.aws.scan_completed` events via the shared
-`scan_all_id` payload field — a forensic reader can reconstruct
+`scan_all_id` payload field, a forensic reader can reconstruct
 every per-account scan from the aggregate event ID.
 
 The UI surface for multi-account scanning (the "Scan all" CTA on

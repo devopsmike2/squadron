@@ -11,7 +11,7 @@ agents.
 
 ## Two paths
 
-### Path A — "Start fresh"
+### Path A, "Start fresh"
 
 You don't have an OpenTelemetry Collector running yet. Squadron
 asks which backend you're sending telemetry to
@@ -22,22 +22,22 @@ Generic OTLP) and generates:
    backend AND to this Squadron's OpAMP server.
 2. A required-environment-variables checklist (the config
    references env vars by name; you set them on the collector
-   host — Squadron never sees your API keys).
+   host, Squadron never sees your API keys).
 3. A per-platform install command:
-   - **Docker** — `docker run …` with the config mounted
-   - **Bare metal / systemd** — `curl` to fetch the binary +
+   - **Docker**, `docker run …` with the config mounted
+   - **Bare metal / systemd**, `curl` to fetch the binary +
      `systemctl` to launch
-   - **Kubernetes (Helm)** — `helm upgrade --install` with the
+   - **Kubernetes (Helm)**, `helm upgrade --install` with the
      generated config in `values.yaml`
 
 When you run the agent, the wizard's final step polls every 3
 seconds and lights up the moment a new agent connects.
 
-### Path B — "I have collectors already running"
+### Path B, "I have collectors already running"
 
 You already have OpenTelemetry Collectors deployed and shipping
 telemetry. Squadron generates just the **OpAMP extension snippet**
-to paste into each existing config — no re-deploy, no swap of the
+to paste into each existing config, no re-deploy, no swap of the
 exporter, no disruption to current pipelines.
 
 The wizard also includes a **bulk mode**: paste a list of
@@ -58,7 +58,7 @@ exactly which env vars to export before starting the collector.
 
 For Path B: the path to your existing collector config(s) and the
 ability to restart the collector(s). The opamp snippet is two top-
-level YAML keys (`extensions:` and `service:`) — you merge them
+level YAML keys (`extensions:` and `service:`), you merge them
 into your existing config without replacing anything.
 
 ## How it works under the hood
@@ -106,27 +106,27 @@ All templates ship with the OTLP receivers (`grpc:4317` and
 `http:4318`), a `batch` processor (the one processor every config
 should have), and full traces/metrics/logs pipelines wired to the
 backend's exporter. Production tuning (memory_limiter, sampling,
-resource detection) is left for you to add — the starter is a
+resource detection) is left for you to add, the starter is a
 minimum-viable starting point, not a production-ready template.
 
 ## Deliberately out of scope
 
-By design, the wizard generates commands and configs — it never
+By design, the wizard generates commands and configs, it never
 reaches out to your hosts or handles your secrets:
 
-- **Active network discovery** — probing a CIDR for open OTel
+- **Active network discovery**, probing a CIDR for open OTel
   ports. Full of security and false-positive landmines; no plans.
-- **Backend health-check** — verifying that the API key you set
+- **Backend health-check**, verifying that the API key you set
   actually works before the wizard moves on. The wizard relies on
   the collector itself logging failures; Squadron never sees your
   keys and won't.
-- **Automated `docker run` / `helm upgrade`** — Squadron generates
+- **Automated `docker run` / `helm upgrade`**, Squadron generates
   the commands; you run them. It won't ssh out to hosts on the
   operator's behalf.
 
 ## See also
 
-- `docs/operating.md` — broader operational guidance for Squadron
+- `docs/operating.md`, broader operational guidance for Squadron
   (OpAMP configuration, agent health, troubleshooting)
-- `docs/savings.md` — the Savings dashboard the wizard
+- `docs/savings.md`, the Savings dashboard the wizard
   drops you into after your first agent connects

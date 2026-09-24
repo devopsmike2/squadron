@@ -1,4 +1,4 @@
-# OSS / Enterprise separation — the contract
+# OSS / Enterprise separation, the contract
 
 Squadron is **open-core**. The open-source core (Apache-2.0) is fully
 functional on its own; the commercial value sits in closed packs that are
@@ -19,7 +19,7 @@ Every paid feature is wired through the same open/closed seam:
    the private enterprise repo can import it across module boundaries. The
    interface is the *only* thing the open core knows about the feature.
 2. **A no-op / limited default provider**, wired by the OSS build. This is
-   real, shipping OSS behaviour — the feature is inert but the binary is
+   real, shipping OSS behaviour, the feature is inert but the binary is
    complete (nothing crashes, nothing is half-wired).
 3. **The real provider in the private repo**, wired by the edition build via
    a tag-guarded wire file that is dropped into the build tree at release
@@ -42,7 +42,7 @@ drop-in mechanism.
 | Rollout change windows | `extension/changewindow` | windows stored as metadata; engine never blocks | store-backed blackout enforcement | `compliance` |
 | SIEM audit dispatch | `extension/siem` | destinations stored, never delivered to | Splunk HEC + HMAC-signed webhook fan-out | `compliance` |
 | Per-call access audit | (wired in `wire_compliance.go`) | middleware unmounted; no per-call evidence rows | `middleware.APIAccessAudit` mounted | `compliance` |
-| Commercial-tier serverless detectors | `extension/detectors` | `NoOpProvider` — never activates; `commercial_detectors.enabled` inert | honours the switch; re-points cold-start / error-rate queries at Lambda Insights / Application Insights + wires observation stores | `enterprise` |
+| Commercial-tier serverless detectors | `extension/detectors` | `NoOpProvider`, never activates; `commercial_detectors.enabled` inert | honours the switch; re-points cold-start / error-rate queries at Lambda Insights / Application Insights + wires observation stores | `enterprise` |
 
 The wiring files that select the provider per edition:
 
@@ -73,7 +73,7 @@ opening a pack up to OSS later is a one-line provider swap.
   control plane, staged rollouts, config editor, cost/savings, alerts, audit
   log, and demo mode. Breadth + the core loop stay free.
 
-## Adding a new paid feature — checklist
+## Adding a new paid feature, checklist
 
 1. Define the narrowest possible interface under `extension/<name>` (adapt
    internal types at the wire layer; never import `internal/` from the

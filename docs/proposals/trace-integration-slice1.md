@@ -1,4 +1,4 @@
-# Trace integration — slice 1 design
+# Trace integration, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. First
 arc that consumes Squadron's own OTLP receiver stream as DISCOVERY
@@ -109,20 +109,20 @@ provider-native identifiers. The two do not naturally align.
 Per OTel semantic conventions, the relevant resource attributes
 are:
 
-- `host.id` — provider-native instance ID (EC2 i-…, GCE numeric
+- `host.id`, provider-native instance ID (EC2 i-…, GCE numeric
   ID, Azure VM ID, OCI instance OCID). Set by the OTel SDK's
   cloud-aware host detector. Most reliable when set.
-- `host.name` — host's network name. Set by the OS detector;
+- `host.name`, host's network name. Set by the OS detector;
   often the same as the instance hostname.
-- `cloud.account.id` — AWS account ID / GCP project ID / Azure
+- `cloud.account.id`, AWS account ID / GCP project ID / Azure
   subscription ID / OCI tenancy OCID. Set by the cloud detector.
-- `cloud.resource_id` — full ARN-shaped identifier. Set by the
+- `cloud.resource_id`, full ARN-shaped identifier. Set by the
   cloud detector when available.
-- `k8s.cluster.name` — for K8s workloads. Set by the K8s
+- `k8s.cluster.name`, for K8s workloads. Set by the K8s
   detector.
-- `db.system` + `db.name` — for database workloads. Set by the
+- `db.system` + `db.name`, for database workloads. Set by the
   DB SDK.
-- `service.name` — the operator-controlled service identifier.
+- `service.name`, the operator-controlled service identifier.
   Always set but not naturally tied to inventory.
 
 Slice 1's matching strategy: build a `resource_key` per incoming
@@ -167,7 +167,7 @@ CREATE TABLE trace_resource_seen (
     span_count_24h           INTEGER NOT NULL,
     root_span_count_24h      INTEGER NOT NULL,
     attributes_json          TEXT,             -- last full resource attribute map for diagnostic UI
-    match_confidence         TEXT NOT NULL,    -- "strong" / "weak" — strong if cloud.resource_id or host.id keyed
+    match_confidence         TEXT NOT NULL,    -- "strong" / "weak", strong if cloud.resource_id or host.id keyed
     updated_at               TIMESTAMP NOT NULL
 );
 CREATE INDEX idx_trace_resource_seen_provider_scope ON trace_resource_seen(provider, scope_id);
@@ -400,7 +400,7 @@ sequential to keep the change surface coherent for review.
     without errors.
 12. **Span content not in audit.** Verify across both new audit
     events that no span attributes, no span names, no trace IDs
-    are in the payload — only the meta-shape (counts, sizes).
+    are in the payload, only the meta-shape (counts, sizes).
 
 ## 12. Threat model
 
@@ -491,7 +491,7 @@ about Tuesday's surprise." Trace integration is what makes the
 
 Slice 2 of trace integration turns the visibility into
 recommendation kinds: `trace-emission-aws-compute`,
-`trace-emission-gcp-k8s`, etc. — each one a proposer-emitted
+`trace-emission-gcp-k8s`, etc., each one a proposer-emitted
 recommendation that says "Resource X has the primitive enabled
 but no recent emission. Suggested investigation: SDK deployment
 check via the inventory tab on each provider."

@@ -11,12 +11,12 @@ A background goroutine polls the agents table on a fixed cadence
 (default 60s). On each tick, it classifies every agent into two
 buckets:
 
-- **healthy** — `time.Since(last_seen) <= silence_threshold`
-- **silent** — `time.Since(last_seen) > silence_threshold`
+- **healthy**, `time.Since(last_seen) <= silence_threshold`
+- **silent**, `time.Since(last_seen) > silence_threshold`
 
 When an agent transitions between buckets (healthy → silent, or
 silent → healthy), the watcher dispatches a webhook event. There
-are no spurious "still silent" events — only edges.
+are no spurious "still silent" events, only edges.
 
 To avoid a noisy burst at startup, the watcher does **not** fire
 for agents that are already silent on its first poll. You'll get
@@ -68,7 +68,7 @@ expected entry.
 `Content-Type: application/json`, `User-Agent: Squadron/silent-agents`.
 
 The watcher waits 10 seconds for a response. Non-2xx responses are
-logged but not retried — in v0.34 we'll add a retry queue with
+logged but not retried, in v0.34 we'll add a retry queue with
 exponential backoff.
 
 ## Pairing with the existing SquadronQL alerts
@@ -80,13 +80,13 @@ condition is structural (the agent is gone).
 
 Use SquadronQL alerts for "metric value crossed a threshold". Use
 the silent-agent watcher for "I want a page when a collector dies".
-Both write to webhooks, so the same receiver can handle both — just
+Both write to webhooks, so the same receiver can handle both, just
 key off the `kind` field (silent-agent events have `kind:
 "silent_agent"`; SquadronQL alerts don't set `kind`).
 
 ## Receiver examples
 
-**Slack incoming webhook** — wrap with a tiny relay:
+**Slack incoming webhook**, wrap with a tiny relay:
 
 ```python
 @app.post("/squadron/silent")
@@ -97,7 +97,7 @@ def relay(evt: dict):
     )
 ```
 
-**PagerDuty Events API v2** — emit one event per transition:
+**PagerDuty Events API v2**, emit one event per transition:
 
 ```python
 @app.post("/squadron/silent")
@@ -119,7 +119,7 @@ opens an incident and the matching `resolved` event closes it.
 
 ## Tuning the threshold
 
-Default 10 minutes is the right answer for most installs — it
+Default 10 minutes is the right answer for most installs, it
 absorbs a single missed heartbeat without false-positives. Bump it
 higher (30m, 1h) for hosts that legitimately go quiet for long
 intervals (cron-driven batch collectors that fire once an hour).
@@ -132,7 +132,7 @@ v0.34 adds:
 
 - A retry queue with exponential backoff for webhook delivery
   failures.
-- Per-source webhook routing — different CI pipelines can hit
+- Per-source webhook routing, different CI pipelines can hit
   different webhook URLs.
 - A dedup window so a flapping agent doesn't generate a webhook
   storm.

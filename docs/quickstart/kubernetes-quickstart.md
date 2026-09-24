@@ -5,7 +5,7 @@ is the production path for teams already running Kubernetes.
 
 Squadron OSS is **single-instance**: it uses an embedded store (SQLite +
 DuckDB) on a PersistentVolume, so `replicaCount` is fixed at 1. Multi-replica
-HA needs Postgres, which is a commercial-tier concern — don't try to scale the
+HA needs Postgres, which is a commercial-tier concern, don't try to scale the
 Deployment horizontally on OSS.
 
 ## What the chart deploys
@@ -71,11 +71,11 @@ helm install squadron ./deploy/helm/squadron \
 
 Defaults from the chart's `values.yaml`:
 
-- `persistence.enabled: true`, `persistence.size: 5Gi` — the data dir. Set
+- `persistence.enabled: true`, `persistence.size: 5Gi`, the data dir. Set
   `persistence.storageClass` if your cluster has no default.
-- `service.type: ClusterIP` — the UI/API stays in-cluster unless you add
+- `service.type: ClusterIP`, the UI/API stays in-cluster unless you add
   Ingress or change the type.
-- `resources.requests: 250m CPU / 512Mi`, `limits: 2Gi` memory — comfortable
+- `resources.requests: 250m CPU / 512Mi`, `limits: 2Gi` memory, comfortable
   for hundreds of collectors.
 - Health probes hit `/health` on the HTTP port.
 - Keep `replicaCount` at its default of **1**.
@@ -86,8 +86,8 @@ The Ingress in the chart covers the **UI/API (8080) only**. If your collectors
 live outside the cluster, they need to reach OpAMP (4320) and OTLP (4317/4318)
 too. Two things matter:
 
-1. **Expose those ports separately** — a `LoadBalancer` Service or a
-   gRPC-capable Ingress — since the chart's HTTP Ingress won't route them.
+1. **Expose those ports separately**, a `LoadBalancer` Service or a
+   gRPC-capable Ingress, since the chart's HTTP Ingress won't route them.
 2. **Give OpAMP a long timeout.** OpAMP is a WebSocket the collector holds open
    indefinitely. If it goes through an nginx Ingress, raise the timeouts to the
    hour range so collectors don't thrash reconnecting every 60 seconds:
@@ -115,15 +115,15 @@ config is in `docs/getting-started.md`.
 - Auth on (`auth.require_token: true`) and the bootstrap token rotated.
 - TLS on the Ingress for the UI, and on OpAMP/OTLP if they cross untrusted
   networks.
-- Tokens scoped narrowly — read-only for dashboards, write only for humans/CI.
+- Tokens scoped narrowly, read-only for dashboards, write only for humans/CI.
 - Back up the PersistentVolume (snapshot the SQLite data dir); restore-drill once.
 - A notification channel wired for silent-agent and rollout alerts.
 
 ## Where to go next
 
-- `docs/deployment.md` — full deployment reference, raw manifests, and the
+- `docs/deployment.md`, full deployment reference, raw manifests, and the
   production checklist.
-- `docs/getting-started.md` — collector config and config concepts.
-- `docs/oss-vs-enterprise.md` — what's OSS vs commercial-tier (HA, SSO,
+- `docs/getting-started.md`, collector config and config concepts.
+- `docs/oss-vs-enterprise.md`, what's OSS vs commercial-tier (HA, SSO,
   compliance retention, etc.).
-- `docs/operating.md` — upgrades, backup, and restore.
+- `docs/operating.md`, upgrades, backup, and restore.

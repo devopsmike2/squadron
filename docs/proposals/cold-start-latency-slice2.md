@@ -1,4 +1,4 @@
-# Cold-start latency analysis slice 2 — 4-cloud generalization
+# Cold-start latency analysis slice 2-4-cloud generalization
 
 **Status:** design doc, locked for slice 2 implementation.
 Extends the MEASURES verb from slice 1's AWS-only Lambda
@@ -31,20 +31,20 @@ already established.
 
 The shape differences:
 
-- **AWS Lambda** (slice 1): `AWS/Lambda InitDuration` —
+- **AWS Lambda** (slice 1): `AWS/Lambda InitDuration`,
   isolated cold-start init time in milliseconds.
-- **GCP Cloud Run**: `request_latencies` — request-level
+- **GCP Cloud Run**: `request_latencies`, request-level
   latency that INCLUDES cold-start when applicable; slice
   2 filters by `serving_state` dimension or by querying the
   separate `instance_count` start events.
-- **GCP Cloud Functions**: `execution_time` — function
+- **GCP Cloud Functions**: `execution_time`, function
   execution time; cold-start is the first invocation per
   instance.
-- **Azure Functions**: `FunctionExecutionDuration` —
+- **Azure Functions**: `FunctionExecutionDuration`,
   filterable by `IsAfterColdStart` dimension to isolate
   cold-start invocations.
 - **OCI Functions**: `function_duration` aggregate +
-  `cold_start_count` counter — slice 2 derives an
+  `cold_start_count` counter, slice 2 derives an
   approximated cold-start P95 by joining the two.
 
 After slice 2, the MEASURES verb in the universal claim is
@@ -65,7 +65,7 @@ per-cloud is the metric source.
   candidate.
 - **Error rate correlation.** Same substrate. Slice 3+.
 - **Cross-cloud cold-start correlation.** A Lambda that
-  invokes a Cloud Function across cloud boundaries — slice
+  invokes a Cloud Function across cloud boundaries, slice
   4+ work.
 - **Per-language fingerprinting.** Slice 1 deferral that
   stays deferred; the 3-failure-mode reasoning applies
@@ -75,7 +75,7 @@ per-cloud is the metric source.
   `min-instances`; Azure Functions has Premium Plan; OCI
   Functions has no equivalent. Slice 2 emits per-cloud
   Terraform patterns that target the closest equivalent.
-- **Real-time metric streaming.** Same as slice 1 — Squadron
+- **Real-time metric streaming.** Same as slice 1, Squadron
   stays a discovery + correlation surface.
 - **Auto-fix.** Squadron remains a recommender.
 
@@ -188,7 +188,7 @@ Detection logic:
 
 Coverage caveat: OCI Functions doesn't have an isolated
 cold-start latency metric. Slice 2 uses `function_duration`
-as the proxy when `cold_start_count > 0` — this is the
+as the proxy when `cold_start_count > 0`, this is the
 honest approximation given OCI's metric surface today.
 Slice 3 may add per-execution trace correlation when OCI
 exposes more granular metrics.
@@ -214,13 +214,13 @@ Per-cloud Scanner types satisfy the existing
 `MetricQuerier` interface. The slice 1 AWS implementation is
 the template:
 
-- `internal/discovery/gcp/metrics.go` — Cloud Monitoring V3
+- `internal/discovery/gcp/metrics.go`, Cloud Monitoring V3
   wrapper supporting both `run.googleapis.com/request_latencies`
   and `cloudfunctions.googleapis.com/function/execution_times`.
-- `internal/discovery/azure/metrics.go` — Azure Monitor REST
+- `internal/discovery/azure/metrics.go`, Azure Monitor REST
   wrapper supporting `FunctionExecutionDuration` with
   optional `IsAfterColdStart` dimension filter.
-- `internal/discovery/oci/metrics.go` — OCI Monitoring
+- `internal/discovery/oci/metrics.go`, OCI Monitoring
   wrapper supporting `function_duration` + `cold_start_count`.
 
 Each implementation:
@@ -235,7 +235,7 @@ Each implementation:
 ## 6. API surface
 
 The slice 1 per-resource cold_start endpoint extends to all
-4 providers without changing the response shape — the
+4 providers without changing the response shape, the
 `AggregateMetricResult` substrate already abstracts the
 per-cloud differences.
 
@@ -260,7 +260,7 @@ column from slice 1 extends to:
 - **DiscoveryAzure**: Azure Functions rows get the column.
 - **DiscoveryOCI**: OCI Functions rows get the column.
 
-The dashboard's TRACE COVERAGE chip doesn't change — cold-start
+The dashboard's TRACE COVERAGE chip doesn't change, cold-start
 is a separate diagnostic dimension. Slice 3 may add a
 "LATENCY OUTLIERS" panel summarizing exceedances across all
 4 clouds.
@@ -276,7 +276,7 @@ cloudfunc-cold-start-baseline      ocifunc-cold-start-baseline
 ```
 
 All reuse existing webhook prefixes from v0.89.92 (serverless
-tier chunk 5) — NO new routing.
+tier chunk 5), NO new routing.
 
 Reasoning template per kind mirrors the slice 1
 `lambda-cold-start-baseline` 3-failure-mode pattern, with
@@ -342,24 +342,24 @@ count.
 
 ## 11. Acceptance tests
 
-1. **GCP MetricQuerier — Cloud Run service with high P95**:
+1. **GCP MetricQuerier, Cloud Run service with high P95**:
    Cloud Monitoring V3 fake returns timeSeries with high P95.
    Assert: AggregateMetricResult.Value > floor; ExceedsFloor true.
-2. **GCP MetricQuerier — empty timeSeries response**:
+2. **GCP MetricQuerier, empty timeSeries response**:
    Assert: Value=0, SampleCount=0, no error.
-3. **GCP MetricQuerier — Cloud Functions execution_times
+3. **GCP MetricQuerier, Cloud Functions execution_times
    returns P95**.
-4. **GCP rate limiter caps at 60 RPM** — 120 requests should
+4. **GCP rate limiter caps at 60 RPM**, 120 requests should
    take ~60 seconds.
-5. **Azure MetricQuerier — FunctionExecutionDuration with
+5. **Azure MetricQuerier, FunctionExecutionDuration with
    IsAfterColdStart=true dimension filter applied**.
-6. **Azure MetricQuerier — function on older runtime without
+6. **Azure MetricQuerier, function on older runtime without
    IsAfterColdStart dimension** falls back to unfiltered with
    informational note.
 7. **Azure rate limiter caps at 12000 RPH** (200 RPM target).
-8. **OCI MetricQuerier — function_duration with
+8. **OCI MetricQuerier, function_duration with
    cold_start_count > 0**: Assert P95 returned.
-9. **OCI MetricQuerier — function_duration with
+9. **OCI MetricQuerier, function_duration with
    cold_start_count = 0**: Assert detection skipped (no cold
    starts in window).
 10. **OCI rate limiter caps at 10 TPS**.
@@ -406,7 +406,7 @@ Documented in the runbook so operators know.
 - GCP Cloud Run: `request_latencies` includes warm-path
   invocations. Permanently-warm services will show low
   latency that doesn't reflect cold-start behavior.
-- GCP Cloud Functions: similar — `execution_times` includes
+- GCP Cloud Functions: similar, `execution_times` includes
   warm. Slice 3 may switch to `initialization_time` when
   GCP exposes it as a separate metric.
 - Azure: functions on older runtimes without
@@ -460,7 +460,7 @@ small. The detection logic stays uniform (1.5x ratio + 500ms
 floor + 50 baseline samples); the only variable is the
 per-cloud metric source. After slice 2, sampling rate
 analysis becomes a small detection-logic arc that reuses
-the generalized substrate across all 4 clouds — the
+the generalized substrate across all 4 clouds, the
 infrastructure investment compounds.
 
 The Tuesday LinkedIn drumbeat narrative gains a cross-cloud

@@ -4,7 +4,7 @@
 **Tag at publish:** v0.84.0
 **Visual evidence:** A screenshot of the Plan detail page
 (`/plans/:id`) on the live deployment, showing a two-step plan
-created from the v0.79 plan-kind dispatch path — step 0 in
+created from the v0.79 plan-kind dispatch path, step 0 in
 `succeeded`, step 1 in `in_progress` or `succeeded`, with the
 sequencing relationship visible. The plan badge from the v0.75
 Plans UI is in the header.
@@ -15,7 +15,7 @@ Plans UI is in the header.
 ## Draft
 
 A cost spike with two independent high-cardinality attributes is
-not one problem. It is two — staged.
+not one problem. It is two, staged.
 
 This is why the v0.79 proposer schema is a discriminated union, not
 a single rollout shape. `Kind: "rollout"` means one config change
@@ -31,7 +31,7 @@ related changes benefit from observation between them.
 
 For a two-attribute spike, "observe between them" is the load-
 bearing phrase. Drop `container.id` at step 0. Watch the cost
-graph. If the spike is already gone, abort — the second drop was
+graph. If the spike is already gone, abort, the second drop was
 unnecessary and would have removed a useful attribute. If the
 spike persists, step 1 drops `k8s.pod.uid`. Two steps, one
 approval, full automatic rollback on failure via the v0.72
@@ -56,7 +56,7 @@ sequenced plans. The proposer picks; the operator approves; the
 engine runs.
 
 Repo at the v0.84.0 tag. The plan-kind path is `Move 3` in the
-internal arc notes — closed end to end across v0.69 through v0.79.
+internal arc notes, closed end to end across v0.69 through v0.79.
 
 #OpenTelemetry #PlatformEngineering
 
@@ -68,7 +68,7 @@ internal arc notes — closed end to end across v0.69 through v0.79.
   created from the "Two attrs → plan" playground starter run
   promoted into the application store (or seeded via
   `squadron-demo-seed`). Step 0 must be in `succeeded`; step 1 in
-  `succeeded` or `in_progress` is fine — the sequencing
+  `succeeded` or `in_progress` is fine, the sequencing
   relationship is the point, not a final clean state.
 - **What must be visible:** the plan badge in the header (v0.75);
   both steps in order with their state pills; the approval-gate
@@ -77,7 +77,7 @@ internal arc notes — closed end to end across v0.69 through v0.79.
   step 1 started after step 0 succeeded.
 - **Annotations:** one small arrow connecting step 0's success
   timestamp to step 1's start timestamp, with the caption
-  "step 1 starts after step 0 reaches succeeded — v0.70 sequencing"
+  "step 1 starts after step 0 reaches succeeded, v0.70 sequencing"
   added in post-processing, not baked into the page. This is the
   one place a callout earns its keep because the sequencing
   relationship is what the post is about.
@@ -88,7 +88,7 @@ internal arc notes — closed end to end across v0.69 through v0.79.
 Resists **the metrics post that's actually a vanity post** from
 linkedin-rollout.md "Anti-patterns to avoid". The post does not
 claim "we sequenced N plans" or "the engine handled X rollouts."
-The numbers in the post are about mechanism — two bullet lists in
+The numbers in the post are about mechanism, two bullet lists in
 the prompt, one switch in the bridge, one approval gate at step 0,
 one backwards walk on failure. The reader takes away how the
 sequencing works, not how many times it has happened. That's the

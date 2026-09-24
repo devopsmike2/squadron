@@ -17,21 +17,21 @@ Squadron reads its config from a YAML file. The default
 at a different file with `--config /path/to/squadron.yaml` or
 `SQUADRON_CONFIG=/path/...`.
 
-Most fields can also be overridden by environment variables — viper maps
+Most fields can also be overridden by environment variables, viper maps
 nested keys to underscore-separated upper-case names (e.g.
 `server.http_port` ⇄ `SERVER_HTTP_PORT`).
 
 A few env vars sit outside the viper-mapped tree because they're
 standalone secrets, not config fields:
 
-- `SQUADRON_CONFIG` — path to the YAML config file (overrides
+- `SQUADRON_CONFIG`, path to the YAML config file (overrides
   `--config`).
-- `SQUADRON_SECRETS_KEY` — 32-byte AES-GCM key Squadron uses to
+- `SQUADRON_SECRETS_KEY`, 32-byte AES-GCM key Squadron uses to
   seal cloud credentials and PATs at rest. Required when
   discovery features are enabled; auto-generated to
   `~/.squadron/secrets-key` if missing on a single-node
   deployment.
-- `SQUADRON_GITHUB_WEBHOOK_SECRET` — HMAC secret for the
+- `SQUADRON_GITHUB_WEBHOOK_SECRET`, HMAC secret for the
   `POST /api/v1/webhooks/github` listener that records
   `recommendation.pr_merged` audit events when Squadron-opened
   PRs land. The handler reads this once at startup and caches
@@ -40,7 +40,7 @@ standalone secrets, not config fields:
   silent no-op. See
   [webhook-listener.md](./webhook-listener.md) for the full
   setup walkthrough.
-- `SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS` — opt-in (default
+- `SQUADRON_DISCOVERY_CROSS_CLOUD_CITATIONS`, opt-in (default
   off). When set to `true`, the discovery proposer's
   verdict-learning loop pools a small, capped, origin-labeled set
   of recent decline/merge verdicts from OTHER cloud scopes, so a
@@ -50,31 +50,31 @@ standalone secrets, not config fields:
   at most a couple of cross-cloud citations per block, each
   labeled `[seen on <provider> / <scope>]`, and still gated by the
   connection's existing learn opt-out.
-- `SQUADRON_DISCOVERY_SCAN_INTERVAL` — opt-in (default off). A Go
+- `SQUADRON_DISCOVERY_SCAN_INTERVAL`, opt-in (default off). A Go
   duration (e.g. `6h`) that turns on the continuous-discovery
   scheduler: Squadron re-runs + persists AWS discovery scans for
   every connected account on this cadence, so scan history accrues
   automatically. Unset / `<=0` keeps scans on-demand only. NOTE:
   auto-scanning real cloud accounts on a timer has cost + API-rate
-  implications — set it deliberately. Values below 15m are raised to
+  implications, set it deliberately. Values below 15m are raised to
   the 15m floor. Covers all four clouds (AWS/GCP/Azure/OCI); the
   first sweep fires after one interval (not at startup). After each scheduled
   scan Squadron diffs it against the previous one and, on any change, records a
   `discovery.scan_drift_detected` audit event (forwards via SIEM like any audit
-  event) — proactive drift without polling. The event payload carries the
+  event), proactive drift without polling. The event payload carries the
   change totals, capped added/removed resource id lists, and
   instrumentation_regressions (resources whose OTel turned off).
-- `SQUADRON_DISCOVERY_DRIFT_COOLDOWN` — opt-in (default off). A Go duration
+- `SQUADRON_DISCOVERY_DRIFT_COOLDOWN`, opt-in (default off). A Go duration
   that caps how often a single scope emits a drift event. Useful when scanning
   frequently but wanting fewer drift alerts (e.g. scan every 15m, alert at most
   hourly). Unset / <=0 means every changed sweep emits.
-- `SQUADRON_DISABLE_AUTH` — dev-only override that bypasses
+- `SQUADRON_DISABLE_AUTH`, dev-only override that bypasses
   Bearer token enforcement. Do NOT set this in production.
-- `SQUADRON_DUCKDB_MEMORY_LIMIT` — caps the DuckDB telemetry
+- `SQUADRON_DUCKDB_MEMORY_LIMIT`, caps the DuckDB telemetry
   store's RAM ceiling (e.g. `4GB` or `75%`). Also settable as the
   `storage.telemetry.memory_limit` config field; the env var wins
   when both are set. Empty (the default) leaves DuckDB's own
-  default in place, which is ~80% of host RAM — on a large or
+  default in place, which is ~80% of host RAM, on a large or
   shared box that lets Squadron's RSS grow well past what the
   workload needs. Operators should set an explicit cap (e.g.
   `4GB`) to bound resident memory; a 24h soak saw RSS peak near
@@ -170,7 +170,7 @@ Before pointing real traffic at Squadron:
       it, sign in to the UI, create properly-labeled tokens, and revoke
       the bootstrap one. See [Authentication](./auth.md). If you'd
       rather use OIDC/SSO, front Squadron with a reverse proxy that
-      enforces auth and leave the in-app auth off — both layers
+      enforces auth and leave the in-app auth off, both layers
       compose.
 - [ ] **Persistent volume on a local filesystem.** See above.
 - [ ] **Retention budget.** Audit + telemetry data grows. Decide your
@@ -183,7 +183,7 @@ Before pointing real traffic at Squadron:
       PR-merged listener.** v0.89.23 added an inbound webhook route
       that records `recommendation.pr_merged` audit events when
       Squadron-opened PRs land. Without the secret env var set, the
-      route mounts but returns 503 on every delivery — operators
+      route mounts but returns 503 on every delivery, operators
       see the failure in the GitHub repo's Recent Deliveries log
       rather than a silent no-op. Generate with
       `openssl rand -hex 32`. Full setup in
@@ -244,7 +244,7 @@ Squadron is observable about itself:
 
 - **Prometheus metrics** at `GET /metrics`. The metrics are scoped under
   `squadron_*` so they're easy to identify on a shared Prometheus.
-- **Audit log** at `GET /api/v1/audit/events` — see
+- **Audit log** at `GET /api/v1/audit/events`, see
   [Audit log](./audit-log.md).
 - **Structured logs** to stdout in JSON by default. Each log line has a
   level, timestamp, and contextual fields (`rollout_id`, `agent_id`, etc.)
@@ -253,5 +253,5 @@ Squadron is observable about itself:
   updates; you can subscribe directly for custom dashboards or alerting.
 
 Squadron can also emit its own state changes as OpenTelemetry traces
-into your existing observability stack — see
+into your existing observability stack, see
 [Self-monitoring](./self-monitoring.md).

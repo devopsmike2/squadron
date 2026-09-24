@@ -13,11 +13,11 @@ being tracked in Fleet.
 
 Two real-world deployment styles, both supported:
 
-1. **Static / file-managed agents** — the collector config lives in a
+1. **Static / file-managed agents**, the collector config lives in a
    repo (or on the host). Squadron injects its OTLP exporter endpoint
    into the config file and delivers the change as a PR (reuses the
    env→TF / remediation PR machinery).
-2. **Centrally-managed agents (OpAMP)** — the collector runs under the
+2. **Centrally-managed agents (OpAMP)**, the collector runs under the
    OpAMP supervisor pointing at Squadron's OpAMP server (`:4320`).
    Squadron already pushes config to these (see `internal/opamp`,
    `examples/supervisor`). The agent auto-registers in Fleet with no
@@ -28,11 +28,11 @@ Two real-world deployment styles, both supported:
 
 Terraform, mirroring the other `squadron-test-*` repos. Two targets:
 
-- **inject-target VM** — boots a standalone `otelcol-contrib` whose
+- **inject-target VM**, boots a standalone `otelcol-contrib` whose
   config has a placeholder exporter (`endpoint: REPLACE_WITH_SQUADRON_OTLP`)
   and is therefore *installed but not connected*. This is what discovery
   flags and the injector fixes.
-- **opamp-target VM** — boots `opampsupervisor` + `otelcol-contrib`
+- **opamp-target VM**, boots `opampsupervisor` + `otelcol-contrib`
   with `server.endpoint = ws://<squadron-opamp>/v1/opamp` (replicating
   `examples/supervisor`). On boot it connects → Fleet.
 
@@ -51,7 +51,7 @@ path and the oracle for verification.
   yields `Changed=false` (no PR/no-op), mirroring the dedup posture of
   the env→TF and merge-ready-PR arcs.
 - **Minimal-diff**: edits a `yaml.Node` tree in place so untouched keys,
-  ordering, and comments survive — the delivered PR diff is small and
+  ordering, and comments survive, the delivered PR diff is small and
   review-friendly.
 
 `Options`: exporter name (default `otlp`), protocol (grpc|http),
