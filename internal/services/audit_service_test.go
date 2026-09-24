@@ -65,6 +65,62 @@ func TestAuditService_RecordAndList(t *testing.T) {
 	assert.Equal(t, AuditEventAgentDriftDrifted, a[0].EventType)
 }
 
+func TestAuditService_ListCarriesEnvCluster(t *testing.T) {
+	// Regression guard for the ADR 0053 slice-4b-3a serialization gap
+	// caught by the live e2e proof: audit_events rows were stamped with
+	// env/cluster (the store persisted and filtered on them correctly),
+	// but toServiceAuditEvent dropped both fields and the services.AuditEvent
+	// struct had no Env/Cluster fields at all — so GET /audit/events
+	// serialized env:"" for every row even though the DB was correct. This
+	// test pins the full append→store→map→list path: a wired label resolver
+	// stamps env/cluster at append time, and List must carry them back on the
+	// returned service event.
+	svc := NewAuditService(memory.NewStore(), nil, zap.NewNop())
+	impl, ok := svc.(*AuditServiceImpl)
+	require.True(t, ok, "NewAuditService must return *AuditServiceImpl")
+	ctx := context.Background()
+
+	// Resolver mirrors the cmd/all-in-one wiring: agent-a is prod/us-west-2,
+	// everything else resolves empty (fails closed, as in production).
+	impl.SetAgentLabelResolver(func(_ context.Context, agentID string) (string, string) {
+		if agentID == "agent-a" {
+			return "prod", "us-west-2"
+		}
+		return "", ""
+	})
+
+	require.NoError(t, svc.Record(ctx, AuditEntry{
+		Actor:      AuditActorOpAMP,
+		EventType:  AuditEventAgentRegistered,
+		TargetType: AuditTargetAgent,
+		TargetID:   "agent-a",
+		Action:     "created",
+	}))
+	require.NoError(t, svc.Record(ctx, AuditEntry{
+		Actor:      AuditActorOpAMP,
+		EventType:  AuditEventAgentRegistered,
+		TargetType: AuditTargetAgent,
+		TargetID:   "agent-b",
+		Action:     "created",
+	}))
+
+	// The env/cluster survive the storage→service mapping on an unfiltered list.
+	all, err := svc.List(ctx, AuditEventFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	byID := map[string]*AuditEvent{all[0].TargetID: all[0], all[1].TargetID: all[1]}
+	assert.Equal(t, "prod", byID["agent-a"].Env, "toServiceAuditEvent must carry Env back")
+	assert.Equal(t, "us-west-2", byID["agent-a"].Cluster, "toServiceAuditEvent must carry Cluster back")
+	assert.Empty(t, byID["agent-b"].Env, "unresolved agent must have empty Env (fail closed)")
+
+	// And the env filter partitions on the stamped column.
+	prod, err := svc.List(ctx, AuditEventFilter{Env: "prod"})
+	require.NoError(t, err)
+	require.Len(t, prod, 1)
+	assert.Equal(t, "agent-a", prod[0].TargetID)
+	assert.Equal(t, "prod", prod[0].Env)
+}
+
 func TestAuditService_EventTypeFilter(t *testing.T) {
 	// Regression guard for #580 (v0.87.2): the AuditEventFilter struct
 	// previously had no EventType field; the SQL store had no

@@ -276,6 +276,8 @@ func toServiceAuditEvent(e *applicationstore.AuditEvent) *AuditEvent {
 		Action:                   e.Action,
 		Payload:                  e.Payload,
 		CreatedAt:                e.CreatedAt,
+		Env:                      e.Env,
+		Cluster:                  e.Cluster,
 		AIExplanation:            e.AIExplanation,
 		AIExplanationModel:       e.AIExplanationModel,
 		AIExplanationGeneratedAt: e.AIExplanationGeneratedAt,
