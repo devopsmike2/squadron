@@ -124,6 +124,13 @@ type Server struct {
 	// OSS default) disables pinning. Wired by the enterprise edition.
 	pinResolver IdentityPinResolver
 
+	// ADR 0056 — authenticated env/cluster binding. Optional resolver returning the
+	// deployment.environment / k8s.cluster.name an authenticated connection's token
+	// is pinned to; nil (the OSS default) disables label pinning. Wired by the
+	// enterprise edition. When set, the message path stamps the pinned label(s) as
+	// authoritative instead of trusting the reported AgentDescription.
+	labelPinResolver LabelPinResolver
+
 	// ADR 0052 slice 2 — mTLS on the OpAMP control channel. Optional TLS config;
 	// nil (the OSS default) leaves the listener plaintext (unchanged). The
 	// enterprise edition builds a BYO-CA mutual-TLS config (ClientAuth =
@@ -238,6 +245,10 @@ func (s *Server) Start(port int) error {
 					// ADR 0052: the fleet identity this connection's token is pinned
 					// to (empty unless the enterprise pin resolver returned one).
 					connPinnedFleetID := auth.pinnedFleetID
+					// ADR 0056: the env/cluster this connection's token is pinned to
+					// (empty unless the enterprise label-pin resolver returned them).
+					connPinnedEnv := auth.pinnedEnv
+					connPinnedCluster := auth.pinnedCluster
 					// Per-connection rate limiter (ADR 0042 DoS). nil when the
 					// rate cap is disabled (default / tests) → allows everything.
 					limiter := newConnRateLimiter(s.maxMessagesPerSecond)
@@ -252,7 +263,7 @@ func (s *Server) Start(port int) error {
 									s.logger.Warn("dropping OpAMP message: per-connection rate limit exceeded (ADR 0042)")
 									return &protobufs.ServerToAgent{}
 								}
-								return s.onMessage(withPinnedFleetID(identity.WithTenant(ctx, connTenant), connPinnedFleetID), conn, msg)
+								return s.onMessage(withPinnedLabels(withPinnedFleetID(identity.WithTenant(ctx, connTenant), connPinnedFleetID), connPinnedEnv, connPinnedCluster), conn, msg)
 							},
 							OnConnectionCloseFunc: func(conn types.Connection) {
 								s.onDisconnect(conn, connTenant)
@@ -736,6 +747,10 @@ func (s *Server) persistAgent(ctx context.Context, agent *Agent, msg *protobufs.
 	// Extract agent details
 	name := s.extractAgentName(msg.AgentDescription)
 	labels := s.extractAgentLabels(msg.AgentDescription)
+	// ADR 0056: when this connection's enrollment token pins env/cluster, the
+	// pinned value is authoritative and overrides the (spoofable) reported label
+	// (relabel-and-log). No-op for unpinned connections and in OSS (no resolver).
+	labels = s.resolveLabels(ctx, labels)
 	version := s.extractAgentVersion(msg.AgentDescription)
 	capabilities := s.extractAgentCapabilities(msg.Capabilities)
 	status := s.determineAgentStatus(msg)
@@ -1006,6 +1021,53 @@ func (s *Server) resolveFleetID(ctx context.Context, derived uuid.UUID) uuid.UUI
 		zap.String("pinned_fleet_id", pinned.String()),
 		zap.String("reported_fleet_id", derived.String()))
 	return pinned
+}
+
+// Label keys ADR 0056 authenticates. These are the same descriptive labels the
+// scoped-RBAC LabelMatch (ADR 0053) and the scoped audit views key off.
+const (
+	labelKeyEnv     = "deployment.environment"
+	labelKeyCluster = "k8s.cluster.name"
+)
+
+// resolveLabels applies the ADR 0056 authenticated env/cluster binding. When the
+// connection's enrollment token pins deployment.environment and/or k8s.cluster.name
+// (enterprise, via the label-pin resolver), the PINNED value is authoritative: it
+// overwrites whatever the (spoofable) AgentDescription reported, and a disagreeing
+// reported value is logged + counted (relabel-and-log, ADR 0056 Q2 — never drops
+// the agent). Each field is independent. Unpinned connections (the OSS default,
+// empty context values) return labels unchanged, so behavior is identical to
+// pre-0056. The map is mutated in place and returned for call-site clarity.
+func (s *Server) resolveLabels(ctx context.Context, labels map[string]string) map[string]string {
+	pinnedEnv, pinnedCluster := pinnedLabelsFromContext(ctx)
+	if pinnedEnv == "" && pinnedCluster == "" {
+		return labels
+	}
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	if pinnedEnv != "" {
+		s.applyLabelPin(labels, labelKeyEnv, pinnedEnv)
+	}
+	if pinnedCluster != "" {
+		s.applyLabelPin(labels, labelKeyCluster, pinnedCluster)
+	}
+	return labels
+}
+
+// applyLabelPin sets labels[key]=pinned, logging + counting a mismatch when the
+// agent reported a non-empty, different value (ADR 0056 relabel-and-log).
+func (s *Server) applyLabelPin(labels map[string]string, key, pinned string) {
+	if reported, ok := labels[key]; ok && reported != "" && reported != pinned {
+		if s.metrics != nil {
+			s.metrics.LabelPinMismatchTotal.Inc(1)
+		}
+		s.logger.Warn("OpAMP label pin mismatch: agent reported a different env/cluster label than its enrollment token is pinned to; using the PINNED value (relabel-and-log, ADR 0056)",
+			zap.String("label", key),
+			zap.String("pinned", pinned),
+			zap.String("reported", reported))
+	}
+	labels[key] = pinned
 }
 
 // fleetIdentityAttrs pulls the identity-bearing attributes agentid.Derive keys

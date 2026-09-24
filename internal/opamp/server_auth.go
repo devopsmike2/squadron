@@ -44,6 +44,16 @@ type connAuth struct {
 	// message path uses it as the authoritative fleet id instead of the one
 	// derived from the (spoofable) AgentDescription.
 	pinnedFleetID string
+	// pinnedEnv / pinnedCluster are the deployment.environment / k8s.cluster.name
+	// this connection's enrollment token is pinned to (ADR 0056), resolved at
+	// connect via the optional LabelPinResolver. Empty when the token pins that
+	// field, or no resolver is installed (the OSS default — label pinning is the
+	// enterprise wedge). When set, the message path uses the pinned value as the
+	// authoritative label instead of the one the (spoofable) AgentDescription
+	// reported. Each field is independent (a token may pin env, cluster, both, or
+	// neither).
+	pinnedEnv     string
+	pinnedCluster string
 }
 
 // IdentityPinResolver resolves the fleet identity an authenticated enrollment
@@ -62,6 +72,54 @@ type IdentityPinResolver interface {
 // reported identity that disagrees is ignored + logged (relabel-and-log). Call
 // once at startup before Start; not safe for concurrent use with a running server.
 func (s *Server) SetIdentityPinResolver(r IdentityPinResolver) { s.pinResolver = r }
+
+// LabelPinResolver resolves the deployment.environment / k8s.cluster.name an
+// authenticated enrollment token is pinned to (ADR 0056). Each return is "" when
+// the token does not pin that field. OSS installs no resolver, so label pinning is
+// inert there; the enterprise wire provides one (reading the env:/cluster: token
+// label prefixes). Kept as a narrow interface so the OSS connect path stays free
+// of any pin-encoding knowledge.
+type LabelPinResolver interface {
+	PinnedLabels(tok *services.APIToken) (env, cluster string)
+}
+
+// SetOpAMPLabelPin wires the ADR 0056 authenticated env/cluster-binding seam. nil
+// (the default, and every OSS build / test harness) disables label pinning:
+// connections keep taking deployment.environment / k8s.cluster.name from the
+// reported AgentDescription. When set, an authenticated connection whose token
+// pins env and/or cluster uses the pinned value(s), and a reported label that
+// disagrees is ignored + logged (relabel-and-log, ADR 0056 Q2). Call once at
+// startup before Start; not safe for concurrent use with a running server.
+func (s *Server) SetOpAMPLabelPin(r LabelPinResolver) { s.labelPinResolver = r }
+
+// labelPinCtxKey carries a connection's pinned env/cluster from the connect
+// callback (where the token is in scope) to the message path (where the agent
+// labels are written), mirroring pinCtxKey for the identity pin.
+type labelPinCtxKey struct{}
+
+// pinnedLabels is the small value threaded through the context for ADR 0056.
+type pinnedLabels struct {
+	env     string
+	cluster string
+}
+
+// withPinnedLabels returns ctx carrying the connection's pinned env/cluster (a
+// no-op when both are empty, so unpinned connections add nothing to the context).
+func withPinnedLabels(ctx context.Context, env, cluster string) context.Context {
+	if env == "" && cluster == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, labelPinCtxKey{}, pinnedLabels{env: env, cluster: cluster})
+}
+
+// pinnedLabelsFromContext returns the connection's pinned env/cluster, each "" if
+// unpinned.
+func pinnedLabelsFromContext(ctx context.Context) (env, cluster string) {
+	if v, ok := ctx.Value(labelPinCtxKey{}).(pinnedLabels); ok {
+		return v.env, v.cluster
+	}
+	return "", ""
+}
 
 // pinCtxKey is the context key carrying a connection's pinned fleet id from the
 // connect callback (where the token is in scope) to the message path (where
@@ -155,7 +213,13 @@ func (s *Server) authenticateConn(ctx context.Context, request *http.Request) (c
 			if s.pinResolver != nil {
 				pinned = s.pinResolver.PinnedFleetID(tok)
 			}
-			return connAuth{tenant: tenant, authenticated: true, pinnedFleetID: pinned}, true
+			// ADR 0056: resolve the token's env/cluster pin (if any). Both empty in
+			// OSS (no resolver) and for tokens that pin neither field.
+			pinnedEnv, pinnedCluster := "", ""
+			if s.labelPinResolver != nil {
+				pinnedEnv, pinnedCluster = s.labelPinResolver.PinnedLabels(tok)
+			}
+			return connAuth{tenant: tenant, authenticated: true, pinnedFleetID: pinned, pinnedEnv: pinnedEnv, pinnedCluster: pinnedCluster}, true
 		}
 		// A token was presented but it is invalid / expired / revoked / lacks the
 		// opamp:enroll scope. Under enforcement this is a hard reject; under grace
