@@ -29,6 +29,13 @@ type OpAMPMetrics struct {
 	// (relabel-and-log); this counter surfaces the attempts. Only ever non-zero in
 	// the enterprise edition (OSS installs no pin resolver).
 	IdentityMismatchTotal Counter `metric:"opamp_identity_mismatch_total" tags:"component=opamp" help:"Total OpAMP messages where a pinned connection reported a different fleet identity than its token pin (ADR 0052; pinned identity used)"`
+	// ADR 0056 — authenticated env/cluster binding (slice 4c). Incremented when a
+	// connection whose enrollment token pins deployment.environment / k8s.cluster.name
+	// reports an AgentDescription label that DISAGREES with the pinned value. The
+	// pinned value is authoritative and the reported one is ignored + logged
+	// (relabel-and-log, mirroring IdentityMismatchTotal). Only ever non-zero in the
+	// enterprise edition (OSS installs no label-pin resolver).
+	LabelPinMismatchTotal Counter `metric:"opamp_label_pin_mismatch_total" tags:"component=opamp" help:"Total OpAMP messages where a label-pinned connection reported a different env/cluster than its token pin (ADR 0056; pinned label used)"`
 
 	// Message metrics
 	MessagesReceived       Counter `metric:"opamp_messages_received_total" tags:"component=opamp" help:"Total number of OpAMP messages received"`
