@@ -1,10 +1,10 @@
-# Cost-Correlation Substrate — slice 6 chunk 1 (substrate + guardrails)
+# Cost-Correlation Substrate, slice 6 chunk 1 (substrate + guardrails)
 
 Status: chunk 1 shipping in v0.89.183 (#825 Stream 222).
 
-This chunk ships ONLY the money-touching plumbing — the read-only
+This chunk ships ONLY the money-touching plumbing, the read-only
 cost-query interface, the per-account spend-bounding budget
-governor, and the per-call-cost accounting — with NO per-cloud
+governor, and the per-call-cost accounting, with NO per-cloud
 billing API integration. Per-cloud chunks fan out from this
 substrate in later releases, exactly as the per-cloud
 MetricQuerier chunks fanned out from the cold-start substrate.
@@ -17,7 +17,7 @@ These are enforced in code and restated here so the runbook
 carries them upfront.
 
 1. **Read-only only.** The cost substrate exposes exactly one
-   verb — a cost *read*. It MUST NOT be used to issue any
+   verb, a cost *read*. It MUST NOT be used to issue any
    provisioning / mutating call (CreateOrder, ConfigureService,
    ChangeAccountTier, purchase, trial sign-up, or any call that
    incurs cost on the user's behalf). The `CostQuerier` interface
@@ -37,13 +37,13 @@ carries them upfront.
    operator-facing recommendations as a plain figure ("this DLQ
    is costing ~$X/mo; here's how to drain it"). The substrate and
    the downstream proposer MUST NOT inflate, moralize, or
-   editorialize about whether a cost is high or low — just report
+   editorialize about whether a cost is high or low, just report
    the number and the actionable next step.
 
 ## 2. Money representation
 
-All money is represented as **micro-USD (`int64`)** — millionths
-of a US dollar — never float. `$0.01 = 10_000` micro-USD;
+All money is represented as **micro-USD (`int64`)**, millionths
+of a US dollar, never float. `$0.01 = 10_000` micro-USD;
 `$1.00 = 1_000_000` micro-USD. Integer money avoids the rounding
 drift that makes float dollars a known foot-gun in spend
 accounting (where the governor's ceiling check must be exact).
@@ -67,7 +67,7 @@ The numbers above are approximate and provider-pricing-dependent;
 per-cloud chunks MUST confirm the current published price before
 relying on it, and the governor ceiling is the backstop regardless
 of the exact figure. AWS Cost Explorer is the only surface where
-per-call cost is material at the default scan cadence — at
+per-call cost is material at the default scan cadence, at
 ~$0.01/call and a $1/mo ceiling, the governor permits ~100
 Cost Explorer calls per account per month (≈ 3/day at a daily
 cadence), which is the budget the per-cloud AWS chunk must design
@@ -77,13 +77,13 @@ its query batching against.
 
 Thread-safe per-account spend governor:
 
-- `Authorize(perCallMicroUSD int64) error` — called immediately
+- `Authorize(perCallMicroUSD int64) error`, called immediately
   before every cost API request. Resets the spend window if the
   rolling window has elapsed, then either records the spend and
   returns nil, or returns `ErrCostBudgetExceeded` if the call
   would push cumulative spend over the ceiling (the spend is NOT
   recorded on rejection).
-- `Spent() / Remaining() int64` — observability for the runbook +
+- `Spent() / Remaining() int64`, observability for the runbook +
   tests.
 - Construction pins the ceiling (default
   `DefaultMonthlyCostBudgetMicroUSD`) and the window
@@ -91,7 +91,7 @@ Thread-safe per-account spend governor:
   held by the per-cloud Scanner alongside the existing rate
   limiters.
 
-A free-API call (per-call cost 0) is always authorized — the
+A free-API call (per-call cost 0) is always authorized, the
 governor only constrains the surfaces that actually charge.
 
 ## 5. CostQuerier interface
@@ -107,7 +107,7 @@ QueryCost(ctx, resourceID, dimension, window) (CostResult, error)
 
 `CostResult` carries `AmountMicroUSD int64`, `Currency`,
 `Granularity`, `Window`, `Covered bool` (the not-measured vs
-real-zero distinction — same contract as the metric substrate's
+real-zero distinction, same contract as the metric substrate's
 SampleCount), and `ObservedAt`.
 
 ## 6. Chunk map
@@ -121,13 +121,13 @@ SampleCount), and `ObservedAt`.
   (~$0.01/call). Refuses to issue a charged call without BOTH a
   client and a governor; over-budget returns
   `ErrCostBudgetExceeded` as a graceful skip. NOT wired into any
-  scan yet — no charged request fires during a scan until the
+  scan yet, no charged request fires during a scan until the
   enrichment chunk enables it. Money parsed to integer micro-USD
   (no float).
 - **Chunk 3 (v0.89.185): AWS SQS cost-correlation enrichment.**
   Joins SQS service cost onto DLQ-bearing queue snapshots
   (service_cost_monthly_micro_usd + currency + scope="service").
-  Plumbed but GATED — no-op unless a Cost Explorer client + governor
+  Plumbed but GATED, no-op unless a Cost Explorer client + governor
   are wired (no production wiring by default), so no charged call
   fires in a scan until an operator opts in. At most one charged call
   per scan, and only when a DLQ exists to correlate. The proposer
@@ -137,21 +137,21 @@ SampleCount), and `ObservedAt`.
   signal. One read-only POST per scan, ServiceName=Service Bus
   filter, columns found by name. Attaches service_cost_* to Service
   Bus namespace snapshots. Reuses the Azure bearer-token ARM
-  plumbing — no new SDK.
+  plumbing, no new SDK.
 - **Chunk 6 (v0.89.188): the production opt-in switch.** A
   `cost_correlation` config block (Enabled default FALSE,
   MonthlyBudgetUSD default $1) + `Scanner.EnableCostCorrelation`,
   which wires the real Cost Explorer client + a budget governor
-  sized to the configured budget. OFF by default — the cost path
+  sized to the configured budget. OFF by default, the cost path
   stays dormant (no client, no spend) until an operator opts in.
   Fails loud (errors) if a non-production factory can't build the
   client, rather than making charged calls through an unexpected
   path. This is the explicit, reviewable spend decision, isolated
   in its own release.
-- Chunk 7+: GCP (BigQuery billing export — heavier, operator-setup-
+- Chunk 7+: GCP (BigQuery billing export, heavier, operator-setup-
   dependent; likely honest-framed pending operator export config) +
   OCI (usage-report objects) cost readers. (Wiring the metric-
-  detection substrate — cold-start / poison-rate / lag — live in
+  detection substrate, cold-start / poison-rate / lag, live in
   production is a SEPARATE strategic decision, not part of this
   cost switch.)
 

@@ -1,4 +1,4 @@
-# Event source tier slice 7 — OCI Notification Service (second OCI surface)
+# Event source tier slice 7, OCI Notification Service (second OCI surface)
 
 **Status:** design doc, locked for slice 7 implementation.
 Closes the cross-cloud widening pass by adding OCI Notification
@@ -13,7 +13,7 @@ Service as the second OCI event source surface alongside Streaming.
 
 ## 1. Problem
 
-The widening pass closes with OCI — the fourth cloud — by adding
+The widening pass closes with OCI, the fourth cloud, by adding
 Notification Service alongside Streaming.
 
 OCI's two event source primitives serve different patterns:
@@ -22,7 +22,7 @@ OCI's two event source primitives serve different patterns:
   streaming with retention policies; the analytics + telemetry
   intake pattern (parallels Azure Event Hubs + AWS Kinesis).
 - **Notification Service / ONS** (this slice): pub/sub
-  notifications — topics + subscriptions for fan-out delivery
+  notifications, topics + subscriptions for fan-out delivery
   to HTTP(S), email, PagerDuty, Slack, Functions, etc. The
   classic alert + integration distribution pattern (parallels
   AWS SNS + GCP Pub/Sub on the alert-out side).
@@ -37,15 +37,15 @@ layer that typically routes operational signals OUT of OCI.
 The trace continuity gap operates at the ONS topic → subscriber
 boundary: a topic without OCI Logging configured means the
 operator has no audit trail for which alarms were delivered
-to which subscribers — a critical gap for incident
+to which subscribers, a critical gap for incident
 postmortems where "did PagerDuty actually get the page?" is
 the first question.
 
 ### Why ONS closes the OCI widening pass
 
 1. **Architectural parity with SNS (AWS) + Pub/Sub (GCP) on
-   the pub/sub side.** ONS is OCI's pub/sub fan-out primitive
-   — the analog Squadron already covers on the other three
+   the pub/sub side.** ONS is OCI's pub/sub fan-out primitive,
+the analog Squadron already covers on the other three
    clouds.
 2. **Operational criticality.** Most OCI deployments route
    Monitoring alarms through ONS. Missing ONS visibility means
@@ -58,8 +58,8 @@ the first question.
 
 ### What slice 7 does NOT address
 
-- **Azure Event Hubs** — slice 8+ candidate.
-- **OCI Queue Service** — distinct primitive (transactional
+- **Azure Event Hubs**, slice 8+ candidate.
+- **OCI Queue Service**, distinct primitive (transactional
   message queues); slice 8+ candidate.
 - **Per-subscription protocol enforcement.** Slice 7 detects
   topic-level Logging axis; per-subscription HTTP→HTTPS or
@@ -76,18 +76,18 @@ the first question.
 
 ## 2. Non-goals (slice 7)
 
-- **Azure Event Hubs** — slice 8+.
-- **OCI Queue Service** — slice 8+.
-- **Per-subscription protocol / retry-policy enforcement** —
+- **Azure Event Hubs**, slice 8+.
+- **OCI Queue Service**, slice 8+.
+- **Per-subscription protocol / retry-policy enforcement**,
   slice 8+.
-- **Per-delivery audit reconstruction** — slice 8+.
-- **ONS Subscription confirmation lag detection** — slice 8+.
-- **CMEK / vault integration validation** — slice 7 records
+- **Per-delivery audit reconstruction**, slice 8+.
+- **ONS Subscription confirmation lag detection**, slice 8+.
+- **CMEK / vault integration validation**, slice 7 records
   the topic's KMS key informationally; deeper key rotation
   analysis is slice 8+ candidate.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — OCI Notification Service
+## 3. Detection surface, OCI Notification Service
 
 API: `/20181201/topics` via the OCI ONS endpoint
 (`https://notification.{region}.oraclecloud.com`).
@@ -108,12 +108,12 @@ Detection axes:
 | KMS key reference       | Topic `apiEndpoint` reflects regional endpoint; `kmsKeyId` recorded if set | informational only |
 
 The Logging axis mirrors the slice 1 Streaming pattern
-(v0.89.101c) — same OCI Logging /logs call + same searchTerm
+(v0.89.101c), same OCI Logging /logs call + same searchTerm
 walk. The scanner shares the existing Logging detection helper
 from `scanner_streaming.go` (extracted as a package-internal
 helper in chunk 1).
 
-Subscription count is informational only — a topic with 0
+Subscription count is informational only, a topic with 0
 subscriptions is operationally meaningful (alarms route
 nowhere) but the recommendation is the operator's
 configuration choice, not a Squadron-PRed fix.
@@ -177,7 +177,7 @@ The ONS API:
 The OCI raw-HTTP + signing pattern from
 `internal/discovery/oci/scanner_streaming.go` carries through.
 ONS uses a different per-service hostname
-(`notification.{region}.oraclecloud.com`) — the scanner
+(`notification.{region}.oraclecloud.com`), the scanner
 constructs the endpoint via the existing region helper.
 
 ## 6. API surface
@@ -217,7 +217,7 @@ Reasoning template for `ons-logging-enable`:
 > "This ONS Topic has no OCI Logging configuration. Without a
 > log group capturing topic delivery events, the operator has
 > no audit trail for which alarms / notifications were
-> delivered to which subscribers — the first question in any
+> delivered to which subscribers, the first question in any
 > incident postmortem where the operator needs to confirm
 > 'did the page actually get sent?'.
 >
@@ -300,9 +300,9 @@ Total: 2 release tags. Same pattern as slices 3, 4, 5, 6.
 
 ## 11. Acceptance tests
 
-1. **OCI ScanNotificationTopics returns topics** — paginated
+1. **OCI ScanNotificationTopics returns topics**, paginated
    list response is walked.
-2. **Topic with Logging configured → HasLogAxis = true** —
+2. **Topic with Logging configured → HasLogAxis = true**,
    shared lookup helper resolves the topic OCID against the
    Logging /logs response.
 3. **Topic without Logging configured → HasLogAxis = false**.
@@ -323,7 +323,7 @@ Total: 2 release tags. Same pattern as slices 3, 4, 5, 6.
 11. **Webhook routes ons-logging-enable to oci**.
 12. **Discovery summary OCI event_source_count surfaces
     non-zero when topics exist**.
-13. **Cold-start parity preserved** — proposer prompts
+13. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.148 when no ONS rows trigger
     recommendations.
 
@@ -331,7 +331,7 @@ Total: 2 release tags. Same pattern as slices 3, 4, 5, 6.
 
 **New IAM permission.** ONS adds
 `read ons-topics in compartment` to the OCI scanner policy
-template. Read-only — Squadron never executes a
+template. Read-only, Squadron never executes a
 PublishMessage / CreateTopic / DeleteTopic mutation. The
 slice 1 Logging read policy covers the per-topic detection
 call without extension.
@@ -341,7 +341,7 @@ existing rate limiter from slice 1 Streaming (and from
 v0.89.118 metrics). ONS topics add 1 list call per
 compartment + 1 Logging /logs call per topic. For a fleet of
 500 topics spread across 10 compartments, that's 510 API
-calls per scan — well within OCI's per-tenancy ONS rate
+calls per scan, well within OCI's per-tenancy ONS rate
 limit (default 100 req/sec per region).
 
 **Cost surface.** OCI ONS list calls are free. OCI Logging
@@ -357,7 +357,7 @@ the other direction. Pinned by tests 8 + 9.
 **Logging detection helper extraction.** The existing
 `lookupLogResourceForOCID` helper in `scanner_streaming.go`
 is extracted package-internal in chunk 1. The Streaming
-detection path stays byte-identical to v0.89.148 — the
+detection path stays byte-identical to v0.89.148, the
 helper is shared, not rewritten. Cold-start parity test 13
 pins this.
 
@@ -367,19 +367,19 @@ surface stays at zero.
 
 ## 13. Slice 8+ candidates
 
-- **Azure Event Hubs** — third Azure surface.
-- **OCI Queue Service** — third OCI surface (transactional
+- **Azure Event Hubs**, third Azure surface.
+- **OCI Queue Service**, third OCI surface (transactional
   message queues).
-- **Per-subscription protocol enforcement** — HTTP → HTTPS
+- **Per-subscription protocol enforcement**, HTTP → HTTPS
   recommendation at subscription scope.
-- **Per-subscription retry-policy tuning** — extending
+- **Per-subscription retry-policy tuning**, extending
   `deliveryPolicy.maxRetryDuration` on subscriptions with
   short default retries.
-- **ONS Subscription confirmation lag detection** — flag
+- **ONS Subscription confirmation lag detection**, flag
   PENDING subscriptions older than 24h.
-- **CMEK / vault key rotation validation** — deeper
+- **CMEK / vault key rotation validation**, deeper
   encryption posture.
-- **Per-delivery audit reconstruction** — assemble per-event
+- **Per-delivery audit reconstruction**, assemble per-event
   delivery timelines from the Logging stream.
 
 ---
@@ -403,16 +403,16 @@ visible:
    (substrate's three diagnostics: cold-start P95, sampling
    rate, error rate)
 2. **ONS topic** without Logging configured (this slice
-   `ons-logging-enable`) — operator has no audit of which
+   `ons-logging-enable`), operator has no audit of which
    subscribers got the page
-3. **ONS subscription** (slice 8+ — protocol enforcement,
+3. **ONS subscription** (slice 8+, protocol enforcement,
    retry policy tuning)
 4. **Functions / OKE** without trace primitive (serverless +
    kubernetes tiers)
-5. **Workload health view** — workload-health dashboard
+5. **Workload health view**, workload-health dashboard
    panel from v0.89.131-133
 
-Five layers. One control plane. Four clouds — fully widened
+Five layers. One control plane. Four clouds, fully widened
 on the event source tier.
 
 The Tuesday LinkedIn drumbeat narrative gains: "Your ONS

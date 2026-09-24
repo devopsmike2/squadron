@@ -7,7 +7,7 @@
 include the dashed Future tier (Cloud connectors, Discovery
 engine, IaC orchestrator) and the footer line naming the
 customer backend (Datadog, Honeycomb, Grafana, etc.) as
-interchangeable. The footer line is the load-bearing element —
+interchangeable. The footer line is the load-bearing element,
 the architectural commitment to "the backend is the customer's,
 not Squadron's" is right there in the same frame as the slice-1
 discovery components.
@@ -23,8 +23,8 @@ argument.
 
 A non-OSS control plane is a vendor pretending the layer above
 the backends is theirs alone to define. The customer is asked
-to take the decisions about what to observe — and the audit
-trail of those decisions — on the vendor's word. That works
+to take the decisions about what to observe, and the audit
+trail of those decisions, on the vendor's word. That works
 for a single-backend customer. It breaks the moment the
 customer adds a second backend, because now the closed-source
 control plane has a commercial reason to prefer one over the
@@ -45,7 +45,7 @@ uninstrumented, and the recommendation lands as a Terraform
 snippet the operator's IaC pipeline runs. Squadron does not
 pick the customer's backend. The discovery context carries a
 `PreferredBackend` field for cases where the operator has
-already chosen — and the proposer respects it — but Squadron's
+already chosen, and the proposer respects it, but Squadron's
 own architecture is indifferent.
 
 That indifference is what "OSS and vendor-neutral are the same
@@ -72,13 +72,13 @@ not picked.
   footer line naming the customer backend (Datadog,
   Honeycomb, Grafana, etc.) as interchangeable. The Surface,
   Decision, and Substrate tiers can be present in the upper
-  half of the frame for context — the footer line is the
+  half of the frame for context, the footer line is the
   load-bearing element.
 - **Annotations:** one thin underline on the footer line
-  naming the backends, captioned "interchangeable — Squadron
+  naming the backends, captioned "interchangeable, Squadron
   is neutral", added in post-processing. One thin underline
   on the Discovery engine box in the Future tier, captioned
-  "v0.85.0 slice 1 — AWS". Two annotations total; they make
+  "v0.85.0 slice 1, AWS". Two annotations total; they make
   the architectural commitment to vendor neutrality visible
   alongside the slice that proves the commitment is recent.
 - **Crop:** include the SVG's title bar so the reader can see
@@ -88,13 +88,13 @@ not picked.
 ## Anti-pattern guard
 
 Resists **the competitor takedown** from linkedin-rollout.md
-"Anti-patterns to avoid". The pull is hard on this topic — the
+"Anti-patterns to avoid". The pull is hard on this topic, the
 OSS-versus-closed-source frame invites swipes at every closed
 control plane on the market. The post instead frames the
 position structurally: a non-OSS control plane has commercial
 reasons to prefer one backend; a non-neutral control plane is
 the vendor's agent. Neither sentence names a competitor by
-name. The architecture diagram does — Datadog, Honeycomb,
+name. The architecture diagram does, Datadog, Honeycomb,
 Grafana appear in the footer as substrate, not as targets.
 The reader infers the position; the post does not run anyone
 down.

@@ -1,4 +1,4 @@
-# Orchestration tier slice 2 — OCI Resource Manager
+# Orchestration tier slice 2, OCI Resource Manager
 
 **Status:** design doc, locked for slice 2 implementation.
 Closes the qualification on the orchestration tier in
@@ -21,13 +21,13 @@ orchestration primitives are shape-different from the
 AWS/GCP/Azure trio:
 
 - Step Functions / Workflows / Logic Apps are **workflow
-  orchestration** — state machine engines that sequence
+  orchestration**, state machine engines that sequence
   callouts to other resources.
 - OCI's closest primitives are:
-  - **Resource Manager** — Terraform-as-a-service. Stacks
+  - **Resource Manager**, Terraform-as-a-service. Stacks
     (Terraform configurations) and Jobs (apply/destroy
     operations on stacks). **Infrastructure** orchestration.
-  - **Process Automation** — BPMN business process engine.
+  - **Process Automation**, BPMN business process engine.
     True workflow orchestration but newer product with
     smaller adoption.
 
@@ -40,7 +40,7 @@ claim's strategic frame both honestly noted this:
 
 This qualification has lived in the universal claim for
 multiple arcs since v0.89.98. Closing it cleans the
-narrative — after slice 2, the universal claim reads
+narrative, after slice 2, the universal claim reads
 cleanly:
 
 > "Squadron scans AWS, GCP, Azure, AND Oracle Cloud across
@@ -62,7 +62,7 @@ surface because:
    RM is logging at all.
 3. **The OCI Logging service integrates with RM.** The
    detection axes mirror OCI Streaming's pattern from
-   v0.89.101 — Stack has Logging configured + Job logs OCID
+   v0.89.101, Stack has Logging configured + Job logs OCID
    set.
 
 Slice 2 explicitly defers Process Automation:
@@ -123,7 +123,7 @@ Detection axes:
 | Stack last job state | `latest_job.lifecycle_state` is `SUCCEEDED` or `FAILED` | informational only               |
 
 The Logging-axis detection mirrors the OCI Streaming logging
-proxy pattern from v0.89.101 — the OCI Logging service
+proxy pattern from v0.89.101, the OCI Logging service
 absorbs the role of "trace primitive" since OCI doesn't
 expose a direct OTel integration for RM.
 
@@ -142,7 +142,7 @@ correlation.
 ## 4. Storage schema
 
 NO migration. The existing `orchestration_instance` table
-from slice 1 (v0.89.95) carries the right shape — provider
+from slice 1 (v0.89.95) carries the right shape, provider
 + surface + has_trace_axis + has_log_axis + last_seen_at.
 Slice 2 just adds rows with `provider = "oci"` and
 `surface = "resmgr"`.
@@ -169,7 +169,7 @@ func (s *Scanner) ScanResourceManagerStacks(ctx context.Context, scope scanner.S
     // For each Stack:
     //   1. ResourceName = stack.display_name
     //   2. ResourceARN = stack.id (OCID)
-    //   3. SourceType = "stack" — wait, no, that's event source. Use WorkflowType = "Stack"
+    //   3. SourceType = "stack", wait, no, that's event source. Use WorkflowType = "Stack"
     //   4. Detect Logging axis via:
     //      - GET /20200531/logs?compartmentId=... (OCI Logging service)
     //      - Match log_group entries where configuration.source.service = "resourcemanager"
@@ -186,7 +186,7 @@ and v0.89.101 (Streaming scanner) carries through.
 ## 6. API surface
 
 The slice 1 per-provider scan + inventory endpoints already
-handle OCI orchestrations field correctly — slice 1 shipped
+handle OCI orchestrations field correctly, slice 1 shipped
 empty `orchestrations: []` for OCI per the contract. Slice 2
 just populates it.
 
@@ -200,7 +200,7 @@ correlates spans.
 ## 7. UI
 
 The DiscoveryOCI page's Orchestration sub-tab is **hidden
-conditional** in slice 1 (per v0.89.97 chunk 4) — hidden
+conditional** in slice 1 (per v0.89.97 chunk 4), hidden
 when `orchestrations[]` is empty. Slice 2 doesn't change
 the rendering logic; the tab simply starts rendering when
 slice 2 populates the field.
@@ -303,13 +303,13 @@ resource "oci_logging_log" "resmgr_<name>" {
 - **Chunk 2: Proposer prompt + iacpicker + webhook routing +
   runbook update.** ~700-900 lines. **v0.89.136.**
 
-Total: 2 release tags. Smallest arc shipped in a while —
+Total: 2 release tags. Smallest arc shipped in a while,
 slice 2 is purely additive on top of the slice 1 scaffolding
 (no new tier, no new substrate, no new UI shape).
 
 ## 11. Acceptance tests
 
-1. **OCI ScanResourceManagerStacks returns Stacks** —
+1. **OCI ScanResourceManagerStacks returns Stacks**,
    paginated list response is walked.
 2. **Stack with Logging compartment + RM source mapping →
    has_log_axis = true**.
@@ -324,9 +324,9 @@ slice 2 is purely additive on top of the slice 1 scaffolding
 7. **Discovery summary OCI orchestration_count surfaces
    non-zero when Stacks exist**.
 8. **DiscoveryOCI Orchestration sub-tab renders when
-   orchestrations[] populated** (regression — the slice 1
+   orchestrations[] populated** (regression, the slice 1
    conditional render path).
-9. **Cold-start parity preserved** — all 4 providers
+9. **Cold-start parity preserved**, all 4 providers
    cold-start prompts byte-identical to v0.89.133 when no
    resmgr rows trigger recommendations.
 
@@ -340,7 +340,7 @@ Operators get the in-product policy upgrade path (#590).
 Logging API call adds ~1 query per Stack to detect source
 mappings. For a fleet of 1000 Stacks across a compartment,
 that's 1000 queries against the OCI Logging API. The
-substrate's existing 10 TPS rate limit absorbs this —
+substrate's existing 10 TPS rate limit absorbs this,
 ~100 seconds added to the scan duration.
 
 **Cost surface.** OCI Logging queries are free for metric
@@ -377,8 +377,8 @@ at zero.
 **Strategic frame:**
 
 Slice 2 removes the only remaining asterisk on Squadron's
-universal claim. Every tier — compute / database /
-kubernetes / serverless / orchestration / event sources —
+universal claim. Every tier, compute / database /
+kubernetes / serverless / orchestration / event sources,
 is now cleanly 4-cloud.
 
 > "Squadron scans AWS, GCP, Azure, AND Oracle Cloud across

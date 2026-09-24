@@ -2,7 +2,7 @@
 
 The OTLP receiver → worker pool → DuckDB path is the half of Squadron's
 telemetry plane that `docs/scale-testing.md` deliberately deferred
-("OTLP receiver under load — needs a synthetic OTLP generator").
+("OTLP receiver under load, needs a synthetic OTLP generator").
 v0.89 closes that gap with `otlpsim`, a synthetic OTLP/HTTP load
 generator (sibling of `fleetsim`), and this first measured pass over
 the ingest path. This document is the methodology, the results, the
@@ -14,7 +14,7 @@ At moderate load the path is clean: zero loss, exact accounting, p99
 6ms. At saturation the receiver **accepts ~5-10× faster than the
 workers can persist**, so a burst leaves up to ~500k items of
 202-acknowledged telemetry sitting volatile in the in-memory queue
-for 60-90+ seconds — and none of the shipped metrics can see it:
+for 60-90+ seconds, and none of the shipped metrics can see it:
 the queue-depth gauge and the OTLP HTTP metrics were declared but
 never wired. Nothing is lost if the process stays up; a
 crash/restart silently discards the backlog. Data eventually
@@ -31,18 +31,18 @@ make otlpsim
 ```
 
 - Real protobuf `ExportRequest`s over standard OTLP/HTTP
-  (`/v1/metrics`, `/v1/logs`, `/v1/traces`) — the same bytes a
+  (`/v1/metrics`, `/v1/logs`, `/v1/traces`), the same bytes a
   production collector sends.
 - Deterministic agent identity **shared with fleetsim**: both derive
   the same UUIDv5 per index and set it as `service.instance.id`,
   which the parser adopts verbatim as `agent_id`. Run both together
   and the OTLP traffic attributes to the live OpAMP fleet.
   `cmd/otlpsim/main_test.go` pins this end-to-end against the real
-  parser — if it breaks, every cross-check below is garbage.
+  parser, if it breaks, every cross-check below is garbage.
 - Exact signal mix (`--signal-mix=metrics:70,logs:20,traces:10` is
   dealt out proportionally per 100 requests, not sampled), so client
   counts reconcile against `otlp_batches` exactly.
-- Counts 503s as backpressure and does NOT retry them — the point is
+- Counts 503s as backpressure and does NOT retry them, the point is
   to observe the server's shed behavior, not mask it.
 
 ## Environment
@@ -51,12 +51,12 @@ Sandboxed Linux VM, 4 cores, arm64, local NVMe. All-in-one binary,
 default `squadron.yaml` (worker queue 10,000 / 3 workers / 5s submit
 timeout), rollups + AI + pricing disabled. **Absolute numbers are
 machine-bound; the ratios and failure modes are the finding.** The
-v0.22 fleetsim baselines were a different machine — don't compare
+v0.22 fleetsim baselines were a different machine, don't compare
 across documents.
 
 ## Results
 
-### Baseline — 200 req/s (10k items/s), 100 agents, 25s
+### Baseline, 200 req/s (10k items/s), 100 agents, 25s
 
 | Measure | Result |
 |---|---|
@@ -66,28 +66,28 @@ across documents.
 | Queue / dead letters | depth 0, zero dead letters |
 | Insights during load | 22ms cold / ~1ms warm (matches v0.24 steady-state numbers) |
 
-### Saturation — 2,000 req/s requested (100k items/s), 32 senders
+### Saturation, 2,000 req/s requested (100k items/s), 32 senders
 
 | Measure | Result |
 |---|---|
 | Achieved accept rate | ~575-1,240 req/s (client-observed; accept latency ballooned) |
 | Request latency | p50 1.9-2.8ms, **p95 141-165ms, p99 231-245ms, max 505ms** |
-| 503 backpressure | **0** — queue (10k requests) never filled during 8-25s bursts |
+| 503 backpressure | **0**, queue (10k requests) never filled during 8-25s bursts |
 | Worker drain rate | ~6-11k items/s (~115-215 req/s at 50 items/req) |
 | Ack-to-durable lag | backlog at burst end ≈ 10k requests ≈ 500k items ≈ **60-90+s of volatile data** |
 | Eventual consistency | counts kept climbing post-load (99k → 248k → 323k at +2/+16/+29s); no loss with process alive |
 
 Post-mortem goroutine dumps (13s after load end) show all three
 workers `[runnable]` inside `WriteLogsFromOTLP` /
-`WriteMetricsFromOTLP` — per-row `stmt.ExecContext` through cgo
+`WriteMetricsFromOTLP`, per-row `stmt.ExecContext` through cgo
 inside a per-batch transaction. Not stuck; just slow relative to the
 accept path.
 
 ## Findings
 
 1. **Ack-to-durability lag is invisible (fixed this pass).**
-   `squadron_worker_queue_depth` was declared but never updated —
-   permanently 0 — and the OTLP HTTP request counters/histogram
+   `squadron_worker_queue_depth` was declared but never updated,
+   permanently 0, and the OTLP HTTP request counters/histogram
    (`otlp_http_requests_total`, `otlp_http_request_duration_seconds`)
    were declared but never recorded in the HTTP handlers. An operator
    watching /metrics during the saturation run sees a healthy system
@@ -95,26 +95,26 @@ accept path.
    wired; the queue-depth gauge is the load-shedding signal.
 2. **`otlp_batches` had no retention GC (fixed this pass).**
    `CleanupOldData` swept `metrics_*`, `logs`, `traces`,
-   `pipeline_health_samples` — but not the v0.24 `otlp_batches`
+   `pipeline_health_samples`, but not the v0.24 `otlp_batches`
    accounting table, which grows unbounded exactly like
    `pipeline_health_samples` did before it was added to that list.
    Now swept with the same retention ceiling.
 3. **Write path is per-row cgo Exec; queue is sized in requests, not
-   items/bytes — BOTH HALVES RESOLVED.** (a) The per-row
+   items/bytes, BOTH HALVES RESOLVED.** (a) The per-row
    `stmt.ExecContext` write path (~6-11k items/s) was replaced by the
    DuckDB Appender bulk path in **v0.89.379-era slice 2** (~11k → ~50k
    items/s). (b) The queue-bounds half is closed in **v0.89.380**: a
-   10,000-**request** queue could hold 10k–millions of items depending on
+   10,000-**request** queue could hold 10k, millions of items depending on
    batch size, so the byte-budget bound `worker.max_queue_bytes` (default
    256 MiB; the request-count cap is kept as a secondary belt) now bounds
    the volatile ack-to-durable window in DATA. Item counts aren't known
    until the worker parses, so bytes (`len(RawData)`) are the only cheap
-   signal at ingest — an item-count bound would require parsing in the
+   signal at ingest, an item-count bound would require parsing in the
    receiver hot path, defeating the 202-fast-ack design. Over-budget
    submits wait up to `submit_timeout` then 503 (contract unchanged); a
    single payload larger than the whole budget is rejected immediately;
    new gauge `worker_queue_bytes`. See ADR 0004.
-4. **Enricher does N identical lookups per batch — RESOLVED (v0.89.379).**
+4. **Enricher does N identical lookups per batch, RESOLVED (v0.89.379).**
    `enrichTelemetry` called `agentService.GetAgent` once per item; a
    50-item single-agent batch did 50 identical SQLite lookups.
    Fixed with a per-batch, caller-owned local memo (`map[agentID]*Agent`,
@@ -130,7 +130,7 @@ OTLP receiver shape, but its contract is "the queue is small and
 drains fast." Finding 3 is what makes that contract true; finding 1
 is what lets an operator verify it.
 
-## After the Appender rework (finding 3 — closed)
+## After the Appender rework (finding 3, closed)
 
 The follow-up landed immediately after this report: the four hot
 writers (`traces`, `logs`, `metrics_sum`, `metrics_gauge`) now go
@@ -146,7 +146,7 @@ scenario, fresh data dir each):
 
 | | per-row Exec (old) | Appender (new) |
 |---|---|---|
-| Accepted | 13,900 req (971/s — server-throttled) | 22,099 req (1,826/s — full client rate) |
+| Accepted | 13,900 req (971/s, server-throttled) | 22,099 req (1,826/s, full client rate) |
 | Accept latency | p95 129ms / p99 214ms / max 307ms | **p95 3.0ms / p99 5.3ms / max 15.9ms** |
 | Durable at load end | 195,400 / 695,000 (28%) | 654,450 / 1,104,950 (59%) |
 | Drain complete | t+45s | **t+≤15s** (first post-load poll) |
@@ -155,13 +155,13 @@ scenario, fresh data dir each):
 
 The ack-to-durability window at saturation shrank from ~45s to ≤15s
 while ingesting 59% more data. Two semantics notes: (a) the appender
-path is *more* atomic than before — sums/gauges previously committed
+path is *more* atomic than before, sums/gauges previously committed
 every 50 rows, so a mid-batch failure could leave partial chunks;
 now the whole batch is one transaction and a retry cannot duplicate
 (`TestAppendRows_ErrorLeavesZeroRows` pins this, and it's load-bearing:
 go-duckdb v1.8.3's `Appender.Close` flushes even on the error path,
 so the rollback is what guarantees zero rows). (b) `AppendRow`
-requires every schema column in order — the writer round-trip tests
+requires every schema column in order, the writer round-trip tests
 in `writers_test.go` pin column order, JSON columns, and
 empty-string→NULL flattening against a real DuckDB file.
 
@@ -194,7 +194,7 @@ make otlpsim
 ./build/otlpsim --rate=200 --duration=60s          # baseline
 ./build/otlpsim --rate=2000 --duration=60s --senders=32   # saturation
 
-# Terminal 3 — watch the (now real) backlog signal
+# Terminal 3, watch the (now real) backlog signal
 watch -n 1 'curl -sS localhost:8080/metrics | grep -E "worker_queue_depth|dead_letters|otlp_http_requests"'
 
 # Reconcile after drain (cache TTL is 15s; wait it out)
@@ -202,5 +202,5 @@ curl -sS "localhost:8080/api/v1/insights/volume?window=1h"
 ```
 
 Compare `otlpsim`'s final `items ok` per signal against the
-`by_signal` item counts — they must match exactly once the queue
+`by_signal` item counts, they must match exactly once the queue
 drains.

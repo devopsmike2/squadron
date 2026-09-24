@@ -1,4 +1,4 @@
-# OCI (Oracle Cloud) discovery — slice 1 design
+# OCI (Oracle Cloud) discovery, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. Fourth
 cloud arc following AWS (#558), GCP (gcp-discovery-slice1.md), and
@@ -33,7 +33,7 @@ single OSS control plane can credibly support.
 Operators with Oracle Cloud-resident workloads see no inventory,
 no recommendations, no IaC PRs from Squadron's surface today.
 After Azure slice 1, the universal claim covers three major
-clouds — but Oracle Cloud is significant in enterprise (especially
+clouds, but Oracle Cloud is significant in enterprise (especially
 database-heavy workloads, large institutional users) and the gap
 weakens the claim against enterprise buyers evaluating Squadron
 against multi-cloud requirements.
@@ -63,7 +63,7 @@ Load Balancer) in slices 2-5.
 
 ## 3. Architectural decision: credential model
 
-OCI uses **API Signing Keys** — RSA keypair-based authentication.
+OCI uses **API Signing Keys**, RSA keypair-based authentication.
 The operator generates an RSA keypair, uploads the public key to
 OCI Console (or via CLI), and gets back a key fingerprint. The
 private key + fingerprint + tenancy_ocid + user_ocid + region
@@ -76,7 +76,7 @@ This is materially different from:
 
 Three credential model options for OCI:
 
-### Option A — API Signing Key (operator-managed)
+### Option A, API Signing Key (operator-managed)
 
 Operator generates the keypair locally, uploads public key to OCI,
 pastes private key + the OCID fields + fingerprint into Squadron.
@@ -89,7 +89,7 @@ request using the unsealed private key.
 from GCP SA JSON and Azure SP secret. The signing-per-request
 overhead is negligible (operations bounded, signing is in-memory).
 
-### Option B — Instance Principal (Squadron running on OCI)
+### Option B, Instance Principal (Squadron running on OCI)
 
 Squadron on an OCI Compute instance can authenticate without
 explicit credentials via the Instance Principal mechanism.
@@ -98,7 +98,7 @@ explicit credentials via the Instance Principal mechanism.
 Managed Identity: couples Squadron's deployment to one specific
 cloud. Squadron's value is platform-agnostic.
 
-### Option C — Resource Principal
+### Option C, Resource Principal
 
 For OCI Functions / Container Engine workloads.
 
@@ -147,7 +147,7 @@ with Create/Get/List/Update/Delete methods.
 Migration: `CREATE TABLE oci_connections (...)` with index on
 `tenancy_ocid`.
 
-Note OCI requires `Region` always — unlike AWS / GCP / Azure
+Note OCI requires `Region` always, unlike AWS / GCP / Azure
 which allow empty Region for "scan all". OCI's API endpoints
 are regional, so the scanner must know which region to query.
 Slice 1 ships single-region per connection; multi-region
@@ -192,11 +192,11 @@ Create request: `{display_name, tenancy_ocid, user_ocid, fingerprint, sealed_pri
 4. Return `{ok: true, instance_count: <count>}` on success.
 
 Error_kinds:
-- **permission_denied** — 403 / "NotAuthorizedOrNotFound" body.
-- **tenancy_not_found** — 404 on tenancy.
-- **fingerprint_mismatch** — auth error mentioning key fingerprint.
-- **private_key_invalid** — local parse/RSA error before request.
-- **network** — transport-level.
+- **permission_denied**, 403 / "NotAuthorizedOrNotFound" body.
+- **tenancy_not_found**, 404 on tenancy.
+- **fingerprint_mismatch**, auth error mentioning key fingerprint.
+- **private_key_invalid**, local parse/RSA error before request.
+- **network**, transport-level.
 
 ## 8. UI
 
@@ -359,7 +359,7 @@ multi-region orchestrator, Resource Search API.
    tenancy. Slice 2 candidate: per-compartment scope filtering
    for tenants with isolated team compartments.
 
-5. **OS detection.** Slice 1 leaves OSFamily="unknown" — OCI
+5. **OS detection.** Slice 1 leaves OSFamily="unknown", OCI
    exposes OS via the Image relationship which needs a
    secondary lookup. Slice 2 adds detection.
 
@@ -388,20 +388,20 @@ multi-region orchestrator, Resource Search API.
 
 Tighter than Azure because patterns are decisively proven:
 
-- **Chunk 1: Foundation** — storage + signing key sealing +
+- **Chunk 1: Foundation**, storage + signing key sealing +
   audit constants. ~600-800 lines. v0.89.56.
-- **Chunk 2: Scanner** — internal/discovery/oci package + manual
+- **Chunk 2: Scanner**, internal/discovery/oci package + manual
   request signing + Compute Instance walker + tests. ~700-900
   lines. v0.89.57.
-- **Chunk 3: API handlers** — HTTP endpoints + validate + scan
+- **Chunk 3: API handlers**, HTTP endpoints + validate + scan
   + tests. ~700-900 lines. v0.89.57 (parallel with chunk 2).
-- **Chunk 4: UI page + wizard** — DiscoveryOCI.tsx + wizard
+- **Chunk 4: UI page + wizard**, DiscoveryOCI.tsx + wizard
   data + tests. ~800-1000 lines. v0.89.58.
-- **Chunk 5: Proposer integration** — Provider="oci" +
+- **Chunk 5: Proposer integration**, Provider="oci" +
   compute-otel-tag + branch encoding + ListDiscoveryVerdicts
   fourth OR-match. ~500-700 lines. v0.89.58 (parallel with
   chunk 4).
-- **Chunk 6: Runbook** — discovery-oci-first-time-setup.md.
+- **Chunk 6: Runbook**, discovery-oci-first-time-setup.md.
   ~400-600 lines. v0.89.59.
 
 Total 4 release tags across 6 chunks. Faster than Azure's 5
@@ -428,7 +428,7 @@ Listed in §2 plus:
 **Strategic frame:**
 
 OCI slice 1 brings Squadron to 4 clouds. The universal
-observability claim is now "AWS, GCP, Azure, AND Oracle Cloud" —
+observability claim is now "AWS, GCP, Azure, AND Oracle Cloud",
 the strongest version that a single OSS control plane can
 defensibly support without becoming a SaaS dependency hell.
 Operators evaluating Squadron against multi-cloud enterprise
@@ -437,7 +437,7 @@ requirements see all 4 major Western clouds covered.
 After OCI, the natural next moves are:
 
 1. **Slice 2 deepening** across all 4 clouds simultaneously
-   (Cloud SQL / Azure SQL / RDS / Autonomous DB — the database
+   (Cloud SQL / Azure SQL / RDS / Autonomous DB, the database
    tier).
 2. **Alibaba / Tencent Cloud** for global enterprise reach
    (slice 1 for each in 3 chunks given substrate maturity).

@@ -1,4 +1,4 @@
-# #531 slice 2 — Unified verdict learning across proposer surfaces
+# #531 slice 2, Unified verdict learning across proposer surfaces
 
 **Status:** design doc, locked for slice 2 implementation. Slice 1
 of #531 SHIPPED (v0.89.17 / 18 / 19 / 22). The §10 Q3 cost-spike
@@ -28,7 +28,7 @@ verdicts from the `rollouts` table; the discovery proposer
 ([`proposer_discovery.go::ProposeFromDiscoveryScan`](../../internal/ai/proposer_discovery.go))
 reads recent merged-PR events from the `audit_events` table.
 The query shapes diverge, the verdict types diverge, the prompt
-block formats diverge — but the *purpose* is the same: learn
+block formats diverge, but the *purpose* is the same: learn
 from operator history, surface a small in-context block, bound
 the example payload, redact secrets, opt out per surface.
 
@@ -70,7 +70,7 @@ questions slice 1 explicitly deferred:
    exist.
 
 5. **A shared selection + prompt layer.** Storage stays
-   separate — rollouts and audit-events are not the same data
+   separate, rollouts and audit-events are not the same data
    and shouldn't be force-merged. But the selection policy
    (tier windows, kind diversity, opt-out, redaction) and the
    prompt block construction (line format, instructional copy)
@@ -91,7 +91,7 @@ questions slice 1 explicitly deferred:
   #531 slice 1.
 - Storage unification. The two surfaces continue to read from
   separate tables. A shared `learning.Store` interface is
-  tempting but premature — the row schemas genuinely diverge.
+  tempting but premature, the row schemas genuinely diverge.
 - Fine-tuning, RAG, embedding stores. Prompt-only stays the
   contract.
 - Recommendation-level history beyond what slice 2 needs for
@@ -103,7 +103,7 @@ questions slice 1 explicitly deferred:
   Recommendations tab; the wizard onboarding flow doesn't
   need to teach this yet.
 - Per-tenant cross-group sharing flag mentioned in the
-  brainstorm. Defer to slice 3 — operators with multi-team
+  brainstorm. Defer to slice 3, operators with multi-team
   concerns haven't asked for this.
 - Automatic decay constant tuning. Slice 2 ships the two-tier
   window with fixed boundaries (7d, 30d). If we learn the
@@ -120,7 +120,7 @@ both rollout verdicts (rich reasoning + approver notes) and
 discovery merges (PR URLs + branch names + merged_by). The
 union of those fields is a wide row with a `surface` enum
 discriminator and a lot of nullable columns. Worse, the rollup
-write path would have to fork at every audit-emit point — every
+write path would have to fork at every audit-emit point, every
 `rollout.approved`, every `rollout.rejected`, every
 `recommendation.pr_merged`, every (slice 2 new)
 `recommendation.pr_closed_not_merged` would need to land both
@@ -131,9 +131,9 @@ The shipped reality is that the two surfaces read directly off
 the data the operator already wrote: rollouts for cost-spike,
 audit events for discovery. Adding a third table that duplicates
 this data buys nothing and costs schema complexity. The
-*selection logic* — how to pick N from M candidates, how to
+*selection logic*, how to pick N from M candidates, how to
 apply the recency window, how to enforce kind diversity, how
-to fold in the opt-out flag, how to wire redaction — is what
+to fold in the opt-out flag, how to wire redaction, is what
 the two surfaces actually share. That logic is functional;
 extract it.
 
@@ -252,11 +252,11 @@ selection pass filters out any verdict whose
 The two negative-signal sources are deliberately separate from
 the `recommendation.pr_merged` accepted signal:
 
-- **PR closed without merge** is a *behavioral* signal —
+- **PR closed without merge** is a *behavioral* signal,
   the operator engaged with the recommendation, opened the PR,
   then closed it. Strong "don't propose this shape" signal,
   but the operator may still want the kind for other resources.
-- **Operator-set exclusion** is an *explicit* signal —
+- **Operator-set exclusion** is an *explicit* signal,
   the operator clicked Don't propose this again. Strongest
   possible "drop this from learning entirely" signal.
 
@@ -268,7 +268,7 @@ examples, with the line text differentiating.
 
 Slice 2 still does NOT treat any of these as signal:
 
-- **PR opened, no merge or close yet.** Same as slice 1 — the
+- **PR opened, no merge or close yet.** Same as slice 1, the
   PR might still merge. Counts as nothing.
 - **Recommendation appeared in prior scan, operator never
   opened a PR.** Same as slice 1. Too noisy; operators triage
@@ -290,7 +290,7 @@ columns; only the selection policy changes.
 Two changes:
 
 **(a) New audit event type emitted on PR-close-not-merge.** No
-schema change — the `audit_events` table already accepts
+schema change, the `audit_events` table already accepts
 arbitrary event types. The webhook receiver gains the emit
 call. The existing partial index
 `idx_audit_pr_merged_scope` (v0.89.28) is extended to cover
@@ -377,7 +377,7 @@ algorithm:
    them for emphasis), approved examples second.
 
 The algorithm is intentionally deterministic given the input
-slice — no time-based seeded random — so cold-start parity
+slice, no time-based seeded random, so cold-start parity
 tests and golden-output regression tests are practical.
 
 Constants for slice 2 (in `internal/proposer/verdictsel/consts.go`):
@@ -442,7 +442,7 @@ Prior verdicts for this group (operator decisions on past AI proposals):
 
 Use these as preference signal. Match the shape of approved
 proposals; avoid the shape of rejected ones. Do NOT cite these
-rollout_ids in your evidence — they're operator history, not
+rollout_ids in your evidence, they're operator history, not
 evidence for this spike.
 ```
 
@@ -471,7 +471,7 @@ Use these as preference signal. Do NOT re-propose the same
 kind+resource against the same scope that the operator has
 already accepted or explicitly excluded within the window. For
 closed-without-merge entries, the operator engaged but
-declined this specific shape — you may propose a different
+declined this specific shape, you may propose a different
 variation if you have evidence; cite the divergence in your
 reasoning. If the operator-excluded entry applies to this
 scope, drop the entire kind from your recommendations.
@@ -495,7 +495,7 @@ merge means. Three interpretations are possible:
 
 Slice 2's posture: treat case (1) as the assumption, with the
 prompt instructing the model that case (2) and (3) are
-recoverable — "you may propose a different variation if you
+recoverable, "you may propose a different variation if you
 have evidence." This isn't perfect; a few operators in case
 (2) will lose recommendations they would have eventually
 accepted on a retry. But the alternative (treat
@@ -526,7 +526,7 @@ continues to apply on both surfaces. Slice 2's shared
 field of every emitted verdict; surface-local code paths
 unchanged.
 
-PR URLs themselves are not redacted — slice 1 of #643 ships
+PR URLs themselves are not redacted, slice 1 of #643 ships
 them in the prompt verbatim. Operators who want PR URLs hidden
 disable learning at the connection level. The runbook flags
 this explicitly.
@@ -536,13 +536,13 @@ this explicitly.
 Three additions, all surface-local emits with shared payload
 shape from the slice 2 shared layer:
 
-**(a) `recommendation.pr_closed_not_merged`** — new event type
+**(a) `recommendation.pr_closed_not_merged`**, new event type
 emitted by the webhook receiver. Payload mirrors
 `recommendation.pr_merged` exactly with `closed_at` and
 `closed_by` instead of `merged_at` and `merged_by`. Humanizer:
 `Operator closed PR #N in <repo> without merging (kind=<kind>)`.
 
-**(b) `discovery_recommendation.excluded`** — new event type
+**(b) `discovery_recommendation.excluded`**, new event type
 emitted when the operator clicks the Don't propose this again
 affordance. Payload:
 
@@ -567,7 +567,7 @@ payload shape minus the `excluded_by` (replaced with
 `cleared_by`).
 
 **(c) Extended `proposal.created` and `discovery_proposal.created`
-payloads** — both gain a `verdict_examples_used_by_state`
+payloads**, both gain a `verdict_examples_used_by_state`
 field that breaks the existing `verdict_examples_used` array
 into per-state buckets:
 
@@ -596,9 +596,9 @@ state mix, e.g. `Discovery recommendations generated
 
 **In:**
 
-1. New package `internal/proposer/verdictsel` — pure functions,
+1. New package `internal/proposer/verdictsel`, pure functions,
    `Verdict` type, `SelectOpts`, `Select(rows, opts) []Verdict`.
-2. New package `internal/proposer/verdictprompt` — pure
+2. New package `internal/proposer/verdictprompt`, pure
    functions, `Render(approved, rejected, opts) string`, line
    format helpers.
 3. Both packages have unit tests covering: hot/cold tier
@@ -708,13 +708,13 @@ state mix, e.g. `Discovery recommendations generated
 
 ## 12. Acceptance tests
 
-1. **Cold start parity — cost-spike.** Group with zero AI-
+1. **Cold start parity, cost-spike.** Group with zero AI-
    originated rollouts: `ProposeFromCostSpike` produces a
    prompt byte-for-byte identical to the slice 1 (v0.89.17)
    output. Existing `proposer_test.go` golden passes
    unchanged.
 
-2. **Cold start parity — discovery.** Connection with zero
+2. **Cold start parity, discovery.** Connection with zero
    `recommendation.pr_merged`, zero
    `recommendation.pr_closed_not_merged`, zero excluded
    recommendations: `ProposeFromDiscoveryScan` produces a
@@ -722,19 +722,19 @@ state mix, e.g. `Discovery recommendations generated
    output. Existing `proposer_discovery_test.go` golden
    passes unchanged.
 
-3. **Hot/cold tier ordering — cost-spike.** Seed 2 approved
+3. **Hot/cold tier ordering, cost-spike.** Seed 2 approved
    rollouts: one dated 2 days ago, one dated 20 days ago. Both
    land in the prompt. Assert: the 2-day-old example appears
    first within the approved bucket regardless of which
    rollout has the lexicographically smaller ID.
 
-4. **Kind diversity cap — discovery.** Seed 5 merged PRs in
+4. **Kind diversity cap, discovery.** Seed 5 merged PRs in
    scope, all of kind `rds-pi-em`. Fire a discovery proposal.
    Assert: at most 2 examples of `rds-pi-em` appear in the
    prompt; the remaining 2 slots of MaxTotal=4 stay empty
    because no other kinds exist in the pool.
 
-5. **Negative signal — closed_not_merged surfaces.** Seed 1
+5. **Negative signal, closed_not_merged surfaces.** Seed 1
    `recommendation.pr_closed_not_merged` audit event in scope,
    kind=`rds-pi-em`, closed 1 day ago. Fire a discovery
    proposal. Assert: the user message contains
@@ -743,7 +743,7 @@ state mix, e.g. `Discovery recommendations generated
    `verdict_examples_used_by_state.closed_not_merged` contains
    the PR URL.
 
-6. **Negative signal — operator exclusion surfaces.** Operator
+6. **Negative signal, operator exclusion surfaces.** Operator
    clicks Don't propose this again on a recommendation of
    kind=`eks-observability-addon` with `resource_id=null`.
    Fire a discovery proposal in the same scope. Assert: the
@@ -752,14 +752,14 @@ state mix, e.g. `Discovery recommendations generated
    `resource_id=null` semantics. The proposer's output does
    NOT include any `eks-observability-addon` recommendations.
 
-7. **Per-verdict exclude respected — cost-spike.** Seed 3
+7. **Per-verdict exclude respected, cost-spike.** Seed 3
    approved rollouts in group G. Mark one as
    `ExcludeFromLearning=true`. Fire a spike proposal. Assert:
    the excluded rollout's ID does NOT appear in
    `verdict_examples_used_by_state.approved` and does NOT
    appear in the prompt.
 
-8. **Per-tenant opt-out short-circuits — discovery.** Connection
+8. **Per-tenant opt-out short-circuits, discovery.** Connection
    C has `LearnFromAcceptedRecommendations=false`. Seed 3
    merged + 2 closed_not_merged events in scope. Fire a
    discovery proposal. Assert: no examples block in the
@@ -767,13 +767,13 @@ state mix, e.g. `Discovery recommendations generated
    buckets, and the database query for verdicts is NOT made
    (verified via store-call counter on the fake).
 
-9. **Recency window enforced — both surfaces.** Seed one
+9. **Recency window enforced, both surfaces.** Seed one
    example dated 31 days ago on each surface. Fire fresh
    proposals on both. Assert: the 31-day-old example does NOT
    appear in either prompt, and is NOT in any of the audit
    payload buckets.
 
-10. **Shared layer regression — verdictsel pure function.**
+10. **Shared layer regression, verdictsel pure function.**
     Unit-test `verdictsel.Select` with a curated input slice of
     20 verdicts spanning all states / both tiers / 5 kinds.
     Assert: the output is deterministic (calling twice with

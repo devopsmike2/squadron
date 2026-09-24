@@ -3,7 +3,7 @@
 Squadron's CI runs security scanners as **gates** (`.github/workflows/security.yml`).
 Each gate is **baselined**: `main` is green today, and any *new* high/critical
 finding fails the build. Everything currently suppressed is listed below with a
-justification and a TODO — nothing is silenced without a reason.
+justification and a TODO, nothing is silenced without a reason.
 
 > The gates run on every PR and every push to `main`/`develop`.
 
@@ -22,20 +22,20 @@ justification and a TODO — nothing is silenced without a reason.
 
 All items trace back to the 2026-08-24 deep security scan triage.
 
-### govulncheck — `.govulncheck-allow.txt`
-- **GO-2026-5158** (`go.opentelemetry.io/otel` baggage DoS) — reachable via the
+### govulncheck, `.govulncheck-allow.txt`
+- **GO-2026-5158** (`go.opentelemetry.io/otel` baggage DoS), reachable via the
   OTLP telemetry path. Deferred pending a **coordinated** bump of the whole otel
   module set (core + otlp exporters move in lockstep). TODO: bump otel, then
   delete the line. This is the **only** reachable vuln; everything else
   (grpc, x/text) was already fixed by earlier dependency bumps.
 
-### gosec — inline `#nosec`
-- **G701** in `internal/storage/telemetrystore/duckdb/duckdb.go` — DuckDB's `SET
+### gosec, inline `#nosec`
+- **G701** in `internal/storage/telemetrystore/duckdb/duckdb.go`, DuckDB's `SET
   memory_limit=...` has no bind form, so the value is string-interpolated. The
   value is operator config only (a flag / `SQUADRON_DUCKDB_MEMORY_LIMIT`), never
   request/agent input, and is now regex-validated before use (defense-in-depth).
   Annotated `#nosec G701` with that rationale.
-- **G402** (×2) in `internal/egressguard/egressguard.go` — `InsecureSkipVerify:
+- **G402** (×2) in `internal/egressguard/egressguard.go`, `InsecureSkipVerify:
   true` is set ONLY when a per-destination operator opt-in is passed
   (`AllowInsecureTLS` / the Splunk connector's `insecure_skip_verify` knob, e.g.
   an on-prem Splunk HEC with a self-signed cert). The default is verify-on: both
@@ -46,7 +46,7 @@ All items trace back to the 2026-08-24 deep security scan triage.
   scan (G204 exec, G404 rng, G101 label consts, G201/G202 fmt) fall below the
   high/high threshold and never reach this gate.
 
-### gitleaks — `.gitleaks.toml`
+### gitleaks, `.gitleaks.toml`
 Full git history is clean (trufflehog `--only-verified` = 0). The allowlist
 covers only **verified non-secrets**: synthetic test fixtures that deliberately
 embed fake tokens (`internal/ai/redact_test.go`, `audit_explain_test.go`,
@@ -55,10 +55,10 @@ embed fake tokens (`internal/ai/redact_test.go`, `audit_explain_test.go`,
 (`credstore/oci_signing_key.go`), UI example strings
 (`DiscoveryOCI.tsx`/`.test.tsx`, `CommandPaletteHint.tsx`), and generated build
 output (`ui/dist`, `ui/coverage`, `ui/.pnpm-store`, `node_modules`). `.env` is
-**not** allowlisted — it is the real-secret tripwire.
+**not** allowlisted, it is the real-secret tripwire.
 
-### trivy — `.trivyignore`
-- **CVE-2026-56864 / CVE-2026-56865** (`golang.org/x/mod`, fixed in v0.40.0) —
+### trivy, `.trivyignore`
+- **CVE-2026-56864 / CVE-2026-56865** (`golang.org/x/mod`, fixed in v0.40.0),
   imported transitively but **not reachable** (govulncheck confirms). Accepted;
   TODO: `go get golang.org/x/mod@v0.40.0` then remove. The Trivy gate skips
   `ui/` (UI prod deps are governed by `npm audit`); frontend dev/build-tooling

@@ -1,4 +1,4 @@
-# GCP discovery — slice 1 design
+# GCP discovery, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. This is
 the first universal-observability arc beyond AWS. The AWS discovery
@@ -11,7 +11,7 @@ reuses those substrates and adds a GCP-specific scanner + connector
 The strategic frame: Squadron's positioning claim is "the universal
 observability control plane." The webhook and verdict-learning
 arcs that closed in the last 48 hours added depth on AWS. This arc
-adds breadth — Squadron now scans a second cloud provider. After
+adds breadth, Squadron now scans a second cloud provider. After
 slice 1 ships, the operator-facing claim becomes "Squadron scans
 your AWS AND GCP fleets for observability gaps and drafts the IaC
 PRs that close them." That's the first concrete step toward
@@ -82,7 +82,7 @@ substrate to grow into the other categories in slices 2 through 5.
 GCP authentication has three real options. Each materially shapes
 slice 1 and beyond.
 
-### Option A — Service Account JSON key, sealed via credstore
+### Option A, Service Account JSON key, sealed via credstore
 
 Operator creates a GCP Service Account in their project, downloads
 a JSON key file, pastes the JSON into Squadron's wizard. Squadron
@@ -95,7 +95,7 @@ the credentials.
 already know. Credstore substrate exists; no new sealing logic.
 The wizard step is "paste this JSON" which is a single field.
 
-### Option B — Workload Identity Federation (WIF) with token exchange
+### Option B, Workload Identity Federation (WIF) with token exchange
 
 Operator configures a WIF pool in GCP pointing at Squadron's
 deployment identity (e.g. a Kubernetes service account, an AWS
@@ -104,7 +104,7 @@ exchanges a federated identity token for a short-lived GCP access
 token at scan time. No long-lived credential lives in Squadron.
 
 **Deferred to slice 2.** The security posture is strictly better
-than SA keys — no key material to compromise, automatic short
+than SA keys, no key material to compromise, automatic short
 lifetime, native GCP audit trail. But the wizard flow is materially
 more complex (operator configures WIF in GCP console, copies the
 provider name back to Squadron, Squadron's deployment identity
@@ -114,13 +114,13 @@ service account if running on GKE, etc.). Slice 1 operators with
 sandbox projects don't have a real need for WIF; slice 2 ships it
 for production operators.
 
-### Option C — Application Default Credentials (ADC) inherited from the host
+### Option C, Application Default Credentials (ADC) inherited from the host
 
 If Squadron runs on GCE / GKE / Cloud Run, GCP's ADC client picks
 up the host's service account automatically. No wizard step at all.
 
 **Rejected for slice 1.** Couples Squadron to GCP for its own
-deployment. Squadron's value is that it runs anywhere — a $5 VPS,
+deployment. Squadron's value is that it runs anywhere, a $5 VPS,
 a Kubernetes cluster on AWS, a developer's laptop. Requiring
 operators to deploy Squadron on GCP just to scan GCP is bad
 posture. ADC is a slice 2 fallback for operators who DO deploy
@@ -143,7 +143,7 @@ project ID. The Scan method walks the project's GCE instances and
 returns a Result with `ComputeInstanceSnapshot` entries.
 
 The provider-agnostic snapshot types (ComputeInstanceSnapshot,
-DatabaseInstanceSnapshot) already accommodate GCP naming —
+DatabaseInstanceSnapshot) already accommodate GCP naming,
 `InstanceType` is "raw string" (n2-standard-4 fits next to
 m5.large), `OSFamily` is normalized to linux/windows/unknown,
 Tags map[string]string accepts GCP labels directly. No type
@@ -152,7 +152,7 @@ changes needed.
 The Result.FailedServices identifier vocabulary extends to include
 GCP service names: "gce" for Compute Engine, "cloud_sql" for slice
 2's database surface, etc. The AWS scanner already uses bare
-service names ("ec2", "rds"); GCP uses "gce", "cloud_sql" —
+service names ("ec2", "rds"); GCP uses "gce", "cloud_sql",
 unprefixed because the connection model (§5) carries the provider
 discriminator separately.
 
@@ -161,7 +161,7 @@ discriminator separately.
 A new `GCPConnection` row type parallel to the existing
 `AWSConnection` (renamed `CloudConnection` in v0.85's
 generalization refactor). Look at `internal/discovery/clouds/types.go`
-or the equivalent to see the current CloudConnection shape — slice
+or the equivalent to see the current CloudConnection shape, slice
 1 extends it with a `Provider` field if not present and adds
 GCP-specific fields.
 
@@ -231,14 +231,14 @@ time without forcing the storage layer to flatten now.
 
 Mirror the AWS surface at `/api/v1/discovery/gcp/*`:
 
-- `POST   /api/v1/discovery/gcp/connections` — create connection
-- `GET    /api/v1/discovery/gcp/connections` — list connections
-- `GET    /api/v1/discovery/gcp/connections/:id` — get connection
-- `PATCH  /api/v1/discovery/gcp/connections/:id` — update connection
-- `DELETE /api/v1/discovery/gcp/connections/:id` — delete connection
-- `POST   /api/v1/discovery/gcp/connections/:id/validate` — dry-run scan: list 1 instance from each region the SA can see, confirm credentials work
-- `POST   /api/v1/discovery/gcp/connections/:id/scan` — synchronous full scan
-- `POST   /api/v1/discovery/gcp/connections/:id/recommendations` — run the proposer against a recent scan and return recommendations
+- `POST   /api/v1/discovery/gcp/connections`, create connection
+- `GET    /api/v1/discovery/gcp/connections`, list connections
+- `GET    /api/v1/discovery/gcp/connections/:id`, get connection
+- `PATCH  /api/v1/discovery/gcp/connections/:id`, update connection
+- `DELETE /api/v1/discovery/gcp/connections/:id`, delete connection
+- `POST   /api/v1/discovery/gcp/connections/:id/validate`, dry-run scan: list 1 instance from each region the SA can see, confirm credentials work
+- `POST   /api/v1/discovery/gcp/connections/:id/scan`, synchronous full scan
+- `POST   /api/v1/discovery/gcp/connections/:id/recommendations`, run the proposer against a recent scan and return recommendations
 
 Body shapes mirror AWS counterparts. The POST /connections body
 accepts `{display_name, project_id, sealed_sa: <base64>, region}`.
@@ -298,7 +298,7 @@ The wizard differs in step content but not structure:
 
 **Step 4: Validate**
 - Click button → calls validate endpoint → shows result.
-- On success: "Connected ✓ — N instances visible."
+- On success: "Connected ✓, N instances visible."
 - On failure: humanized error with specific remediation by
   error_kind.
 
@@ -327,7 +327,7 @@ Insights analog → Cloud Monitoring agent detection) once the
 breadth foundation is solid.
 
 The recommendation kind for GCP Compute Engine slice 1:
-`gce-otel-label` (mirroring AWS's `ec2-otel-tag` — the rename
+`gce-otel-label` (mirroring AWS's `ec2-otel-tag`, the rename
 captures GCP's "label" terminology).
 
 The proposer's recommendation reasoning template is shared with
@@ -354,7 +354,7 @@ message describes which scope was scanned (provider + project_id
 + region for GCP, provider + account_id + region for AWS). The
 existing `verdict_examples_used_by_state` scope filter (chunk 6 of
 #531 slice 2) already buckets by `(connection_id, account_id,
-region)` for AWS — slice 1 extends this to scope on `(connection_id,
+region)` for AWS, slice 1 extends this to scope on `(connection_id,
 project_id, region)` for GCP. The bridge layer abstracts the
 "scope tuple" so the proposer and the verdict learning loop don't
 need to know which provider authored the scan.
@@ -461,7 +461,7 @@ Mitigation:
 Slice 1's wizard documents granting `roles/compute.viewer` (the
 predefined role for read-only Compute Engine access). This role
 permits listing instances, fetching their metadata, and reading
-labels — exactly what the scanner needs. It does NOT permit any
+labels, exactly what the scanner needs. It does NOT permit any
 write operations on the project.
 
 Operators with stricter posture preferences can create a custom
@@ -473,7 +473,7 @@ permissions. Runbook documents this alternative.
 If the operator's SA was created in project A but the connection
 configures project B, GCP's compute API returns an empty list
 without error. The scanner sees "0 instances" and emits a
-scan_completed event with the partial flag unset — which is
+scan_completed event with the partial flag unset, which is
 wrong.
 
 Mitigation: the validate endpoint cross-checks the SA's project
@@ -499,14 +499,14 @@ need additional isolation. Document as a slice-3+ consideration.
 1. **Service Account email validation.** The wizard could parse
    the SA JSON's `client_email` field and validate it ends in
    `.iam.gserviceaccount.com` to catch operators who paste the
-   wrong file. Add to slice 1 — it's a small validation but
+   wrong file. Add to slice 1, it's a small validation but
    catches a real-world failure mode.
 
 2. **Region selection UI.** Slice 1 ships single-region with
    empty = "scan all regions." Operators with very large GCE
    fleets across many regions may hit rate limits during scan.
    Worth surfacing region selection in the wizard? Slice 1 says
-   no — keep the wizard simple; slice 2 adds region selection.
+   no, keep the wizard simple; slice 2 adds region selection.
 
 3. **GCE preemptible instances.** Some GCE instances are
    short-lived (preemptible). Slice 1 includes them in the
@@ -528,7 +528,7 @@ need additional isolation. Document as a slice-3+ consideration.
 6. **OAuth scope vs IAM role.** The SA JSON itself doesn't carry
    the IAM bindings; those live on the GCP project. If an
    operator grants `roles/owner` (not `roles/compute.viewer`),
-   the validate endpoint still succeeds — Squadron can't see the
+   the validate endpoint still succeeds, Squadron can't see the
    role assignment. Surface this as a runbook note: "If validate
    succeeds but the SA has broader scope than compute.viewer,
    tighten the binding."
@@ -616,28 +616,28 @@ need additional isolation. Document as a slice-3+ consideration.
 Slice 1 implementation breaks into 7 chunks. Estimated 6 to 9
 sessions across them, sized roughly:
 
-- **Chunk 1: Foundation** — storage type + gcpconnstore + SA
+- **Chunk 1: Foundation**, storage type + gcpconnstore + SA
   sealing + audit constants. ~700-900 lines. Backend only, no
   wire-up to scanner yet. v0.89.46.
-- **Chunk 2: Scanner** — internal/discovery/gcp package +
+- **Chunk 2: Scanner**, internal/discovery/gcp package +
   Compute Engine scanner + scan.Scanner interface implementation
   + unit tests with mocked compute API. ~600-800 lines. v0.89.47.
-- **Chunk 3: API handlers** — HTTP endpoints for the §6 surface +
+- **Chunk 3: API handlers**, HTTP endpoints for the §6 surface +
   validate / scan / recommendations + tests. ~700-900 lines.
   Connects chunks 1 and 2 to the network surface. v0.89.48.
-- **Chunk 4: UI page + wizard** — DiscoveryGCP page + wizard
+- **Chunk 4: UI page + wizard**, DiscoveryGCP page + wizard
   step data + tests. ~800-1100 lines (UI typically denser). v0.89.49.
-- **Chunk 5: Proposer integration** — Provider field on
+- **Chunk 5: Proposer integration**, Provider field on
   DiscoveryScanContext + gce-otel-label kind + system prompt
   extension + branch encoding refresh. ~500-700 lines. v0.89.50.
-- **Chunk 6: Runbook + visual assets** — Operator runbook
+- **Chunk 6: Runbook + visual assets**, Operator runbook
   mirroring discovery-iac-first-time-setup.md but for GCP +
   README index entry + (optional) docs/README.md entry.
   ~400-600 lines. v0.89.51.
-- **Chunk 7: End-to-end smoke test** — Spin up a real GCP
+- **Chunk 7: End-to-end smoke test**, Spin up a real GCP
   sandbox project, walk through the wizard, scan, draft, PR.
   Capture screenshots for LinkedIn / demo. Manual test.
-  No code release — closes the arc with proven end-to-end loop.
+  No code release, closes the arc with proven end-to-end loop.
 
 Parallelism opportunities: chunks 2 and 3 can run in parallel
 (scanner is independent of the API handlers; the handlers wire

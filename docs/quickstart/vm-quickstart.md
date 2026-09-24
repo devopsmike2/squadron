@@ -5,7 +5,7 @@ first collector. This is the recommended path for evaluation and small,
 self-hosted fleets (< 500 collectors).
 
 Squadron OSS is **single-instance** with an embedded store (SQLite for state,
-DuckDB for telemetry rollups) — no external database, no message bus. Postgres,
+DuckDB for telemetry rollups), no external database, no message bus. Postgres,
 HA, and multi-replica clustering are commercial-tier concerns, so you won't need
 them here.
 
@@ -59,7 +59,7 @@ storage:
   sqlite_path: /var/lib/squadron/squadron.db
 
 # Turn on bearer-token auth. The first start mints a bootstrap token and
-# prints it to the log — rotate it from the UI afterward.
+# prints it to the log, rotate it from the UI afterward.
 auth:
   require_token: true
 
@@ -165,7 +165,7 @@ service:
 ```
 
 > The in-product wizard at `/quickstart` generates this exact snippet with the
-> host filled in — copy it from there rather than hand-writing the `opamp` block.
+> host filled in, copy it from there rather than hand-writing the `opamp` block.
 
 Start the collector. Within a few seconds it appears as **online** on the UI's
 Agents page. Open the agent, click **Edit config**, save, and Squadron pushes
@@ -173,19 +173,19 @@ the new versioned config over OpAMP.
 
 ## Before you call it "production"
 
-Evaluation is done — this checklist turns it into a real deployment:
+Evaluation is done, this checklist turns it into a real deployment:
 
 - Auth on (`auth.require_token: true`) and the bootstrap token rotated.
 - TLS on every public-facing port (8080, 4320; also 4317/4318 if they cross an
   untrusted network).
-- Tokens scoped narrowly — read-only for dashboards, write only for humans/CI.
+- Tokens scoped narrowly, read-only for dashboards, write only for humans/CI.
 - Database backed up (snapshot the SQLite file); do a restore drill once.
 - A notification channel (Slack/Teams/PagerDuty/Opsgenie/Discord) wired for
   silent-agent and rollout alerts.
 
 ## Where to go next
 
-- `docs/deployment.md` — the full deployment reference and production checklist.
-- `docs/getting-started.md` — the 5-minute Docker path and config concepts.
-- `docs/operating.md` — environment variables, upgrades, backup, and restore.
-- `docs/auth.md` — tokens, scopes, expiry, and rotation.
+- `docs/deployment.md`, the full deployment reference and production checklist.
+- `docs/getting-started.md`, the 5-minute Docker path and config concepts.
+- `docs/operating.md`, environment variables, upgrades, backup, and restore.
+- `docs/auth.md`, tokens, scopes, expiry, and rotation.

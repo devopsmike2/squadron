@@ -1,4 +1,4 @@
-# Cold-start latency analysis slice 1 — metrics correlation substrate
+# Cold-start latency analysis slice 1, metrics correlation substrate
 
 **Status:** design doc, locked for slice 1 implementation.
 First arc on a NEW substrate dimension (metric correlation)
@@ -30,7 +30,7 @@ class: **latency outliers**. The canonical example:
 
 > A Lambda function with X-Ray Active tracing, with the ADOT
 > layer attached, with no orphan spans, with valid traceparent
-> headers — but cold-start P95 sitting at 4.2 seconds when
+> headers, but cold-start P95 sitting at 4.2 seconds when
 > the team's expectation is sub-300ms. Every request hitting
 > a cold start times out at the API Gateway 30s default
 > timeout. The trace looks healthy in the dashboard; the
@@ -89,7 +89,7 @@ to sampling rate analysis or error rate correlation.
   P95 outlier; the recommendation suggests three common
   causes (provisioned concurrency, ARM-X86 migration, init
   script optimization). It does NOT detect which cause
-  applies to a specific function — slice 3+ may add per-language
+  applies to a specific function, slice 3+ may add per-language
   fingerprinting.
 - **Provisioned concurrency cost analysis.** The
   recommendation may suggest provisioned concurrency as
@@ -113,7 +113,7 @@ Per Lambda function in the existing serverless inventory:
 
 The absolute floor (500ms) avoids fingering well-tuned
 functions with naturally low cold-start that happen to hit a
-1.6x ratio (e.g. baseline=200ms, current=320ms — that's a
+1.6x ratio (e.g. baseline=200ms, current=320ms, that's a
 ratio jump but not actually slow).
 
 The detection runs per-scan (which is how Squadron picks up
@@ -129,7 +129,7 @@ to dependencies, etc.). A 1.5x ratio is the threshold above
 which the variance is unlikely to be statistical noise. The
 7-day baseline window smooths week-over-week trends.
 
-Operators can tune this — slice 1 ships the threshold as a
+Operators can tune this, slice 1 ships the threshold as a
 single Go constant. Slice 2 may make it per-recommendation
 configurable.
 
@@ -222,7 +222,7 @@ wraps `cloudwatch.GetMetricStatistics`. It MUST handle:
 - Empty result sets (function never invoked → return
   Value=0, SampleCount=0, no error).
 - API throttling (CloudWatch GetMetricStatistics has a
-  shared per-account TPS limit — slice 1 rate-limits to
+  shared per-account TPS limit, slice 1 rate-limits to
   10 RPS per account; slice 2 may make this configurable).
 
 ## 6. API surface
@@ -256,7 +256,7 @@ New `GET /api/v1/discovery/{provider}/inventory/serverless/{id}/cold_start`:
 
 The existing `GET /api/v1/discovery/aws/inventory` response
 gains a `cold_start_p95_ms` field per Lambda row in the
-serverless array (when observed) — sourced from the latest
+serverless array (when observed), sourced from the latest
 observation in cold_start_observation. NULL when no
 observation exists yet.
 
@@ -279,7 +279,7 @@ column "Cold-start P95 (24h)" between "OTel distro" and
 | Region            | function's region                     |
 | Trace axis        | existing                              |
 | OTel distro       | existing                              |
-| Cold-start P95    | NEW — 24h P95 in ms; "—" if no data   |
+| Cold-start P95    | NEW, 24h P95 in ms; ", " if no data   |
 | Last seen         | existing                              |
 | Quality           | existing                              |
 
@@ -299,7 +299,7 @@ lambda-cold-start-baseline
 ```
 
 Reuses the existing `lambda-` webhook prefix from v0.89.92
-(serverless tier chunk 5) — NO new webhook routing.
+(serverless tier chunk 5), NO new webhook routing.
 
 Reasoning template:
 
@@ -388,23 +388,23 @@ fan-out (slice 1 is AWS-only).
 
 ## 11. Acceptance tests
 
-1. **MetricQuerier interface — slice 1 AWS impl returns
+1. **MetricQuerier interface, slice 1 AWS impl returns
    AggregateMetricResult for InitDuration**.
 2. **Empty CloudWatch response → Value=0, SampleCount=0,
    no error**.
 3. **CloudWatch API throttle → backoff respected, request
    eventually succeeds**.
-4. **Rate limiter caps at 10 RPS per AWS account** — pin
+4. **Rate limiter caps at 10 RPS per AWS account**, pin
    with a test that issues 50 requests in 1 second and
    measures the time taken (should be ~5 seconds).
 5. **Detection ratio at 1.5x exactly and floor at 500ms
-   triggers recommendation** — boundary case.
-6. **Detection ratio at 1.4x does NOT trigger** — below
+   triggers recommendation**, boundary case.
+6. **Detection ratio at 1.4x does NOT trigger**, below
    ratio threshold.
-7. **Detection floor at 499ms does NOT trigger** — below
+7. **Detection floor at 499ms does NOT trigger**, below
    absolute floor.
 8. **Detection without baseline (new function < 7 days
-   old)** — skips the comparison; no recommendation.
+   old)**, skips the comparison; no recommendation.
 9. **Storage migration v13 → v14 idempotent**.
 10. **cold_start_observation rows persist + retrieve**.
 11. **Per-resource cold_start endpoint returns shape per
@@ -413,8 +413,8 @@ fan-out (slice 1 is AWS-only).
     on Lambda rows**.
 13. **UI Cold-start P95 column renders amber when
     exceeds_threshold**.
-14. **UI Cold-start P95 column renders '—' when no data**.
-15. **Cold-start parity preserved** — all 4 providers
+14. **UI Cold-start P95 column renders ', ' when no data**.
+15. **Cold-start parity preserved**, all 4 providers
     cold-start prompts byte-identical to v0.89.111 when no
     cold-start observations exist.
 

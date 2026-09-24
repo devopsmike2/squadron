@@ -1,4 +1,4 @@
-# Event source tier slice 10 — GCP Pub/Sub Lite (third GCP surface, closes the widening pass)
+# Event source tier slice 10, GCP Pub/Sub Lite (third GCP surface, closes the widening pass)
 
 **Status:** design doc, locked for slice 10 implementation.
 Adds GCP Pub/Sub Lite as the third GCP event source surface
@@ -17,7 +17,7 @@ across 4 clouds**.
 After slice 9 the cross-cloud count stands at 3-2-3-3. GCP
 has 2 event source surfaces (Pub/Sub + Cloud Tasks); AWS,
 Azure, and OCI each have 3. Slice 10 brings GCP to 3 by
-adding Pub/Sub Lite — the high-volume low-latency intake
+adding Pub/Sub Lite, the high-volume low-latency intake
 primitive at a lower price point than full Pub/Sub.
 
 GCP's three event source primitives serve distinct
@@ -35,7 +35,7 @@ patterns:
   primitive analogous to AWS Kinesis Data Streams and
   Azure Event Hubs. Distinct from full Pub/Sub in that
   Lite trades managed routing + global delivery for cost
-  efficiency at high volume — operators self-manage
+  efficiency at high volume, operators self-manage
   partition capacity via reservations.
 
 The canonical GCP high-throughput analytics architecture is
@@ -47,7 +47,7 @@ on the Azure side.
 
 ### Why now? Why Pub/Sub Lite specifically?
 
-1. **Parity completion — closes the widening pass.** After
+1. **Parity completion, closes the widening pass.** After
    slice 10, all four clouds carry 3 event source surfaces
    each. The Squadron claim "covers every event source
    primitive on every major cloud at 3 surfaces" becomes
@@ -55,7 +55,7 @@ on the Azure side.
 2. **Architectural symmetry.** Pub/Sub Lite is GCP's
    partitioned-log primitive, the structural analog of
    Azure Event Hubs (slice 8). The detection axes align
-   cleanly — Logging configured (Cloud Logging sink) +
+   cleanly, Logging configured (Cloud Logging sink) +
    per-reservation capacity allocation.
 3. **Operationally meaningful.** Pub/Sub Lite operators
    self-manage capacity via reservations. A topic with no
@@ -66,17 +66,17 @@ on the Azure side.
 
 ### What slice 10 does NOT address
 
-- **Per-subscription consumer-side lag detection** —
+- **Per-subscription consumer-side lag detection**,
   per-subscription backlog analysis is slice 11+
   candidate.
-- **Cross-region reservation analysis** — Pub/Sub Lite is
+- **Cross-region reservation analysis**, Pub/Sub Lite is
   zone-pinned by design; cross-region capacity planning
   is the operator's architectural decision, not
   Squadron's recommendation.
-- **Schema enforcement on Lite topics** — Pub/Sub Lite
+- **Schema enforcement on Lite topics**, Pub/Sub Lite
   supports schemas but at narrower fidelity than Pub/Sub;
   honest deferral to slice 11+.
-- **Migration recommendations from full Pub/Sub** — when
+- **Migration recommendations from full Pub/Sub**, when
   to migrate a Pub/Sub topic to Pub/Sub Lite for cost
   reasons requires substrate-level cost modeling outside
   the slice 10 scope.
@@ -84,17 +84,17 @@ on the Azure side.
 
 ## 2. Non-goals (slice 10)
 
-- **Per-subscription consumer-side lag detection** —
+- **Per-subscription consumer-side lag detection**,
   slice 11+.
-- **Cross-region reservation analysis** — out of scope.
-- **Schema enforcement** — slice 11+.
-- **Pub/Sub-to-Lite migration recommendations** — requires
+- **Cross-region reservation analysis**, out of scope.
+- **Schema enforcement**, slice 11+.
+- **Pub/Sub-to-Lite migration recommendations**, requires
   cost-modeling substrate; out of slice 10 scope.
-- **Per-message trace context propagation analysis** —
+- **Per-message trace context propagation analysis**,
   slice 11+ candidate using the substrate's MetricQuerier.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — GCP Pub/Sub Lite
+## 3. Detection surface, GCP Pub/Sub Lite
 
 API: `pubsublite.googleapis.com/v1/admin/projects/{project}/locations/{zone}/topics`
 via the Pub/Sub Lite Admin API.
@@ -104,7 +104,7 @@ the existing Logging read scope from slice 1
 (`logging.logSinks.list` covers the per-topic Logging axis
 detection).
 
-Pub/Sub Lite is **zone-pinned** — list calls require a
+Pub/Sub Lite is **zone-pinned**, list calls require a
 zone parameter, not a region. The scanner walks each
 configured zone in `scope.Regions` (zones convention reuses
 the GCP region field with explicit zone suffix per the
@@ -118,12 +118,12 @@ Detection axes:
 | Reservation attached       | Topic `properties.reservationConfig.throughputReservation` resolves to an existing reservation | `pubsublite-reservation-attach` |
 | Per-partition retention    | `properties.retentionConfig.perPartitionBytes` (informational only)                | informational only           |
 | Topic partition count      | `properties.partitionConfig.count` (informational only)                            | informational only           |
-| Topic scale tier           | `properties.partitionConfig.capacity` (informational only — publish + subscribe units) | informational only       |
+| Topic scale tier           | `properties.partitionConfig.capacity` (informational only, publish + subscribe units) | informational only       |
 
 The Logging axis mirrors the slice 1 Pub/Sub pattern via
 Cloud Logging sink discovery. The detection helper is a new
 `pubsubliteHasLoggingSink` reusing the existing
-`listLoggingSinksForResource` walk from slice 1 — the same
+`listLoggingSinksForResource` walk from slice 1, the same
 `resource.type` + `resource.labels` filter pattern but
 keyed against `pubsublite_topic`.
 
@@ -185,10 +185,10 @@ The Pub/Sub Lite Admin API:
   returns the list of Lite topics in a zone.
 - Per-topic reservation resolution via the topic's
   `reservationConfig.throughputReservation` (already
-  embedded in the list response — no extra API call).
+  embedded in the list response, no extra API call).
 - Per-zone reservation list:
-  `GET pubsublite.googleapis.com/v1/admin/projects/{project}/locations/{zone}/reservations`
-  — only called when at least one topic in the zone has a
+  `GET pubsublite.googleapis.com/v1/admin/projects/{project}/locations/{zone}/reservations`,
+only called when at least one topic in the zone has a
   reservation reference, to resolve the references.
 
 ## 6. API surface
@@ -232,7 +232,7 @@ Reasoning template for `pubsublite-logging-enable`:
 > `resource.type=\"pubsublite_topic\"` + the topic's ID,
 > the operator has no audit trail for publish failures,
 > per-partition throughput exhaustion events, or
-> reservation-related throttling — the failure modes
+> reservation-related throttling, the failure modes
 > unique to the Lite tier.
 >
 > Mirrors the slice 1 Pub/Sub `pubsub-trace-enable`
@@ -253,7 +253,7 @@ Reasoning template for `pubsublite-reservation-attach`:
 > (or the referenced reservation does not exist in the
 > topic's zone). Without a reservation, the topic is
 > throttled to the bare minimum publish + subscribe
-> throughput per partition — typically becoming a silent
+> throughput per partition, typically becoming a silent
 > bottleneck under peak load.
 >
 > This Terraform PR creates a
@@ -326,7 +326,7 @@ resource "google_pubsub_lite_topic" "<name>" {
 5. Webhook routing extends with `pubsublite-` → gcp.
 6. iacpicker emitters for both Terraform patterns.
 7. Operator runbook section.
-8. README index entry updated — **closes the cross-cloud
+8. README index entry updated, **closes the cross-cloud
    widening pass at 3-3-3-3 / 12 surfaces**.
 9. Acceptance tests covering Pub/Sub Lite detection on
    both axes, three-way dispatcher partial-scan posture
@@ -353,7 +353,7 @@ Total: 2 release tags. Same pattern as slices 3-9.
 
 ## 11. Acceptance tests
 
-1. **GCP ScanPubSubLiteTopics returns topics** —
+1. **GCP ScanPubSubLiteTopics returns topics**,
    zone-walked list response is walked across configured
    zones.
 2. **Topic with Cloud Logging sink filtering on the
@@ -382,7 +382,7 @@ Total: 2 release tags. Same pattern as slices 3-9.
 14. **Webhook routes pubsublite-reservation-attach to gcp**.
 15. **Discovery summary GCP event_source_count surfaces
     non-zero when Lite topics exist**.
-16. **Cold-start parity preserved** — proposer prompts
+16. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.157 when no Pub/Sub Lite rows
     trigger recommendations.
 
@@ -391,7 +391,7 @@ Total: 2 release tags. Same pattern as slices 3-9.
 **New IAM permissions.** Pub/Sub Lite adds
 `pubsublite.topics.list`, `pubsublite.topics.get`, and
 `pubsublite.reservations.list` to the GCP scanner role.
-Read-only — Squadron never executes a
+Read-only, Squadron never executes a
 PublishMessages / CreateTopic / DeleteTopic /
 CreateReservation mutation. The existing Logging read
 scope covers the per-topic sink detection call.
@@ -405,7 +405,7 @@ are well within quota.
 (not regional). The scanner walks each zone in
 `scope.Regions` independently. A zone-failure on one of
 {us-east1-a, us-east1-b} leaves the OTHER zone's topics
-surfacing — pinned by partial-scan posture at the per-zone
+surfacing, pinned by partial-scan posture at the per-zone
 level inside ScanPubSubLiteTopics (independent of the
 three-way dispatcher posture above it).
 
@@ -421,13 +421,13 @@ slice 9 OCI. Pinned by tests 8-11.
 **Reservation recommendation Terraform creates a NEW
 resource.** The `pubsublite-reservation-attach`
 recommendation creates a `google_pubsub_lite_reservation`
-resource — meaning the recommendation is operator-incurred
+resource, meaning the recommendation is operator-incurred
 cost. The reasoning text emphasizes this so PR reviewers
 see the cost implication explicitly. Default sizing is
 conservative (4 publish + subscribe units) but the
 operator must validate against actual peak throughput
 before merging. This is the FIRST recommendation in the
-event source tier that creates a billable resource —
+event source tier that creates a billable resource,
 prior kinds only configured Logging sinks or attached to
 existing resources. The verdict learning loop's decline
 path is load-bearing here for operators who deliberately
@@ -439,17 +439,17 @@ invisible to Squadron. PII surface stays at zero.
 
 ## 13. Slice 11+ candidates
 
-- **Per-subscription consumer-side lag detection** —
+- **Per-subscription consumer-side lag detection**,
   Pub/Sub Lite subscription backlog vs. publish rate.
-- **Cross-region disaster-recovery analysis** — Pub/Sub
+- **Cross-region disaster-recovery analysis**, Pub/Sub
   Lite is zone-pinned by design; multi-zone redundancy
   patterns deserve a separate analysis surface.
-- **Schema enforcement** — Pub/Sub Lite schema fidelity
+- **Schema enforcement**, Pub/Sub Lite schema fidelity
   analysis.
-- **Pub/Sub-to-Lite migration recommendations** — when
+- **Pub/Sub-to-Lite migration recommendations**, when
   to migrate a full Pub/Sub topic to Lite for cost
   reasons; requires substrate-level cost modeling.
-- **Per-message trace context propagation analysis** —
+- **Per-message trace context propagation analysis**,
   using the substrate's MetricQuerier to detect whether
   publisher-side traceparent is making it across the
   partition.
@@ -470,14 +470,14 @@ source surfaces each:
 > - OCI: Streaming + Notification Service + Queue Service (3 surfaces)"
 
 The widening pass is complete. After slice 10, the event
-source tier's surface count is **3-3-3-3 / 12** — a
+source tier's surface count is **3-3-3-3 / 12**, a
 4-by-3 grid. The Tuesday LinkedIn drumbeat narrative
 gains the strategic close: "Squadron now covers every
 event source primitive on every major cloud at three
 surfaces each. Twelve surfaces. Four clouds. One control
 plane."
 
-The next horizon work is NOT widening — it's deepening:
+The next horizon work is NOT widening, it's deepening:
 per-subscription consumer-side analysis (slice 11+),
 substrate-level cost modeling for migration
 recommendations, cross-surface correlation views

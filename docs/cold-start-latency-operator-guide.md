@@ -1,4 +1,4 @@
-# Cold-start latency — operator guide
+# Cold-start latency, operator guide
 
 This is the operator-facing runbook for the v0.89.112 through
 v0.89.116 cold-start latency analysis arc. Squadron now
@@ -7,7 +7,7 @@ against a rolling 7-day baseline to flag cold-start latency
 regressions on AWS Lambda functions.
 
 The strategic frame: Squadron previously operated on two
-dimensions — **presence** (is the cloud-native primitive
+dimensions, **presence** (is the cloud-native primitive
 enabled?) and **correctness** (does the configured primitive
 preserve trace context end-to-end?). Cold-start latency
 analysis introduces a third dimension: **measurement** of
@@ -23,7 +23,7 @@ universal claim gains a fifth verb: "MEASURES."
 > Lambda Insights, **Azure** needs Application Insights, and **OCI** is deferred.
 > See [detection-coverage.md](./detection-coverage.md) for the honest matrix.
 
-For a first test, the walkthrough takes about 25 minutes —
+For a first test, the walkthrough takes about 25 minutes,
 most of it spent confirming the AWS connection has the
 additional CloudWatch read permission AND letting Squadron
 accumulate the 7 days of baseline data before recommendations
@@ -106,7 +106,7 @@ doesn't trigger false positives.
 
 A function with baseline_p95 = 200ms that suddenly shows
 current_p95 = 320ms hits the 1.6x ratio. But 320ms is still
-fast cold-start — fingering the operator about a 120ms
+fast cold-start, fingering the operator about a 120ms
 absolute increase wastes attention. The 500ms floor filters
 out naturally-low cold-start functions hitting ratio
 thresholds on small absolute numbers.
@@ -121,7 +121,7 @@ recommendation to evaluate.
 
 ### Why P95 and not P99 or P50?
 
-P99 is too noisy at typical Lambda throughputs — a single
+P99 is too noisy at typical Lambda throughputs, a single
 slow init dominates the percentile. P50 misses the
 operator-facing problem because user-visible timeouts come
 from the long tail, not the median. P95 is the standard SRE
@@ -135,7 +135,7 @@ possible causes. The PR drafts the most common (provisioned
 concurrency); the operator's review decides whether to merge
 or decline.
 
-### Case 1 — Init script regression
+### Case 1, Init script regression
 
 The most common cause for a sudden cold-start regression: a
 recent deployment added heavy imports, eager-init connections,
@@ -153,7 +153,7 @@ layer. Decline the Squadron recommendation with the note
 "init script regression, fix in app layer." The verdict
 learning loop records the decline.
 
-### Case 2 — Cold-start frequency increase
+### Case 2, Cold-start frequency increase
 
 A reduction in invocation rate means more invocations hit the
 cold path. The function's intrinsic cold-start hasn't
@@ -170,9 +170,9 @@ How to recognize:
 
 What to do: the recommendation's PR (provisioned concurrency)
 is the RIGHT fix here. Tune the value based on expected
-traffic — start with 1 and observe.
+traffic, start with 1 and observe.
 
-### Case 3 — Architecture change
+### Case 3, Architecture change
 
 A migration between architectures (x86_64 → arm64) or a
 runtime update can shift cold-start behavior in either
@@ -202,7 +202,7 @@ The DiscoveryAWS Serverless inventory now has a new column
 | Region            | function's region                     |
 | Trace axis        | existing                              |
 | OTel distro       | existing                              |
-| Cold-start P95    | NEW — 24h P95 in ms; "—" if no data   |
+| Cold-start P95    | NEW, 24h P95 in ms; ", " if no data   |
 | Last seen         | existing                              |
 | Quality           | existing                              |
 
@@ -211,7 +211,7 @@ The cell renders in amber when `exceeds_threshold` is true
 value + ratio for context.
 
 DiscoveryGCP / DiscoveryAzure / DiscoveryOCI Serverless tables
-render the column as "—" everywhere — slice 1 has no data for
+render the column as ", " everywhere, slice 1 has no data for
 those clouds.
 
 ## The per-resource cold_start endpoint
@@ -263,7 +263,7 @@ function (24h + 7d), the math is:
 That's well under the 1M free tier. For larger fleets:
 
 ```
-10,000 functions × 2 × 30 = 600K requests/month — still free
+10,000 functions × 2 × 30 = 600K requests/month, still free
 50,000 functions × 2 × 30 = 3M requests/month
   - first 1M: free
   - remaining 2M: 2M × $0.01/1K = $20.00/month
@@ -294,7 +294,7 @@ decline reason for future scans.
 
 Slice 2 may add time-of-day-aware baseline windows.
 
-## Workflow — first cold-start scan
+## Workflow, first cold-start scan
 
 1. Open the AWS Discovery page (`/discovery/aws`). Note the
    existing connection.
@@ -322,7 +322,7 @@ Slice 2 may add time-of-day-aware baseline windows.
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new
+Slice 1 reuses the existing audit event types, no new
 constants. The discovery scan emits the existing
 `discovery.aws.scan_completed` event with a `cold_start_count`
 field included in the payload showing how many Lambda
@@ -334,8 +334,8 @@ The recommendation lifecycle carries the new
 
 ## Troubleshooting
 
-- **Cold-start P95 shows "—" for all my Lambda functions.**
-  Check the IAM policy — `cloudwatch:GetMetricStatistics` is
+- **Cold-start P95 shows ", " for all my Lambda functions.**
+  Check the IAM policy, `cloudwatch:GetMetricStatistics` is
   required. The scan audit may show a partial reason
   indicating CloudWatch was unreachable. If the IAM is
   correct, the substrate may be disabled by configuration
@@ -355,7 +355,7 @@ The recommendation lifecycle carries the new
   catch up to the new baseline (or you'll revert the
   deployment).
 - **Cold-start observations are stored but the Cold-start P95
-  column shows "—".** The inventory handler queries the
+  column shows ", ".** The inventory handler queries the
   cold_start_observation table at request time for the
   latest 24h observation. If the most recent observation
   is older than 1 day, the field may be stale. Re-run the
@@ -372,11 +372,11 @@ The recommendation lifecycle carries the new
 
 ## Slice 2 SHIPPED in v0.89.117-v0.89.120
 
-Slice 2 closes the qualification on the 5th verb — MEASURES
+Slice 2 closes the qualification on the 5th verb, MEASURES
 is now uniformly 4-cloud. Full design doc at
 [proposals/cold-start-latency-slice2.md](./proposals/cold-start-latency-slice2.md).
 
-# Slice 2 — 4-cloud generalization (v0.89.117-v0.89.120)
+# Slice 2-4-cloud generalization (v0.89.117-v0.89.120)
 
 Slice 1 shipped the substrate (MetricQuerier interface + AWS
 CloudWatch implementation + cold_start_observation storage)
@@ -392,14 +392,14 @@ only the metric source varies per cloud.
 |-------|-----------------|-------------------------------------------------------------------|-----------------------------------------------------------|
 | GCP   | Cloud Run       | `run.googleapis.com/request_latencies` filtered by `response_code_class = "2xx"` | includes warm-path invocations            |
 | GCP   | Cloud Functions | `cloudfunctions.googleapis.com/function/execution_times` filtered by `status = "ok"` | includes warm invocations              |
-| Azure | Functions       | **none native** — needs Application Insights (Azure Monitor has no `FunctionExecutionDuration` metric or `IsAfterColdStart` dimension) | ⚠️ requires App Insights |
+| Azure | Functions       | **none native**, needs Application Insights (Azure Monitor has no `FunctionExecutionDuration` metric or `IsAfterColdStart` dimension) | ⚠️ requires App Insights |
 | OCI   | Functions       | `FunctionExecutionDuration` P95-regression (no cold-start counter exists) | ✅ duration-regression, not cold-start-isolated |
 
 Each surface populates the same `cold_start_observation`
 table from slice 1 with a different `provider` + `surface`
 value. Schema stays at v14.
 
-## The detection thresholds — uniform across all 4 clouds
+## The detection thresholds, uniform across all 4 clouds
 
 Slice 2 pins identical thresholds to slice 1:
 
@@ -410,7 +410,7 @@ Slice 2 pins identical thresholds to slice 1:
 These are pinned by per-cloud tests
 (`TestGCPColdStartThresholdsMatchAWS`,
 `TestAzureColdStartThresholdsMatchAWS`,
-`TestOCIColdStartThresholdsMatchAWS`) — any future change
+`TestOCIColdStartThresholdsMatchAWS`), any future change
 needs to update the constants in all 4 clouds simultaneously
 OR explicitly choose per-cloud tuning.
 
@@ -428,7 +428,7 @@ cloudfunc-cold-start-baseline      ocifunc-cold-start-baseline
 ```
 
 All reuse existing webhook prefixes from v0.89.92 (serverless
-tier chunk 5) — NO new routing.
+tier chunk 5), NO new routing.
 
 ## Per-cloud Terraform patterns
 
@@ -459,7 +459,7 @@ resource "google_cloudfunctions2_function" "<name>" {
 ```
 
 Gen 2 functions have `min_instance_count`; Gen 1 functions
-don't have an equivalent — the recommendation suggests
+don't have an equivalent, the recommendation suggests
 migrating to Gen 2 in the reasoning text.
 
 ### Azure Functions
@@ -513,7 +513,7 @@ shows low P95 because most invocations hit the warm path
 and pull the metric down.
 
 Squadron's detection treats the overall P95 as a proxy for
-cold-start latency — it's the operator-facing perceived
+cold-start latency, it's the operator-facing perceived
 latency, but it's NOT cold-start-isolated. The recommendation
 reasoning explains this; permanently-warm services may see
 false positives during traffic spikes.
@@ -549,7 +549,7 @@ The recommendation reasoning text for the fallback path
 
 > "INFORMATIONAL NOTE: This Function App's runtime version
 > did NOT emit the IsAfterColdStart dimension on
-> FunctionExecutionDuration — the IsAfterColdStart dimension
+> FunctionExecutionDuration, the IsAfterColdStart dimension
 > was introduced in 2023+ runtime versions. Squadron fell back
 > to an unfiltered P95 query, so the value above is across
 > ALL invocations (cold + warm), not cold-start-isolated.
@@ -562,7 +562,7 @@ The recommendation reasoning text for the fallback path
 
 Azure Monitor doesn't natively support percentile aggregations
 on `FunctionExecutionDuration`. Squadron approximates P95
-using the `Maximum` aggregation — cold-starts are the
+using the `Maximum` aggregation, cold-starts are the
 long-tail values that pull the per-bucket max up, so the
 window-MAX of per-bucket maxes approximates "worst cold-start
 the function experienced."
@@ -591,7 +591,7 @@ Slice 3 may add per-execution trace correlation when OCI
 exposes more granular metrics.
 
 The `Skipped=true` signal (from `ColdStartDetectionResult`)
-short-circuits the recommendation firing — no
+short-circuits the recommendation firing, no
 `ocifunc-cold-start-baseline` fires when cold_start_count=0.
 
 ## Per-cloud rate limits
@@ -610,13 +610,13 @@ For a 4-cloud fleet of 1000 functions per cloud scanned every
 24h, total substrate API calls ≈ 8000 calls/day across all
 clouds. Negligible relative to per-cloud quotas.
 
-## Cost surface — slice 2 adds ~$0 for typical fleets
+## Cost surface, slice 2 adds ~$0 for typical fleets
 
 Per the no-money brief, Squadron does NOT make purchase
 decisions. Honest cost disclosure per cloud:
 
 - **GCP Cloud Monitoring**: free through 1M API calls/month.
-  A 10,000-function fleet generates 600K calls/month — well
+  A 10,000-function fleet generates 600K calls/month, well
   under the free tier.
 - **Azure Monitor**: free for basic metrics queries.
 - **OCI Monitoring**: free for metric queries (the first 50
@@ -632,7 +632,7 @@ clouds essentially add nothing.
 All 4 DiscoveryX Serverless tables now have the Cold-start P95
 (24h) column. Cell color logic stays the same:
 
-- "—" when no observation (function too new, scan didn't run,
+- ", " when no observation (function too new, scan didn't run,
   or metric query failed)
 - ms value in slate when current P95 doesn't exceed threshold
 - ms value in amber when current P95 exceeds threshold
@@ -692,7 +692,7 @@ each cloud.
   The number is unfiltered (cold + warm). Either upgrade the
   runtime for cleaner detection in future scans, or accept the
   unfiltered baseline.
-- **OCI function shows Cold-start P95 = "—" despite high
+- **OCI function shows Cold-start P95 = ", " despite high
   traffic.** Likely cause: `cold_start_count == 0` in the
   current window. OCI Functions can be permanently warm
   during high-traffic windows; Squadron skips detection.
@@ -704,7 +704,7 @@ each cloud.
   migrating to Gen 2; decline the PR if you're staying on
   Gen 1.
 
-## Strategic frame — MEASURES is now 4-cloud
+## Strategic frame, MEASURES is now 4-cloud
 
 After slice 2, Squadron's universal claim's 5th verb drops
 its qualification asterisk:
@@ -719,8 +719,8 @@ its qualification asterisk:
 
 **Five verbs.** MEASURES is native-4-cloud only for the metrics that exist on each cloud's base monitoring API; see the coverage correction above and [detection-coverage.md](./detection-coverage.md). The substrate
 work in slice 1 was the load-bearing investment; slice 2
-is mostly translation work. The architectural bet paid off
-— each cloud's MetricQuerier implementation took roughly
+is mostly translation work. The architectural bet paid off,
+each cloud's MetricQuerier implementation took roughly
 the same shape as AWS's, just with different metric APIs and
 rate limit characteristics.
 
@@ -736,7 +736,7 @@ Per §13 of the slice 2 design doc:
 - Per-cloud threshold tuning (Cloud Run may need 2.0x
   ratio because warm-path inclusion skews the baseline).
 - **Sampling rate analysis** using the same substrate (closes
-  the span quality slice 1 §13 deferral) — now a small
+  the span quality slice 1 §13 deferral), now a small
   detection-logic arc since the substrate is cross-cloud.
 - Error rate correlation.
 - Cross-cloud cold-start correlation (a Lambda invoking a
@@ -767,9 +767,9 @@ reads:
 
 The honest qualification: MEASURES is 1-cloud (AWS Lambda)
 in slice 1; grows to 4-cloud through slice 2 and slice 3 as
-the substrate generalizes. The substrate work — the
+the substrate generalizes. The substrate work, the
 `MetricQuerier` interface, the rate limiter, the
-cold_start_observation storage — is what makes future arcs
+cold_start_observation storage, is what makes future arcs
 cheap. Once the substrate is in place, sampling rate analysis
 (span quality slice 1 §13 deferral) becomes a small
 detection-logic arc rather than substrate rebuilding.
@@ -785,13 +785,13 @@ with the recommendation pre-drafted.
 
 ## Cross-references
 
-- [Cold-start latency slice 1 design doc](./proposals/cold-start-latency-slice1.md) —
+- [Cold-start latency slice 1 design doc](./proposals/cold-start-latency-slice1.md),
   the locked spec this runbook operationalizes.
-- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md) —
+- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md),
   the tier whose Lambda inventory rows this arc extends.
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   the trace integration arc this composes with.
-- [Span quality — operator guide](./span-quality-operator-guide.md) —
+- [Span quality, operator guide](./span-quality-operator-guide.md),
   the span quality arc whose §13 sampling-rate deferral
   will reuse this substrate.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.

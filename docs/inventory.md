@@ -1,30 +1,30 @@
 # Inventory Reconciliation (v0.32)
 
 Squadron's inventory surface answers a specific question SRE teams
-care about: **"the CI pipeline said it deployed to 80 hosts — are
+care about: **"the CI pipeline said it deployed to 80 hosts, are
 all 80 actually checking in?"**
 
 ## The model
 
 Squadron stores two views of the fleet:
 
-- **Expected** — a list of hostnames declared by some CI/CD
+- **Expected**, a list of hostnames declared by some CI/CD
   pipeline. Pushed via the inventory API at the end of a deploy
   job.
-- **Actual** — agents that dialed in via OpAMP and ended up in the
+- **Actual**, agents that dialed in via OpAMP and ended up in the
   agents table.
 
 The reconciliation service diffs them on every read and classifies
 each hostname into one of three buckets:
 
-- **`healthy`** — expected and recently seen.
-- **`missing`** — expected but never connected, or quiet for more
+- **`healthy`**, expected and recently seen.
+- **`missing`**, expected but never connected, or quiet for more
   than 10 minutes.
-- **`unexpected`** — connected but not in the expected list.
+- **`unexpected`**, connected but not in the expected list.
   Usually means a manual install or a stray host the CI pipeline
   doesn't know about.
 
-Hostname matching is case-insensitive and FQDN-tolerant — if the
+Hostname matching is case-insensitive and FQDN-tolerant, if the
 expected entry says `host01` and the agent reports
 `host01.example.com`, they match.
 
@@ -62,15 +62,15 @@ inventory under a different `source`. Squadron's unified view
 
 All endpoints require auth scopes:
 
-- `GET /api/v1/inventory/reconciliation[?source=X]` —
+- `GET /api/v1/inventory/reconciliation[?source=X]`,
   `ScopeAgentsRead`. The full diff report with row-level detail.
-- `GET /api/v1/inventory/expected[?source=X]` — `ScopeAgentsRead`.
+- `GET /api/v1/inventory/expected[?source=X]`, `ScopeAgentsRead`.
   Just the expected list.
-- `POST /api/v1/inventory/expected` — `ScopeAgentsWrite`. Upsert
+- `POST /api/v1/inventory/expected`, `ScopeAgentsWrite`. Upsert
   one row (for ad-hoc additions from squadronctl or the UI).
-- `PUT /api/v1/inventory/expected` — `ScopeAgentsWrite`. Bulk
+- `PUT /api/v1/inventory/expected`, `ScopeAgentsWrite`. Bulk
   rotate. The CI path.
-- `DELETE /api/v1/inventory/expected/:hostname` —
+- `DELETE /api/v1/inventory/expected/:hostname`,
   `ScopeAgentsWrite`. Remove one row.
 
 ## UI surfaces
@@ -83,7 +83,7 @@ All endpoints require auth scopes:
 ## Storage
 
 The `expected_agents` table is a simple key-value rotation table.
-Each row is one (hostname, labels, source, notes) tuple — labels
+Each row is one (hostname, labels, source, notes) tuple, labels
 serialized as JSON because hostname is the natural key.
 
 No retention story is needed; CI pipelines re-push their entire

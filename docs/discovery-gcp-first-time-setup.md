@@ -1,4 +1,4 @@
-# Connect a GCP project to Squadron — first-time setup
+# Connect a GCP project to Squadron, first-time setup
 
 **As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
 
@@ -51,7 +51,7 @@ After this runbook you have a working end-to-end loop: scan →
 draft → review → merge → audit → learn. The proposer feedback
 loop (#531 slice 2) and the Checks API back-signal arc
 (v0.89.39 through v0.89.44) both work against GCP recommendations
-identically to AWS — same audit event types, same exclusion
+identically to AWS, same audit event types, same exclusion
 affordance, same check run lifecycle.
 
 ## What this is good for
@@ -66,9 +66,9 @@ affordance, same check run lifecycle.
   instrumentation coverage across the full cloud footprint, not
   just one provider.
 
-## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+## Database tier slice 2, SHIPPED in v0.89.65 through v0.89.67
 
-As of v0.89.65 (chunk 2 of the database tier arc — design at
+As of v0.89.65 (chunk 2 of the database tier arc, design at
 [proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
 Squadron's GCP scanner ALSO walks Cloud SQL instances during the
 same scan call. The Inventory tab gains a Databases sub-tab; the
@@ -95,7 +95,7 @@ gcloud projects add-iam-policy-binding <your-project-id> \
 
 Without this role, Cloud SQL list calls return 403 and Squadron
 records a partial failure with `failed_services=["cloudsql"]` in
-the scan_completed audit event — compute results are still
+the scan_completed audit event, compute results are still
 emitted normally. Re-run the scan after adding the role.
 
 **OAuth scope:** the SA JSON now authenticates with both
@@ -106,9 +106,9 @@ union, NOT the broader `cloud-platform` scope).
 custom role for Cloud SQL, the minimum permissions are
 `cloudsql.instances.list` and `cloudsql.instances.get`.
 
-## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+## Kubernetes tier slice 2, SHIPPED in v0.89.70 through v0.89.72
 
-As of v0.89.70 (chunk 2 of the Kubernetes tier arc — design at
+As of v0.89.70 (chunk 2 of the Kubernetes tier arc, design at
 [proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
 Squadron's GCP scanner ALSO walks GKE clusters during the same
 scan call. The Inventory tab gains a Kubernetes sub-tab alongside
@@ -153,9 +153,9 @@ expose a narrower container-readonly constant).
 Slice 1 ships intentionally narrow. The following are slice 2+
 candidates, called out so you don't expect them yet:
 
-- **~~No Cloud SQL scanning.~~** ✓ SHIPPED in v0.89.65 — see
+- **~~No Cloud SQL scanning.~~** ✓ SHIPPED in v0.89.65, see
   "Database tier slice 2" section above.
-- **~~No GKE scanning.~~** ✓ SHIPPED in v0.89.70 — see
+- **~~No GKE scanning.~~** ✓ SHIPPED in v0.89.70, see
   "Kubernetes tier slice 2" section above.
 - **No GKE scanning.** The GKE equivalent of the AWS EKS scanner
   is slice 3 work.
@@ -171,7 +171,7 @@ candidates, called out so you don't expect them yet:
 - **No cross-organization cross-tenant SA sharing.** Each
   connection owns its own SA JSON sealed in credstore.
 - **No Application Default Credentials inheritance.** Squadron
-  takes the SA explicitly — it does not rely on the host
+  takes the SA explicitly, it does not rely on the host
   environment having GCP credentials available.
 
 If any of these matter for your deployment, the
@@ -196,7 +196,7 @@ arc unblocks the use case you care about.
   drafts. Without the IaC connection, the proposer still drafts
   recommendations; Open PR is just disabled.
 
-## Step 1 — Connect a GCP project in Squadron
+## Step 1, Connect a GCP project in Squadron
 
 Open the Squadron UI, navigate to Discovery → GCP in the
 sidebar (it sits next to the existing AWS entry under the
@@ -219,7 +219,7 @@ Enter:
 
 Click Next. The wizard advances to Step 2.
 
-## Step 2 — Create the Service Account in GCP
+## Step 2, Create the Service Account in GCP
 
 Squadron needs a GCP identity to authenticate Compute Engine API
 calls. The wizard step displays exact `gcloud` commands with your
@@ -244,7 +244,7 @@ This is the predefined GCP role for read-only Compute Engine
 access. It grants `compute.instances.list`,
 `compute.instances.get`, `compute.zones.list`, and the related
 read permissions Squadron's scanner needs. It does NOT grant
-any write permissions — Squadron cannot start, stop, or modify
+any write permissions, Squadron cannot start, stop, or modify
 your instances even if its credentials are compromised.
 
 If you prefer a stricter posture, create a custom role with only
@@ -259,7 +259,7 @@ the principle of least privilege says you should grant the
 minimal role. If validate (Step 4) succeeds and the SA has
 broader scope than `roles/compute.viewer`, tighten the binding.
 
-## Step 3 — Download the SA key and paste it into Squadron
+## Step 3, Download the SA key and paste it into Squadron
 
 Still in your terminal:
 
@@ -277,7 +277,7 @@ The wizard validates the pasted content client-side:
 - Must be valid JSON.
 - Must contain `client_email`, `private_key`, and `project_id`
   fields.
-- `client_email` should end in `.iam.gserviceaccount.com` —
+- `client_email` should end in `.iam.gserviceaccount.com`,
   catches the operator mistake of pasting the wrong file.
 
 A warning banner reminds you that the key is a credential.
@@ -290,7 +290,7 @@ per-connection webhook secrets.
 
 Acknowledge the warning checkbox. Next button enables. Click Next.
 
-## Step 4 — Validate the connection
+## Step 4, Validate the connection
 
 The Validate step submits the create-connection request to
 Squadron (which immediately seals the SA bytes), then issues a
@@ -302,38 +302,38 @@ Click Validate. Squadron:
 2. Parses the JSON to extract `client_email` and `project_id`.
 3. Cross-checks the SA's project_id against the configured
    project_id. If they differ, returns `error_kind=project_mismatch`
-   immediately — no GCP API call.
+   immediately, no GCP API call.
 4. Constructs a Compute Engine client with the SA credentials.
 5. Calls `compute.instances.list` on the first available zone in
    the configured region (or any zone if Region is empty).
 6. Returns `{ok: true, instance_count: N}` on success.
 
-If the SA scope is correct, you see something like "Connected ✓
-— 12 instances visible." Next button enables.
+If the SA scope is correct, you see something like "Connected ✓,
+12 instances visible." Next button enables.
 
 ### What errors look like
 
 The wizard surfaces specific remediation per `error_kind`:
 
-- **permission_denied** — "Verify the service account has
+- **permission_denied**, "Verify the service account has
   roles/compute.viewer in project <project_id>." (Most common
   first-time error: the IAM binding command from Step 2 was
   skipped or applied to the wrong project.)
-- **project_not_found** — "Verify <project_id> is correct."
+- **project_not_found**, "Verify <project_id> is correct."
   (The project ID has a typo, or the operator's identity has
   no view on the project.)
-- **credentials_invalid** — "Re-check the SA JSON contents."
+- **credentials_invalid**, "Re-check the SA JSON contents."
   (The pasted content is malformed; usually the operator
   pasted only part of the JSON.)
-- **network** — "Squadron's outbound connectivity to
+- **network**, "Squadron's outbound connectivity to
   compute.googleapis.com may be blocked. Check firewalls."
   (Air-gapped or restricted-egress deployments need to allow
   this domain.)
-- **project_mismatch** — "The SA JSON's project is <sa_project>
+- **project_mismatch**, "The SA JSON's project is <sa_project>
   but you configured <conn_project>. Either change the
   connection, or use an SA created in <conn_project>."
 
-## Step 5 — Run the first scan
+## Step 5, Run the first scan
 
 Click Scan. Squadron walks every zone in the configured region
 (or all regions if Region is empty), listing instances via
@@ -359,7 +359,7 @@ tab and renders the result as a table:
 (Slice 1 leaves `OSFamily="unknown"` for GCP instances; proper
 detection lands in slice 2.)
 
-## Step 6 — Draft recommendations
+## Step 6, Draft recommendations
 
 Click "Draft recommendations from this scan." Squadron's
 discovery proposer reads the inventory, identifies instances
@@ -380,10 +380,10 @@ The recommendation card has the same Don't propose this again
 button as the AWS recommendations (slice 2 chunk 5 of #531 added
 this affordance and it works the same way for GCP). Excluding a
 GCP recommendation persists to the same
-`iac_recommendation_verdicts` table that holds AWS exclusions —
+`iac_recommendation_verdicts` table that holds AWS exclusions,
 no separate storage by provider.
 
-## Step 7 — Open the PR
+## Step 7, Open the PR
 
 If you have an IaC GitHub connection
 ([discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md))
@@ -399,7 +399,7 @@ The branch name carries the GCP scope tuple in the same shape
 the AWS branches use (`squadron/rec/<kind>/<scope>/<region>/<id>`)
 so the webhook receiver and the verdict learning loop both
 handle GCP recommendations the same way they handle AWS ones.
-The 4th path segment is the scope_id — `project_id` for GCP,
+The 4th path segment is the scope_id, `project_id` for GCP,
 `account_id` for AWS. The webhook receiver detects which by the
 `gce-` prefix on the recommendation kind.
 
@@ -420,7 +420,7 @@ The PR body summarizes the recommendation reasoning, lists the
 affected resource, and links back to the Squadron Recommendations
 tab. Operators review and merge as normal.
 
-## Step 8 — Verify the audit signal
+## Step 8, Verify the audit signal
 
 Open the Timeline page in Squadron. Filter by event type =
 `discovery.gcp.scan_completed` or by date range to see the recent
@@ -428,21 +428,21 @@ events.
 
 Slice 1 emits these audit events for the GCP arc:
 
-- **discovery.gcp.connection_created** — when you finish the
+- **discovery.gcp.connection_created**, when you finish the
   wizard. Payload: `{connection_id, project_id, display_name}`.
-- **discovery.gcp.connection_deleted** — when you remove a
+- **discovery.gcp.connection_deleted**, when you remove a
   connection.
-- **discovery.gcp.scan_started** — when you click Scan.
+- **discovery.gcp.scan_started**, when you click Scan.
   Payload includes the scope tuple.
-- **discovery.gcp.scan_completed** — when the scan finishes
+- **discovery.gcp.scan_completed**, when the scan finishes
   (including partial). Payload: `{connection_id, project_id,
   region, instance_count, instrumented_count, uninstrumented_count,
   partial: bool, partial_reason: <string>, failed_services:
   [<string>...]}`. `failed_services` uses `gce` as the service
   identifier (parallel to AWS's `ec2`).
-- **discovery.gcp.scan_failed** — when the scan errors out
+- **discovery.gcp.scan_failed**, when the scan errors out
   hard (zero instances walked). Payload carries the error_kind.
-- **discovery.gcp.recommendations_generated** — when the
+- **discovery.gcp.recommendations_generated**, when the
   proposer drafts recommendations from a scan result. Payload
   includes the verdict_examples_used_by_state buckets from #531
   slice 2 chunk 6.
@@ -450,11 +450,11 @@ Slice 1 emits these audit events for the GCP arc:
 The downstream events (`recommendation.pr_opened`,
 `recommendation.pr_merged`, `recommendation.pr_closed_not_merged`,
 `discovery_recommendation.excluded`) work identically for GCP and
-AWS — single audit type per event, with `provider: "gcp"` or
+AWS, single audit type per event, with `provider: "gcp"` or
 `provider: "aws"` in the payload to discriminate. SIEM consumers
 can filter by `provider` or by `project_id` / `account_id`.
 
-## Step 9 — (Optional) Tune the per-connection feedback loop
+## Step 9, (Optional) Tune the per-connection feedback loop
 
 Like the AWS side, GCP connections have a
 `learn_from_accepted_recommendations` flag (default true). The
@@ -471,7 +471,7 @@ curl -X PATCH https://your-squadron-host/api/v1/discovery/gcp/connections/<id> \
   -d '{"learn_from_accepted_recommendations": false}'
 ```
 
-The wizard does not surface this toggle in slice 1 — operators
+The wizard does not surface this toggle in slice 1, operators
 flip it via API. (Wizard surfacing is a slice 2 candidate
 mirroring the AWS path.)
 
@@ -484,8 +484,8 @@ mirroring the AWS path.)
 | Validate returns `network` | Squadron's egress is blocked from compute.googleapis.com | Allow the domain in your egress firewall |
 | Scan shows partial=true with reason "gce: rate limit exceeded mid-scan" | High instance count in scope, GCP API rate limited part of the walk | Wait for the rate window to reset, re-run the scan; or restrict the region to scan less per call |
 | Scan completes but instance_count is 0 | No GCE instances exist in the configured scope, or SA cannot see them | Run `gcloud compute instances list --project=<project>` and verify the SA has visibility |
-| Recommendation does NOT appear for an instance with the otel-collector label | Label key is something other than `otel*` (e.g., `OTEL_COLLECTOR=true` with uppercase) | The detection rule is case-insensitive on the key prefix, so this should work — verify by listing the instance via gcloud and checking the labels block |
-| PR opens but the branch name is missing the project_id segment | Squadron version is older than v0.89.49 — the 6-segment branch shape requires chunk 5 | Upgrade Squadron |
+| Recommendation does NOT appear for an instance with the otel-collector label | Label key is something other than `otel*` (e.g., `OTEL_COLLECTOR=true` with uppercase) | The detection rule is case-insensitive on the key prefix, so this should work, verify by listing the instance via gcloud and checking the labels block |
+| PR opens but the branch name is missing the project_id segment | Squadron version is older than v0.89.49, the 6-segment branch shape requires chunk 5 | Upgrade Squadron |
 | The Don't propose this again button doesn't suppress GCP recommendations | The recommendation was excluded with a different scope tuple (region mismatch or wrong project_id) | Check the iac_recommendation_verdicts table for the recommendation row; verify the scope fields match the scan being run |
 
 ## Custom role alternative for stricter posture
@@ -553,23 +553,23 @@ claim defensible.
 
 ## Cross-references
 
-- [GCP discovery slice 1 design doc](./proposals/gcp-discovery-slice1.md) —
+- [GCP discovery slice 1 design doc](./proposals/gcp-discovery-slice1.md),
   the locked spec this runbook operationalizes.
-- [discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md) —
+- [discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md),
   the IaC GitHub connection (required for Open PR to work
   end-to-end).
-- [webhook-listener.md](./webhook-listener.md) — the
+- [webhook-listener.md](./webhook-listener.md), the
   recommendation.pr_merged webhook arc that closes the
   recommendation lifecycle in audit. Works against GCP PRs as
   of v0.89.49 with the provider-aware audit payload shape.
-- [Checks API back-signal](./checks-api.md) — Squadron writes
+- [Checks API back-signal](./checks-api.md), Squadron writes
   check run state to Squadron-opened PRs (including GCP ones).
   The check run summary surfaces the same verdict learning
   context for GCP recommendations as it does for AWS.
-- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md),
   the loop that informs the next scan with prior accepted
   recommendations. Scope tuple is now provider-aware:
   (connection_id, scope_id, region) where scope_id is
   account_id for AWS and project_id for GCP.
-- [Audit log](./audit-log.md) — full catalog of event types
+- [Audit log](./audit-log.md), full catalog of event types
   including the new `discovery.gcp.*` family.

@@ -1,4 +1,4 @@
-# Connect an Azure subscription to Squadron — first-time setup
+# Connect an Azure subscription to Squadron, first-time setup
 
 **As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
 
@@ -6,7 +6,7 @@ This is the operator runbook for the v0.89.50 through v0.89.54
 Azure discovery arc that closed Azure slice 1: Squadron now scans
 Azure Virtual Machine fleets for observability gaps, drafts
 recommendations against your Terraform repo, and learns from the
-PRs you accept — same loop as AWS (since v0.85) and GCP (since
+PRs you accept, same loop as AWS (since v0.85) and GCP (since
 v0.89.49).
 
 **After this runbook lands, Squadron's operator-facing claim is
@@ -51,7 +51,7 @@ The same loop as AWS and GCP, on the third cloud:
    `otel-collector` tag to the relevant
    `azurerm_linux_virtual_machine` or `azurerm_windows_virtual_machine`
    Terraform resource (picked based on the VM's detected OS
-   family — Azure exposes this cleanly so the proposer routes
+   family, Azure exposes this cleanly so the proposer routes
    correctly).
 
 After this runbook you have a working end-to-end loop: scan →
@@ -74,9 +74,9 @@ verdict learning is correctly isolated per subscription.
   instrumentation coverage across the entire cloud footprint
   without per-provider tool sprawl.
 
-## Database tier slice 2 — SHIPPED in v0.89.65 through v0.89.67
+## Database tier slice 2, SHIPPED in v0.89.65 through v0.89.67
 
-As of v0.89.65 (chunk 3 of the database tier arc — design at
+As of v0.89.65 (chunk 3 of the database tier arc, design at
 [proposals/database-tier-slice2.md](./proposals/database-tier-slice2.md)),
 Squadron's Azure scanner ALSO walks SQL Servers, their Databases,
 and the Diagnostic Settings on each database during the same scan
@@ -94,7 +94,7 @@ skipped.
 `azurerm_monitor_diagnostic_setting` resource on the SQL database
 with an `enabled_log { category = "SQLInsights" }` block.
 
-**IAM scope additions for slice 2:** none — the existing `Reader`
+**IAM scope additions for slice 2:** none, the existing `Reader`
 role at subscription scope already covers Microsoft.Sql/servers,
 Microsoft.Sql/servers/databases, and
 microsoft.insights/diagnosticSettings. No SP credential changes
@@ -110,9 +110,9 @@ databases), Squadron falls back to `sku.name`.
 `failed_services=["azuresql"]` (parallel to the slice-1
 `azurevm` for compute).
 
-## Kubernetes tier slice 2 — SHIPPED in v0.89.70 through v0.89.72
+## Kubernetes tier slice 2, SHIPPED in v0.89.70 through v0.89.72
 
-As of v0.89.70 (chunk 3 of the Kubernetes tier arc — design at
+As of v0.89.70 (chunk 3 of the Kubernetes tier arc, design at
 [proposals/kubernetes-tier-slice2.md](./proposals/kubernetes-tier-slice2.md)),
 Squadron's Azure scanner ALSO walks AKS managed clusters during
 the same scan call. The Inventory tab gains a Kubernetes sub-tab
@@ -130,7 +130,7 @@ observability profile flags is true:
   (newer Container Insights)
 
 The three-way disjunction mirrors AWS EKS's "ADOT OR
-CloudWatch-observability" pattern — operators on the legacy or
+CloudWatch-observability" pattern, operators on the legacy or
 the newer addon get credit.
 
 **Recommendation kind:** `aks-monitor-enable`. Targets the
@@ -138,7 +138,7 @@ the newer addon get credit.
 Prometheus) or `oms_agent` block (legacy Container Insights)
 depending on operator preference.
 
-**IAM scope additions for K8s slice 2:** none — the existing
+**IAM scope additions for K8s slice 2:** none, the existing
 `Reader` role at subscription scope already covers
 `Microsoft.ContainerService/managedClusters` reads. No SP
 credential changes needed.
@@ -158,10 +158,10 @@ proposer's non-running-skip branch fires uniformly.
 Slice 1 ships intentionally narrow. The following are slice 2+
 candidates:
 
-- **~~No Azure SQL Database scanning.~~** ✓ SHIPPED in v0.89.65 —
+- **~~No Azure SQL Database scanning.~~** ✓ SHIPPED in v0.89.65,
   see "Database tier slice 2" section above.
 - **~~No Azure Kubernetes Service (AKS) scanning.~~** ✓ SHIPPED
-  in v0.89.70 — see "Kubernetes tier slice 2" section above.
+  in v0.89.70, see "Kubernetes tier slice 2" section above.
 - **No Azure Kubernetes Service (AKS) scanning.** Slice 3.
 - **No Azure Blob Storage / Load Balancer / Application Gateway
   scanning.** Slices 4-5.
@@ -171,7 +171,7 @@ candidates:
 - **No Managed Identity.** Squadron running ON Azure could use
   the host's managed identity natively in slice 2; slice 1
   requires explicit SP credentials.
-- **No SP certificate authentication.** Slice 2 — slightly better
+- **No SP certificate authentication.** Slice 2, slightly better
   posture but more wizard complexity.
 - **No multi-subscription orchestration.** Single-subscription
   per connection in slice 1. If you have 5 subscriptions, create
@@ -201,7 +201,7 @@ If any of these matter, the
   ([discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md))
   so Open PR works end to end.
 
-## Step 1 — Connect an Azure subscription in Squadron
+## Step 1, Connect an Azure subscription in Squadron
 
 Open the Squadron UI, navigate to Discovery → Azure in the
 sidebar (sits next to AWS and GCP under the Discovery group). If
@@ -223,7 +223,7 @@ Enter:
 
 Click Next.
 
-## Step 2 — Create the Service Principal
+## Step 2, Create the Service Principal
 
 Squadron needs an Azure AD app registration with subscription-
 scoped Reader role. The wizard step displays the exact `az` CLI
@@ -267,7 +267,7 @@ permissions, see the "Custom role alternative" section below.
 
 By default, `az ad sp create-for-rbac` generates a secret that
 expires in 1 year. Slice 1 does not proactively warn before
-expiry — you'll see `credentials_invalid` from the validate
+expiry, you'll see `credentials_invalid` from the validate
 endpoint when the secret expires. Slice 2 candidate: proactive
 expiry detection. For now, set a calendar reminder for ~11
 months out to rotate.
@@ -281,7 +281,7 @@ az ad sp create-for-rbac \
   --years 2
 ```
 
-## Step 3 — Paste credentials into Squadron
+## Step 3, Paste credentials into Squadron
 
 Back in the Squadron wizard (Step 3), enter:
 
@@ -300,7 +300,7 @@ JSON.
 Acknowledge the credential-handling warning checkbox. Next button
 enables. Click Next.
 
-## Step 4 — Validate
+## Step 4, Validate
 
 Squadron submits the create-connection request (sealing the
 client_secret immediately), then issues a dry-run scan against
@@ -316,39 +316,39 @@ The validation flow:
 4. Return `{ok: true, instance_count: <first page count>}` on
    success.
 
-If everything's wired correctly, you see "Connected ✓ — N
+If everything's wired correctly, you see "Connected ✓, N
 virtual machines visible." Next button enables.
 
 ### What errors look like
 
 The wizard surfaces specific remediation per `error_kind`:
 
-- **permission_denied** — "Verify the Service Principal has
+- **permission_denied**, "Verify the Service Principal has
   Reader role on subscription <subscription_id>. Re-run the
   `az ad sp create-for-rbac` command from Step 2 if needed."
   Most common first-time error: the SP was created but the
   role assignment didn't propagate. Wait 60 seconds and retry,
   or re-run the create command (it's idempotent on existing
   apps).
-- **subscription_not_found** — "Verify <subscription_id> is
+- **subscription_not_found**, "Verify <subscription_id> is
   correct and the SP has access to it." Could be a typo, or
   the SP was scoped to a different subscription.
-- **tenant_invalid** — "Verify <tenant_id> matches the Azure AD
+- **tenant_invalid**, "Verify <tenant_id> matches the Azure AD
   tenant where the SP was created." The tenant_id in the
   connection doesn't match where the SP exists.
-- **credentials_invalid** — "Re-check the Client ID and Client
+- **credentials_invalid**, "Re-check the Client ID and Client
   Secret. The secret may have expired (Azure SP secrets default
   to 1 year)." Most often: typo on paste, or the secret
   expired. Rotate via
   `az ad sp credential reset --id <appId>`.
-- **network** — "Squadron's outbound connectivity to
+- **network**, "Squadron's outbound connectivity to
   management.azure.com may be blocked." Air-gapped or
   restricted-egress deployments need to allow this domain.
-- **subscription_mismatch** — "The SP's accessible subscriptions
-  don't include <subscription_id>." Rare — happens when the SP
+- **subscription_mismatch**, "The SP's accessible subscriptions
+  don't include <subscription_id>." Rare, happens when the SP
   was scoped to a different subscription than the connection.
 
-## Step 5 — Run the first scan
+## Step 5, Run the first scan
 
 Click Scan. Squadron walks the configured subscription via the
 ARM API:
@@ -359,18 +359,18 @@ GET https://management.azure.com/subscriptions/<sub>/providers/Microsoft.Compute
 
 For each VM, the scanner extracts:
 
-- **ResourceID** — VM Name
-- **InstanceType** — `vm.Properties.HardwareProfile.VMSize`,
+- **ResourceID**, VM Name
+- **InstanceType**, `vm.Properties.HardwareProfile.VMSize`,
   e.g. `Standard_D4s_v3`
-- **Tags** — the VM's Tags map
-- **HasOTel** — `true` if any tag key starts with `otel*`
+- **Tags**, the VM's Tags map
+- **HasOTel**, `true` if any tag key starts with `otel*`
   (case-insensitive)
-- **OSFamily** — `linux` or `windows`, derived from
+- **OSFamily**, `linux` or `windows`, derived from
   `vm.Properties.StorageProfile.OsDisk.OSType`. Azure exposes
   this in the same response as the VM listing, so slice 1 gets
   proper OS detection (unlike AWS and GCP slice 1, which leave
   OSFamily="unknown" pending later slice work).
-- **Region** — `vm.Location`
+- **Region**, `vm.Location`
 
 After completion, the wizard transitions to the Inventory tab:
 
@@ -380,7 +380,7 @@ After completion, the wizard transitions to the Inventory tab:
 | db-replica-3 | Standard_E8s_v5 | linux | eastus | no | env=prod |
 | api-7 | Standard_B2ms | windows | westus2 | no | env=staging |
 
-## Step 6 — Draft recommendations
+## Step 6, Draft recommendations
 
 Click "Draft recommendations from this scan." Squadron's
 discovery proposer reads the inventory, identifies uninstrumented
@@ -402,7 +402,7 @@ recommendations of the same kind for that scope (slice 2 chunk
 5 of #531 ships this affordance and it works the same for
 Azure).
 
-## Step 7 — Open the PR
+## Step 7, Open the PR
 
 If you have an IaC GitHub connection
 ([discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md)),
@@ -413,7 +413,7 @@ Branch name:
 squadron/rec/vm-otel-tag/<subscription_id>/<location>/<short_id>
 ```
 
-The 4th segment carries the scope_id — `subscription_id` for
+The 4th segment carries the scope_id, `subscription_id` for
 Azure, `project_id` for GCP, `account_id` for AWS. The webhook
 receiver detects which provider by the kind prefix (`vm-` →
 Azure, `gce-` → GCP, default → AWS).
@@ -436,22 +436,22 @@ based on the detected OSFamily. For older azurerm provider
 versions using the unified `azurerm_virtual_machine`, the PR
 body flags the resource type difference.
 
-## Step 8 — Verify the audit signal
+## Step 8, Verify the audit signal
 
 Open the Timeline page. Filter by event type `discovery.azure.*`
 to see the Azure-arc events:
 
-- **discovery.azure.connection_created** — payload:
+- **discovery.azure.connection_created**, payload:
   `{connection_id, subscription_id, display_name}`.
-- **discovery.azure.connection_deleted** — when you remove.
-- **discovery.azure.scan_started** — when you click Scan.
-- **discovery.azure.scan_completed** — payload:
+- **discovery.azure.connection_deleted**, when you remove.
+- **discovery.azure.scan_started**, when you click Scan.
+- **discovery.azure.scan_completed**, payload:
   `{connection_id, subscription_id, location, instance_count, instrumented_count, uninstrumented_count, partial: bool, partial_reason: <string>, failed_services: [<string>...]}`.
   `failed_services` uses `azurevm` as the slice 1 service
   identifier.
-- **discovery.azure.scan_failed** — hard error path. Payload
+- **discovery.azure.scan_failed**, hard error path. Payload
   carries error_kind.
-- **discovery.azure.recommendations_generated** — payload
+- **discovery.azure.recommendations_generated**, payload
   includes `verdict_examples_used_by_state` buckets from #531
   slice 2 chunk 6 (provider-aware: subscription_id-scoped
   verdicts only).
@@ -463,7 +463,7 @@ and GCP and AWS. `provider: "azure"` in the payload discriminates.
 SIEM consumers can filter by `provider` or by `subscription_id` /
 `project_id` / `account_id`.
 
-## Step 9 — (Optional) Tune the per-connection feedback loop
+## Step 9, (Optional) Tune the per-connection feedback loop
 
 Like AWS and GCP, Azure connections have a
 `learn_from_accepted_recommendations` flag (default true).
@@ -488,8 +488,8 @@ Wizard surfacing is slice 2.
 | Validate returns `network` | Egress to management.azure.com blocked | Allow the domain in your egress firewall |
 | Scan shows partial=true with reason "azurevm: rate limit exceeded mid-scan" | Subscription has many VMs, ARM rate limited | Wait for the rate window to reset; or restrict by Location |
 | Scan completes but instance_count is 0 | No VMs exist in scope, or SP can't see them | Run `az vm list --subscription <id>` and verify SP visibility |
-| Recommendation does NOT appear for VM with otel-collector tag | Tag key is something other than `otel*` (e.g., `OTel.Collector=v1` — Azure tag keys are case-sensitive in storage) | The detection rule is case-insensitive on the key prefix, so this should work — verify by listing the VM and checking the tags block |
-| PR opens but branch missing subscription_id segment | Squadron version older than v0.89.54 — 6-segment branch shape requires chunk 5 of Azure arc | Upgrade Squadron |
+| Recommendation does NOT appear for VM with otel-collector tag | Tag key is something other than `otel*` (e.g., `OTel.Collector=v1`, Azure tag keys are case-sensitive in storage) | The detection rule is case-insensitive on the key prefix, so this should work, verify by listing the VM and checking the tags block |
+| PR opens but branch missing subscription_id segment | Squadron version older than v0.89.54-6-segment branch shape requires chunk 5 of Azure arc | Upgrade Squadron |
 | Multiple SP secret expiry warnings | One SP across many connections | Rotate the secret once; PATCH each connection with the new sealed_secret |
 
 ## Custom role alternative for stricter posture
@@ -555,7 +555,7 @@ Azure slice 1 is the third cloud. After this runbook lands,
 Squadron's positioning is concretely **"the universal
 observability control plane that scans AWS, GCP, AND Azure
 fleets."** This is materially different from "one cloud" or
-"two clouds" — the three-major-cloud claim is what makes
+"two clouds", the three-major-cloud claim is what makes
 "universal" defensible to enterprise buyers.
 
 The substrate (scanner interface, credstore credential model,
@@ -572,18 +572,18 @@ Kubernetes. The horizontal moat is real after this runbook.
 
 ## Cross-references
 
-- [Azure discovery slice 1 design doc](./proposals/azure-discovery-slice1.md) —
+- [Azure discovery slice 1 design doc](./proposals/azure-discovery-slice1.md),
   the locked spec this runbook operationalizes.
-- [discovery-gcp-first-time-setup.md](./discovery-gcp-first-time-setup.md) —
+- [discovery-gcp-first-time-setup.md](./discovery-gcp-first-time-setup.md),
   the parallel GCP runbook.
-- [discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md) —
+- [discovery-iac-first-time-setup.md](./discovery-iac-first-time-setup.md),
   AWS / IaC GitHub connection prerequisite.
-- [webhook-listener.md](./webhook-listener.md) — provider-aware
+- [webhook-listener.md](./webhook-listener.md), provider-aware
   PR-merged webhook arc.
-- [Checks API back-signal](./checks-api.md) — renders Azure
+- [Checks API back-signal](./checks-api.md), renders Azure
   recommendation summaries on Squadron-opened PRs.
-- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md),
   scope tuple is now (connection_id, scope_id, region) where
   scope_id is subscription_id for Azure.
-- [Audit log](./audit-log.md) — full catalog including
+- [Audit log](./audit-log.md), full catalog including
   `discovery.azure.*` family.

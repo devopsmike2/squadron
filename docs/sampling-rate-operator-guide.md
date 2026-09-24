@@ -1,4 +1,4 @@
-# Sampling rate analysis — operator guide
+# Sampling rate analysis, operator guide
 
 This is the operator-facing runbook for the v0.89.121 through
 v0.89.125 sampling rate analysis arc. Squadron now compares
@@ -10,7 +10,7 @@ aggressive.
 The strategic frame: this is the SECOND diagnostic running
 on the cold-start latency substrate (v0.89.113 + v0.89.118).
 The architectural bet that the substrate compounds is now
-proven — building the `MetricQuerier` interface as a generic
+proven, building the `MetricQuerier` interface as a generic
 per-cloud metric query primitive was the right call. Slice 1
 of sampling rate adds one new metric name per cloud, one
 new detection branch, one new recommendation kind, six lines
@@ -18,7 +18,7 @@ of new UI columns, and no new substrate. That's roughly 1/4
 the implementation cost of cold-start slice 1, because slice 1
 paid the substrate cost.
 
-For a first test, the walkthrough takes about 15 minutes —
+For a first test, the walkthrough takes about 15 minutes,
 most of it spent confirming the cloud connections already
 have the metric read permissions from the cold-start arc.
 
@@ -97,7 +97,7 @@ defaults Squadron should NOT flag:
 - 100% (always-on): obviously fine.
 - 10% (`TRACEIDRATIO_BASED` 0.1): the most common production
   default.
-- 5% sustained: at the edge — the detection floor sits
+- 5% sustained: at the edge, the detection floor sits
   exactly at this value (strictly less-than), not below.
   The detection fires at 4.9%, not 5%.
 
@@ -108,8 +108,8 @@ misconfiguration.
 ### Why 1000 invocation minimum?
 
 A function invoked 50 times in 24h with 2 spans observed gives
-a 4% ratio — looks aggressive but is statistical noise. 1000
-invocations corresponds to roughly 40/hour sustained — a
+a 4% ratio, looks aggressive but is statistical noise. 1000
+invocations corresponds to roughly 40/hour sustained, a
 meaningful traffic level where percentages are reliable.
 
 ### Why a single ratio threshold?
@@ -124,7 +124,7 @@ Slice 2 may add baseline comparison for detecting SUDDEN
 drops (deploy event reduced the rate). For now, the
 absolute floor wins on clarity.
 
-## The five serverless surfaces — per-cloud invocation metrics
+## The five serverless surfaces, per-cloud invocation metrics
 
 The substrate from cold-start slice 1+2 already wired per-cloud
 `MetricQuerier`. Slice 1 of sampling rate adds ONE NEW METRIC
@@ -132,7 +132,7 @@ NAME per cloud:
 
 > **⚠️ Accuracy note (v0.89.232).** The Azure invocation metric below should be
 > `FunctionExecutionCount` (`FunctionInvocations` does not exist in Azure
-> Monitor); the code rename is pending — see
+> Monitor); the code rename is pending, see
 > [detection-coverage.md](./detection-coverage.md). The OCI metric was corrected
 > to `FunctionInvocationCount` in v0.89.229.
 
@@ -145,7 +145,7 @@ NAME per cloud:
 | OCI   | Functions       | `FunctionInvocationCount` (Sum)                            |
 
 All five metrics fold into the existing rate limiter for each
-cloud — the substrate adds 1 metric query per resource per
+cloud, the substrate adds 1 metric query per resource per
 scan (alongside cold-start's 2 windows), so the overhead is
 50% on top of cold-start, still well within per-cloud quotas.
 
@@ -155,13 +155,13 @@ Following the recurring Squadron pattern, the
 `span-quality-sampling-too-aggressive` recommendation
 acknowledges three possible causes.
 
-### Case 1 — Default sampler too aggressive
+### Case 1, Default sampler too aggressive
 
 The most common cause: the OTel SDK was installed with a
 framework integration that defaults to a low sampling rate.
 
 How to recognize:
-- Check the SDK configuration in the deployed code —
+- Check the SDK configuration in the deployed code,
   `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` env vars,
   or framework-level config.
 - If the values are explicitly low (e.g. 0.01), this is your
@@ -169,25 +169,25 @@ How to recognize:
 - The recommendation's PR is the RIGHT fix here. Raise the
   sampler arg to 0.5 (or your operator-tuned floor).
 
-### Case 2 — Adaptive sampling throttling
+### Case 2, Adaptive sampling throttling
 
 Application Insights and some OTel exporters use adaptive
 sampling that throttles UNDER LOAD. The ratio Squadron sees
-is the OPERATOR-EXPERIENCED rate — not the configured rate.
+is the OPERATOR-EXPERIENCED rate, not the configured rate.
 
 How to recognize:
 - Check the SDK config: if the sampler is `ParentBased` with
   an Application Insights exporter, adaptive sampling is
   likely on.
 - The function's invocation count may correlate with the
-  ratio — high invocation count = low ratio (throttling).
+  ratio, high invocation count = low ratio (throttling).
 
 What to do: the recommendation's PR (raising the rate) won't
 help if the throttling is adaptive. Decline with the note
 "adaptive sampling intentional under high load." The verdict
 learning loop records.
 
-### Case 3 — Tail-sampling collector
+### Case 3, Tail-sampling collector
 
 If the operator runs a tail-sampling collector in front of
 Squadron's OTLP receiver, the collector selectively keeps
@@ -206,8 +206,8 @@ per-resource "tail-sampling intentional" flag.
 
 ## Per-cloud Terraform patterns
 
-All 5 surfaces set the same TWO env vars — `OTEL_TRACES_SAMPLER` (a ratio
-sampler) AND `OTEL_TRACES_SAMPLER_ARG` (the ratio) — just with different
+All 5 surfaces set the same TWO env vars, `OTEL_TRACES_SAMPLER` (a ratio
+sampler) AND `OTEL_TRACES_SAMPLER_ARG` (the ratio), just with different
 injection mechanisms. Setting the ARG alone is a NO-OP: the OTel SDK's default
 sampler (parentbased_always_on) ignores it.
 
@@ -280,7 +280,7 @@ resource "oci_functions_function" "<name>" {
 }
 ```
 
-The 0.5 (50%) target is the starting point — operators tune
+The 0.5 (50%) target is the starting point, operators tune
 based on cost vs. observability tradeoff. The recommendation
 reasoning explicitly notes that decline path.
 
@@ -321,7 +321,7 @@ Each DiscoveryX Serverless table now has a "Sampling rate
 | Trace axis        | existing                              |
 | OTel distro       | existing                              |
 | Cold-start P95    | existing (slice 2 of cold-start)      |
-| Sampling rate     | NEW — ratio as percentage; amber when below floor + above minimum |
+| Sampling rate     | NEW, ratio as percentage; amber when below floor + above minimum |
 | Last seen         | existing                              |
 | Quality           | existing (AWS only, slice 1 deferral) |
 
@@ -365,23 +365,23 @@ Returns:
 The two underlying gate flags (`exceeds_floor` and
 `exceeds_minimum_invocations`) surface separately so consumers
 can distinguish "below floor but above minimum (fires)" from
-"below floor AND below minimum (statistical noise — does NOT
+"below floor AND below minimum (statistical noise, does NOT
 fire)."
 
 ### Activation status (#295)
 
-Sampling-rate detection is **active for all four clouds — AWS, GCP, OCI,
-and Azure**, gated on `serverless_metric_detection.enabled` (default off —
+Sampling-rate detection is **active for all four clouds, AWS, GCP, OCI,
+and Azure**, gated on `serverless_metric_detection.enabled` (default off,
 it reads a billed per-cloud invocation-count metric). With the flag on,
 each serverless scan annotates the inventory rows (UI `sampling_ratio` +
 `would_fire_recommendation`) and fires the
 `span-quality-sampling-too-aggressive` recommendation, and records the
 result so the per-resource endpoint above can serve it. With the flag
-off, the annotation does not run, rows render "—", and the endpoint
-404s — no metric reads, no behavior change.
+off, the annotation does not run, rows render ", ", and the endpoint
+404s, no metric reads, no behavior change.
 
 Azure's invocation denominator is the native Azure Monitor
-`FunctionExecutionCount` (all Function App executions, app-level —
+`FunctionExecutionCount` (all Function App executions, app-level,
 matching Squadron's Function-App serverless unit); no App Insights
 add-on is required. Because Azure's metric query runs whenever the scan
 token is present (it has no metric-client-absence signal like the other
@@ -391,7 +391,7 @@ same flag rather than implicitly.
 The per-resource endpoint is backed by an **in-memory last-result
 cache**, not a persisted store: it reflects the most recent scan's live
 result for the resource and returns 404 for any resource no scan has
-observed (sampling is recomputed each scan — there is no historical
+observed (sampling is recomputed each scan, there is no historical
 sampling observation to read back).
 
 **Azure is not yet wired** (deferred). Azure's native invocation metric
@@ -399,7 +399,7 @@ name needs a correctness fix first (`FunctionExecutionCount`, currently
 the nonexistent placeholder `FunctionInvocations`) plus an opt-in gate;
 see `docs/proposals/sampling-rate-activation.md` (Landing) and
 `docs/audit/detection-metric-availability.md`. Until then, Azure
-serverless sampling rows render "—" and the Azure endpoint 404s.
+serverless sampling rows render ", " and the Azure endpoint 404s.
 
 ## Per-cloud rate limits + cost surface
 
@@ -414,17 +414,17 @@ absorb the new query:
 - OCI: 10 TPS
 
 For a 4-cloud serverless fleet of 1000 functions per cloud, sampling adds
-4000 queries/day across all clouds — negligible relative to per-cloud
+4000 queries/day across all clouds, negligible relative to per-cloud
 quotas.
 
 Cost: covered by the same free tiers as cold-start. No
 incremental cost per the no-money brief.
 
-## Workflow — first sampling rate scan
+## Workflow, first sampling rate scan
 
 1. Open the AWS Discovery page (`/discovery/aws`). Note the
    existing connection.
-2. **No IAM upgrade required** — the cold-start arc's
+2. **No IAM upgrade required**, the cold-start arc's
    permissions already cover the new metrics.
 3. Click "Run scan". The scan walks serverless functions,
    queries the cloud-native invocation count alongside the
@@ -443,7 +443,7 @@ incremental cost per the no-money brief.
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new
+Slice 1 reuses the existing audit event types, no new
 constants. The recommendation lifecycle
 (`recommendation.created` / `pr_opened` / `pr_merged` /
 `pr_closed`) carries the new
@@ -457,23 +457,23 @@ recommendation_kind = "span-quality-sampling-too-aggressive"
 
 ## Troubleshooting
 
-- **Sampling rate cell shows "—" for all my functions.** The
+- **Sampling rate cell shows ", " for all my functions.** The
   function must have been observed by Squadron's traceindex
   (at least 1 span flowed in the 24h window) AND the
   invocation count must be queryable. Check the
   per-resource sampling endpoint for the underlying counts;
   if `observed_span_count = 0`, the function may not be
-  emitting traces at all (separate problem — check the
+  emitting traces at all (separate problem, check the
   trace-emission recommendations).
 - **Sampling rate shows 0% with high invocation count.** The
   function is emitting NO spans despite high traffic. This
-  is likely a misconfigured exporter — check the OTel SDK
+  is likely a misconfigured exporter, check the OTel SDK
   exporter destination. Squadron's trace-emission
   recommendations may already be firing for this resource.
 - **Sampling rate shows 4% but no recommendation fires.**
   Check the `exceeds_minimum_invocations` flag in the
   per-resource endpoint. If false, the function has fewer
-  than 1000 invocations in the window — too noisy to
+  than 1000 invocations in the window, too noisy to
   trust the percentage.
 - **Recommendation fires on a function that's intentionally
   sampled at 1%.** This is case 3 (cost-conscious intentional
@@ -481,7 +481,7 @@ recommendation_kind = "span-quality-sampling-too-aggressive"
   the verdict learning loop records the decline reason.
 - **The dashboard SPAN QUALITY 6th column shows high
   percentage but the per-provider Recommendations tab is
-  empty.** The aggregation uses honest denominators — only
+  empty.** The aggregation uses honest denominators, only
   resources above the 1000-invocation minimum count toward
   the denominator. The per-resource detail may show a high
   ratio but be below minimum invocations. Check the per-resource
@@ -498,7 +498,7 @@ Per §13 of the design doc:
 
 - Compute / database / kubernetes sampling rate (different
   per-tier approach since they lack a clean cloud-native
-  invocation-count metric — possibly Prometheus counter
+  invocation-count metric, possibly Prometheus counter
   correlation for k8s workloads).
 - Span event sampling rate.
 - Tail-sampling collector detection.
@@ -517,7 +517,7 @@ Per §13 of the design doc:
   (if a k8s pod exposes a Prometheus `http_requests_total`
   counter, compare against traceindex span count).
 
-## Strategic frame — the substrate compounds
+## Strategic frame, the substrate compounds
 
 This is the second diagnostic running on the cold-start
 latency substrate. The architectural bet that the substrate
@@ -532,7 +532,7 @@ compounds is PROVEN. Slice 1 of sampling rate added:
 That's roughly 1/4 the implementation cost of cold-start
 slice 1, because slice 1 paid the substrate cost.
 
-Squadron's universal claim doesn't grow a new verb — slice
+Squadron's universal claim doesn't grow a new verb, slice
 1 of sampling rate makes the existing MEASURES verb more
 specific. The "where did my trace go?" diagnostic chain
 gains a fifth sibling:
@@ -563,12 +563,12 @@ to 50%."
 
 ## Cross-references
 
-- [Sampling rate analysis slice 1 design doc](./proposals/sampling-rate-analysis-slice1.md) —
+- [Sampling rate analysis slice 1 design doc](./proposals/sampling-rate-analysis-slice1.md),
   the locked spec this runbook operationalizes.
-- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md) —
+- [Cold-start latency operator guide](./cold-start-latency-operator-guide.md),
   the substrate arc that this reuses.
-- [Span quality operator guide](./span-quality-operator-guide.md) —
+- [Span quality operator guide](./span-quality-operator-guide.md),
   the SPAN QUALITY panel this extends from 5 columns to 6.
-- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md) —
+- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md),
   the inventory rows this annotates.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.

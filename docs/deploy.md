@@ -1,9 +1,9 @@
-# Deploy integration — GitHub Actions (v0.34)
+# Deploy integration, GitHub Actions (v0.34)
 
 Squadron can dispatch your existing GitHub Actions workflows that
 deploy OpenTelemetry collectors. The flow:
 
-1. You register a **target** — the workflow Squadron is allowed to
+1. You register a **target**, the workflow Squadron is allowed to
    trigger, plus the encrypted PAT and the default inputs.
 2. You click **Run deployment** in the Squadron UI (or POST to
    `/api/v1/deploy/runs`). Squadron lints the pinned config first;
@@ -14,7 +14,7 @@ deploy OpenTelemetry collectors. The flow:
 4. Status polling (every 60s) refreshes the run lifecycle through
    queued → in_progress → completed.
 5. On success, Squadron auto-registers your **expected hosts** into
-   the v0.32 inventory table — so the dashboard flags any host the
+   the v0.32 inventory table, so the dashboard flags any host the
    workflow claimed to deploy but never checks in via OpAMP.
 
 ## Set the secret key
@@ -40,15 +40,15 @@ on startup and `/api/v1/deploy/*` returns 503. The UI's Deploy page
 renders a setup help screen instead.
 
 **Important:** the key is the master credential. Lose it and every
-target's stored PAT becomes unrecoverable — you'll need to delete
+target's stored PAT becomes unrecoverable, you'll need to delete
 and recreate each target with a fresh PAT.
 
 ## Mint the GitHub PAT
 
 The PAT needs two scopes on the target repo:
 
-- `actions:write` — for `workflow_dispatch`
-- `contents:read` — so GitHub can resolve `ref` to a commit
+- `actions:write`, for `workflow_dispatch`
+- `contents:read`, so GitHub can resolve `ref` to a commit
 
 Use a **fine-grained PAT** scoped to just the deploy repo (Settings →
 Developer settings → Personal access tokens → Fine-grained tokens).
@@ -61,16 +61,16 @@ roadmap below; v0.34 ships PAT support, v0.35 adds App support.
 
 Squadron UI → **Deploy → New target**. Fields:
 
-- **Name** — operator-friendly label, e.g. "Prod OTel deploy".
-- **Owner / Repo** — GitHub coordinates.
-- **Workflow file** — the filename under `.github/workflows/`, not
+- **Name**, operator-friendly label, e.g. "Prod OTel deploy".
+- **Owner / Repo**, GitHub coordinates.
+- **Workflow file**, the filename under `.github/workflows/`, not
   the workflow name. E.g. `deploy-otel.yml`.
-- **Branch** — the ref to dispatch on. Defaults to `main`.
-- **GitHub PAT** — pasted once, encrypted, never echoed back.
-- **Pinned config ID** (optional) — a Squadron config that gets
+- **Branch**, the ref to dispatch on. Defaults to `main`.
+- **GitHub PAT**, pasted once, encrypted, never echoed back.
+- **Pinned config ID** (optional), a Squadron config that gets
   lint-checked before every dispatch. If errors, the deploy is
   refused; you fix the config and retry.
-- **Default inputs** — JSON object of `string → string` that
+- **Default inputs**, JSON object of `string → string` that
   Squadron passes as the workflow's `inputs`. Merged with per-run
   overrides at trigger time.
 
@@ -103,7 +103,7 @@ Token needs `deploy:trigger` scope.
 
 Your GitHub Actions workflow needs `on: workflow_dispatch` with the
 inputs declared. If you POST inputs that aren't declared in the
-workflow file, GitHub returns 422 — Squadron surfaces that as a
+workflow file, GitHub returns 422, Squadron surfaces that as a
 clear error.
 
 ### Pattern A: Hosts live in `inventory.ini` (Ansible)
@@ -155,12 +155,12 @@ jobs:
 
 The Squadron target setup for this workflow:
 
-- **Owner / Repo / Workflow / Branch** — your real values + `main`.
-- **Inventory path** — `winOtel/ansible/inventory.ini`. Squadron
+- **Owner / Repo / Workflow / Branch**, your real values + `main`.
+- **Inventory path**, `winOtel/ansible/inventory.ini`. Squadron
   reads this from GitHub via the Contents API at trigger time.
-- **Default inputs** — `{"filelog": "no"}` (matches the workflow's
+- **Default inputs**, `{"filelog": "no"}` (matches the workflow's
   default).
-- **PAT scope** — `actions:write` + `contents:read`.
+- **PAT scope**, `actions:write` + `contents:read`.
 
 The trigger sheet renders the parsed host list read-only, so the
 operator sees the deploy scope before clicking Run. Hosts that
@@ -220,26 +220,26 @@ Squadron, your PagerDuty receiver gets paged.
 
 ## v0.35 additions
 
-- **Validate target** — pre-flight checklist that exercises every
+- **Validate target**, pre-flight checklist that exercises every
   read path without firing a deploy: GitHub auth, workflow exists,
   inventory readable, lint passes. Click "Validate" on a target
   card to confirm setup is correct before your first deploy.
-- **Last-deployed badge** — target cards show "Last: succeeded ·
+- **Last-deployed badge**, target cards show "Last: succeeded ·
   2h ago" so you can see fleet activity at a glance.
-- **Live host status in inventory preview** — when you open the
+- **Live host status in inventory preview**, when you open the
   trigger sheet, each parsed inventory host has a green/yellow/red
   dot for healthy / silent / never-seen. Lets you spot "host02
   has been quiet for 30 minutes" before clicking Run.
-- **In-progress deploy banner** — a pulsing indicator at the top
+- **In-progress deploy banner**, a pulsing indicator at the top
   of `/deploy` when any deploy is queued or running.
-- **Redeploy button** — every completed run has a "Redeploy" link
+- **Redeploy button**, every completed run has a "Redeploy" link
   that re-fires with the same inputs. Incident-response panic
   button.
-- **Completion webhook** — set `deploy.completion_webhook_url` in
+- **Completion webhook**, set `deploy.completion_webhook_url` in
   squadron.yaml to receive a JSON POST on every terminal state
   transition (success/failure). Same shape as the v0.33
   silent-agent webhook, key on `kind: "deploy_completed"`.
-- **Decommission agent** — Agent drawer gets a "Decommission"
+- **Decommission agent**, Agent drawer gets a "Decommission"
   button for hard-deleting agent records when hosts are retired
   from the fleet. Keeps the inventory view from accumulating
   ghost offline agents.
@@ -265,12 +265,12 @@ Squadron, your PagerDuty receiver gets paged.
 
 ## Roadmap
 
-- **v0.36** — GitHub App support (org-scoped credentials, better
+- **v0.36**, GitHub App support (org-scoped credentials, better
   audit trails than PATs).
-- **v0.37** — Webhook receiver at `/api/v1/deploy/github-webhook`
+- **v0.37**, Webhook receiver at `/api/v1/deploy/github-webhook`
   for instant status updates (today's 60s polling becomes the
   fallback).
-- **v0.38** — Jenkins + GitLab providers behind the same Provider
+- **v0.38**, Jenkins + GitLab providers behind the same Provider
   interface.
 
 ## Security notes
@@ -279,7 +279,7 @@ Squadron, your PagerDuty receiver gets paged.
   nonce per record. Format on disk: `nonce || ciphertext`.
 - Plaintext PATs never appear in API responses; the UI sees only
   `has_credential: true/false`.
-- `deploy:trigger` is a separate scope from `deploy:read` — a
+- `deploy:trigger` is a separate scope from `deploy:read`, a
   read-only token can browse history but can't fire workflows.
 - Every dispatch is audit-logged (actor, target, inputs, expected
   hosts). The `deploy_runs` table is append-only on the wire.

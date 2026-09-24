@@ -1,10 +1,10 @@
-# Demo Gap Audit — every claimed capability vs. what the demo actually shows
+# Demo Gap Audit, every claimed capability vs. what the demo actually shows
 
 Status: **signed off + building** · Owner: Squadron · Date: 2026-07-02
 
 > Purpose. Before building anything, enumerate every capability Squadron
 > claims, verify what the code actually does, and state exactly what the
-> one-click demo shows for it today — fully, partially, or nothing — plus the
+> one-click demo shows for it today, fully, partially, or nothing, plus the
 > precise fix to reach full-capability. This is the gate. Nothing gets built
 > until the target state below is signed off.
 
@@ -15,28 +15,28 @@ Status: **signed off + building** · Owner: Squadron · Date: 2026-07-02
 The build plan in §4 was signed off and is being delivered phase by phase, each
 one live-verified in the running container before commit.
 
-- **Phase T — live telemetry ingest** — ✅ shipped, v0.89.381. In-process
+- **Phase T, live telemetry ingest**, ✅ shipped, v0.89.381. In-process
   simulator drives real OTLP metrics/logs/traces into DuckDB; per-agent
   Logs/Metrics tabs, Cost Insights, and Savings (13 $-quantified recs, incl. the
   noisy-attribute drop) populate live.
-- **Phase F — 500-agent fleet** — ✅ shipped, v0.89.381. ~500 agents across 5
+- **Phase F, 500-agent fleet**, ✅ shipped, v0.89.381. ~500 agents across 5
   production-like groups with realistic status/version/drift spread; drift hash
   matches the service formula. (Same commit fixes demoseed's lone agent reading
   spuriously "drifted".)
-- **Phase S — operational seed** — ✅ shipped, v0.89.382. AI-proposed rollout
+- **Phase S, operational seed**, ✅ shipped, v0.89.382. AI-proposed rollout
   (pending_approval) + a mid-flight rollout that advances to succeeded, runner +
   executed action, incident drafts (draft + published), 3 disabled alert rules,
   and an 8-event backdated audit/timeline trail (30-event timeline).
-- **Phase AI — deterministic proposer + keyless AI** — ✅ shipped, v0.89.383.
+- **Phase AI, deterministic proposer + keyless AI**, ✅ shipped, v0.89.383.
   Flagship loop seeded deterministically (no proposer-bridge dependency); Ask
   Squadron / Explain / Merge answer keyless via a grounded demo responder (real
   key always wins). Verified: real Ask answered the seeded data live; keyless
   path unit-covered.
-- **Phase PR — 4-cloud discovery parity** — ✅ shipped, v0.89.384. One-click
+- **Phase PR, 4-cloud discovery parity**, ✅ shipped, v0.89.384. One-click
   enable registers GCP/Azure/OCI demo connections (not just AWS); each scan
   short-circuits to canned inventory (3 compute + 2 databases); teardown removes
   all three.
-- **Phase U — polish + one-click orchestration** — ⏳ remaining. Frontend-heavy:
+- **Phase U, polish + one-click orchestration**, ⏳ remaining. Frontend-heavy:
   config version-history tab, inline lint in the editor, a demo-safe preview-PR
   UX (the Terraform-import blocks already render server-side; only "Open PR"
   needs a token), and packaging the whole thing as one clearly-labeled "Enable
@@ -44,9 +44,9 @@ one live-verified in the running container before commit.
   a frontend-focused session with browser (Claude-in-Chrome) verification.
 
 Net: the demo has gone from a four-row facade to a genuinely alive product
-across every major backend surface — fleet, telemetry, cost/savings, the full
+across every major backend surface, fleet, telemetry, cost/savings, the full
 cost-spike → AI-proposal → rollout → action → incident → audit loop,
-conversational AI, and four-cloud discovery — each proven in the running
+conversational AI, and four-cloud discovery, each proven in the running
 container. Phase U closes the remaining UI polish.
 
 ---
@@ -54,9 +54,9 @@ container. Phase U closes the remaining UI polish.
 ## 0. Verdict in one paragraph
 
 **The product is real; the demo is a facade over it.** Every headline
-capability — fleet management, per-agent config/logs/metrics/traces, cost
+capability, fleet management, per-agent config/logs/metrics/traces, cost
 insights, savings, the cost-spike→AI-proposal→rollout→action→incident loop,
-multi-cloud discovery→recommendations→Terraform, alerts, timeline, audit — is
+multi-cloud discovery→recommendations→Terraform, alerts, timeline, audit, is
 implemented and production-grade in the codebase. But the one-click demo seeds
 **exactly four rows** (one group, one config, one agent, one cost spike) and
 **zero telemetry**. The result: roughly a third of the surface is convincingly
@@ -67,7 +67,7 @@ key. A first-time operator sees a well-designed shell, not a working platform.
 **The good news, verified in code:** the machinery to make Squadron genuinely
 *alive* already exists in-tree. `cmd/fleetsim` drives a live OpAMP fleet of
 1000+ synthetic agents; `cmd/otlpsim` pushes real OTLP metrics/logs/traces
-into the ingest path, and — by design — the two compose on matching
+into the ingest path, and, by design, the two compose on matching
 deterministic agent IDs (`otlpsim/main.go` header: "Run fleetsim for a live
 OpAMP fleet and otlpsim for its telemetry and the data attributes to the same
 simulated agents"). We are not building a simulator from scratch. We are
@@ -107,39 +107,39 @@ in §4: **[T]** telemetry ingest, **[F]** fleet scale-up, **[S]** direct seed,
 
 | Surface | Claimed | Real in code | Demo today | Gap | Fix |
 |---|---|---|---|---|---|
-| Dashboard — fleet size/status/drift | Mission-control glance | ✅ | ● (1 agent) | Trivial fleet | F |
-| Dashboard — cost spike banner + $ | Bytes & $ at a glance | ✅ (DuckDB-derived) | ○ $0 | No telemetry | T |
-| Dashboard — recent activity | Audit stream | ✅ | ○ | No audit trail seeded | S |
-| Dashboard — fleet health sparklines | Queue/drops trend | ✅ | ○ | No self-metrics | T |
-| Agents — paginated/virtualized list | 200+ rows, filters | ✅ | ◐ (1 row) | Nothing to page/filter | F |
-| Agents — drift/status filters | Show drifted/offline % | ✅ | ◐ (all synced/online) | No variety | F |
-| Agent detail — Overview | Metadata + volume + health + recs | ✅ | ◐ (meta only; $0, no health, no recs) | No telemetry | T |
-| Agent detail — **Config** | Effective vs intended + pipeline DAG + send | ✅ | ● | **none — ships today** | — |
-| Agent detail — **Logs** | Query/filter/search agent logs | ✅ | ○ | DuckDB `logs` empty | T |
-| Agent detail — **Metrics** | Time-series charts per metric | ✅ | ○ | DuckDB metrics empty | T |
-| Agent detail — Traces | Spans per agent | ✅ | ○ | DuckDB traces empty | T |
-| Fleet Map — Pipeline | Per-agent collector DAG | ✅ | ◐ (1 agent) | Weak at n=1 | F |
-| Fleet Map — Data Flow | Exporter endpoints + $/dest | ✅ | ◐ (endpoint stub, $0) | No byte volume | T |
-| Fleet Map — Fleet topology | Agents×groups graph | ✅ | ◐ (1:1) | Weak at n=1 | F |
-| Groups — list/CRUD/policy | Multi-group management | ✅ | ◐ (1 group) | Weak at n=1 | F/S |
-| Telemetry — SquadronQL explorer | Ad-hoc SQL over telemetry | ✅ (UI works) | ○ (0 rows) | No telemetry | T |
-| Configs — editor + versioning + lint | Monaco + versions + lint | ✅ (versions via audit) | ◐ (1 version; no history UI; lint at rollout time) | Version UI + inline lint | S/U |
-| Configs — AI Explain / Merge | Plain-English + snippet merge | ✅ | ○ (503 without key) | LLM-gated | AI |
-| Rollouts — staged canary | Stages/guardrails/approval/rollback | ✅ (full state machine) | ◐ (only if proposer fires; then approval works, stages stall) | No mid-flight rollout; no telemetry to advance | S/AI/T |
-| **AI Proposer** — spike→draft | Cost spike → drafted rollout | ✅ | ○ **dark without ANTHROPIC_API_KEY** | Bridge no-ops; no fallback | AI |
+| Dashboard, fleet size/status/drift | Mission-control glance | ✅ | ● (1 agent) | Trivial fleet | F |
+| Dashboard, cost spike banner + $ | Bytes & $ at a glance | ✅ (DuckDB-derived) | ○ $0 | No telemetry | T |
+| Dashboard, recent activity | Audit stream | ✅ | ○ | No audit trail seeded | S |
+| Dashboard, fleet health sparklines | Queue/drops trend | ✅ | ○ | No self-metrics | T |
+| Agents, paginated/virtualized list | 200+ rows, filters | ✅ | ◐ (1 row) | Nothing to page/filter | F |
+| Agents, drift/status filters | Show drifted/offline % | ✅ | ◐ (all synced/online) | No variety | F |
+| Agent detail, Overview | Metadata + volume + health + recs | ✅ | ◐ (meta only; $0, no health, no recs) | No telemetry | T |
+| Agent detail, **Config** | Effective vs intended + pipeline DAG + send | ✅ | ● | **none, ships today** |, |
+| Agent detail, **Logs** | Query/filter/search agent logs | ✅ | ○ | DuckDB `logs` empty | T |
+| Agent detail, **Metrics** | Time-series charts per metric | ✅ | ○ | DuckDB metrics empty | T |
+| Agent detail, Traces | Spans per agent | ✅ | ○ | DuckDB traces empty | T |
+| Fleet Map, Pipeline | Per-agent collector DAG | ✅ | ◐ (1 agent) | Weak at n=1 | F |
+| Fleet Map, Data Flow | Exporter endpoints + $/dest | ✅ | ◐ (endpoint stub, $0) | No byte volume | T |
+| Fleet Map, Fleet topology | Agents×groups graph | ✅ | ◐ (1:1) | Weak at n=1 | F |
+| Groups, list/CRUD/policy | Multi-group management | ✅ | ◐ (1 group) | Weak at n=1 | F/S |
+| Telemetry, SquadronQL explorer | Ad-hoc SQL over telemetry | ✅ (UI works) | ○ (0 rows) | No telemetry | T |
+| Configs, editor + versioning + lint | Monaco + versions + lint | ✅ (versions via audit) | ◐ (1 version; no history UI; lint at rollout time) | Version UI + inline lint | S/U |
+| Configs, AI Explain / Merge | Plain-English + snippet merge | ✅ | ○ (503 without key) | LLM-gated | AI |
+| Rollouts, staged canary | Stages/guardrails/approval/rollback | ✅ (full state machine) | ◐ (only if proposer fires; then approval works, stages stall) | No mid-flight rollout; no telemetry to advance | S/AI/T |
+| **AI Proposer**, spike→draft | Cost spike → drafted rollout | ✅ | ○ **dark without ANTHROPIC_API_KEY** | Bridge no-ops; no fallback | AI |
 | Actions / Runners | Signed dispatch + runner exec + audit | ✅ (full API+engine) | ○ (nothing seeded) | Loop never exercised | S |
-| Cost Insights — volume/outliers/attrs | Where bytes go, by agent/attr | ✅ (DuckDB-derived) | ○ | No telemetry | T |
-| Savings — $ spend + quick wins | $/mo + ranked recs w/ Apply | ✅ (5 recipes, derived) | ○ ($0, no recs) | No telemetry to derive from | T |
-| Incidents — drafter inbox + publish | AI postmortem drafts | ✅ (CRUD + AI + publishers) | ○ | No drafts seeded | S |
-| Alerts — rules + evaluator | Threshold rules → webhook | ✅ (CRUD + 5s evaluator) | ○ | No rules seeded | S |
-| Timeline — merged swimlanes | Audit+deploy+spike on one axis | ✅ | ◐ (spike only) | No operational events | S |
-| Audit — event log + explain | Full state-change trail | ✅ | ◐ (spike only) | Same as timeline | S |
-| Discovery AWS — scan→recs→PR | Inventory + recs + merge-ready TF PR | ✅ | ● scan+recs; ◐ PR (needs real GitHub) | PR needs preview mode | PR |
+| Cost Insights, volume/outliers/attrs | Where bytes go, by agent/attr | ✅ (DuckDB-derived) | ○ | No telemetry | T |
+| Savings, $ spend + quick wins | $/mo + ranked recs w/ Apply | ✅ (5 recipes, derived) | ○ ($0, no recs) | No telemetry to derive from | T |
+| Incidents, drafter inbox + publish | AI postmortem drafts | ✅ (CRUD + AI + publishers) | ○ | No drafts seeded | S |
+| Alerts, rules + evaluator | Threshold rules → webhook | ✅ (CRUD + 5s evaluator) | ○ | No rules seeded | S |
+| Timeline, merged swimlanes | Audit+deploy+spike on one axis | ✅ | ◐ (spike only) | No operational events | S |
+| Audit, event log + explain | Full state-change trail | ✅ | ◐ (spike only) | Same as timeline | S |
+| Discovery AWS, scan→recs→PR | Inventory + recs + merge-ready TF PR | ✅ | ● scan+recs; ◐ PR (needs real GitHub) | PR needs preview mode | PR |
 | Discovery GCP/Azure/OCI | Same, all four clouds | ✅ scan+recs; TF preview | ◐ (no "Open PR" wiring) | PR parity for 3 clouds | PR |
-| env→Terraform import blocks | Generate import{} blocks | ✅ (all 4 clouds) | ● | none | — |
-| Inventory dashboard | Multi-cloud gap view | ✅ | ● | none | — |
-| Quickstart | Onboarding wizard | ✅ | ● | none | — |
-| **Ask Squadron** — conversational AI | The "JARVIS" surface | ✅ (endpoint + context bag) | ○ **dark without key** | LLM-gated, no demo mode | AI |
+| env→Terraform import blocks | Generate import{} blocks | ✅ (all 4 clouds) | ● | none |, |
+| Inventory dashboard | Multi-cloud gap view | ✅ | ● | none |, |
+| Quickstart | Onboarding wizard | ✅ | ● | none |, |
+| **Ask Squadron**, conversational AI | The "JARVIS" surface | ✅ (endpoint + context bag) | ○ **dark without key** | LLM-gated, no demo mode | AI |
 
 Tally: **7 surfaces already full ●**, ~11 partial ◐, ~13 empty/dark ○. Every ○
 and most ◐ trace to one of four root causes: (a) no telemetry ingest, (b)
@@ -147,13 +147,13 @@ single-agent fleet, (c) unseeded operational state, (d) AI gated on a live key.
 
 ---
 
-## 3. Target state — "live simulated production"
+## 3. Target state, "live simulated production"
 
 The demo should feel like logging into a real Squadron instance running a
 healthy-but-imperfect production fleet. Concretely, with one click ("Enable
 demo environment") and no cloud account, no agent install, no API key:
 
-- **A living fleet.** ~300–500 agents across 4–6 groups (web, api, workers,
+- **A living fleet.** ~300-500 agents across 4-6 groups (web, api, workers,
   data, edge), realistic version spread, ~5% offline, ~12% config-drifted.
   Driven by `fleetsim` against the local OpAMP server.
 - **Continuous telemetry.** `otlpsim` pushes metrics/logs/traces for those same
@@ -164,7 +164,7 @@ demo environment") and no cloud account, no agent install, no API key:
 - **A cost story that closes.** The seeded +312% spike is backed by real
   telemetry whose attribution (one noisy attribute eating ~25% of trace bytes)
   the recommendation engine actually detects. The proposer produces a drafted
-  rollout — **with a deterministic fallback so it works with no API key** — that
+  rollout, **with a deterministic fallback so it works with no API key**, that
   lands in `pending_approval`. Approving it advances stages against the live
   fleet. An action step dispatches to a seeded demo runner. An incident draft is
   produced. Every step lands in the audit/timeline swimlanes.
@@ -176,7 +176,7 @@ demo environment") and no cloud account, no agent install, no API key:
   live without a key.
 - **Free exploration first; optional guided flythrough second.** The existing
   coach-mark tour engine stays, but as an *optional* narrated path over an
-  already-alive product — not the product itself.
+  already-alive product, not the product itself.
 
 Design principle, non-negotiable going forward: **any capability we claim that
 the demo cannot show end-to-end is a defect, not a "future tour."**
@@ -185,34 +185,34 @@ the demo cannot show end-to-end is a defect, not a "future tour."**
 
 ## 4. Build plan (phased, each phase independently shippable)
 
-**Phase T — Telemetry ingest (unblocks the most surfaces).**
+**Phase T, Telemetry ingest (unblocks the most surfaces).**
 Wire `otlpsim` into the demo path so DuckDB fills for the seeded fleet.
 Point the demo-collector's exporter at Squadron instead of `debug`. Seed a
 noisy-attribute profile so cost attribution + recommendations derive real
 findings. *Unblocks: Logs, Metrics, Traces, Cost Insights, Savings, Data Flow,
 SquadronQL, dashboard cost/health.*
 
-**Phase F — Fleet scale-up.** Run `fleetsim` in the demo path to stand up
-300–500 agents across 4–6 groups with realistic status/version/drift spread.
+**Phase F, Fleet scale-up.** Run `fleetsim` in the demo path to stand up
+300-500 agents across 4-6 groups with realistic status/version/drift spread.
 *Unblocks: Agents list/filters, Fleet Map (all three tabs), Groups, dashboard
 fleet stats.*
 
-**Phase AI — Deterministic AI fallback.** Give the proposer a seeded,
+**Phase AI, Deterministic AI fallback.** Give the proposer a seeded,
 pre-computed proposal for the demo spike when no key is present, and a demo mode
 for Ask Squadron / Explain / Merge with grounded canned answers. *Unblocks: the
 flagship loop and the JARVIS surface without external creds.*
 
-**Phase S — Direct operational seed.** Seed a mid-flight rollout, a runner + a
-dispatched action, 2–3 incident drafts, 2–3 alert rules (disabled by default),
+**Phase S, Direct operational seed.** Seed a mid-flight rollout, a runner + a
+dispatched action, 2-3 incident drafts, 2-3 alert rules (disabled by default),
 and a realistic 8-event audit/timeline trail. *Unblocks: Rollouts progression,
 Actions/Runners, Incidents, Alerts, Timeline, Audit.*
 
-**Phase PR — Discovery/IaC parity.** Wire GCP/Azure/OCI recommendations through
+**Phase PR, Discovery/IaC parity.** Wire GCP/Azure/OCI recommendations through
 the same path as AWS; add a `preview=true` mode to the Terraform-import-PR
 endpoint so "Open PR" works demo-safe on all four clouds. *Unblocks: Discovery
 PR loop across clouds.*
 
-**Phase U — Polish.** Config version-history tab + inline lint; "Enable demo
+**Phase U, Polish.** Config version-history tab + inline lint; "Enable demo
 environment" as one clearly-labeled control that orchestrates T+F+AI+S+PR
 idempotently, with a clean teardown.
 
@@ -227,7 +227,7 @@ and U finish the edges.
 1. **Scope of first build.** All six phases, or land T+F first (demo goes from
    dead to alive) and iterate? Recommendation: T+F+AI+S as the first
    sign-off-worthy milestone; PR+U immediately after.
-2. **Fleet size default.** 300–500 agents is convincing without being heavy on
+2. **Fleet size default.** 300-500 agents is convincing without being heavy on
    a laptop. Confirm the ceiling you want to target.
 3. **Continuous vs. snapshot telemetry.** Live `otlpsim` (charts keep moving,
    ~real) vs. a pre-baked telemetry snapshot (instant cold-start, static).

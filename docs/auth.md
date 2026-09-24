@@ -26,7 +26,7 @@ When `auth.enabled` is true:
   don't need credentials.
 - `OPTIONS` (CORS preflight) requests are allowed through unauthenticated;
   the real request that follows is checked normally.
-- Tokens are sha256-hashed before storage — Squadron retains the digest
+- Tokens are sha256-hashed before storage, Squadron retains the digest
   and discards the plaintext. The plaintext is shown to the operator
   once at creation time and never again.
 - Successful authentication stamps an actor onto the request context.
@@ -53,7 +53,7 @@ AUTH_ENABLED=true ./squadron
 ```
 
 Restart Squadron. On the next start with auth enabled and an empty
-tokens table, Squadron emits a bootstrap token to stderr — see below.
+tokens table, Squadron emits a bootstrap token to stderr, see below.
 
 ## Bootstrap: the first token
 
@@ -62,7 +62,7 @@ tokens in the store, it issues a single token labeled `bootstrap` and
 prints it to stderr at WARN level:
 
 ```
-WARN  API auth is enabled and no tokens exist yet — issued a bootstrap token. Revoke it after creating your real tokens. {"bootstrap_token": "sqd_..."}
+WARN  API auth is enabled and no tokens exist yet, issued a bootstrap token. Revoke it after creating your real tokens. {"bootstrap_token": "sqd_..."}
 ```
 
 Copy that token from your container logs (or wherever stderr is going)
@@ -76,7 +76,7 @@ and use it to sign in to the UI. Then:
 5. Revoke the bootstrap token. Its job is done.
 
 The bootstrap flow only fires when the tokens table is empty. Restarts
-after the first token exists are silent — Squadron doesn't keep issuing
+after the first token exists are silent, Squadron doesn't keep issuing
 new ones.
 
 ## Managing tokens
@@ -90,19 +90,19 @@ curl -X POST http://localhost:8080/api/v1/auth/tokens \
   -H "Authorization: Bearer $SQUADRON_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"label": "ci-pipeline"}'
-# → {"token": {"id": "...", "label": "ci-pipeline", ...}, "plaintext": "sqd_..."}
+# → {"token": {"id": "...", "label": "ci-pipeline"...}, "plaintext": "sqd_..."}
 
 # List every issued token (active + revoked, newest first).
 curl http://localhost:8080/api/v1/auth/tokens \
   -H "Authorization: Bearer $SQUADRON_TOKEN"
 
-# Revoke. Idempotent — revoking a revoked token returns 204 the same
+# Revoke. Idempotent, revoking a revoked token returns 204 the same
 # way as revoking an active one.
 curl -X POST http://localhost:8080/api/v1/auth/tokens/<id>/revoke \
   -H "Authorization: Bearer $SQUADRON_TOKEN"
 ```
 
-Pick token labels that identify the bearer — they show up in the audit
+Pick token labels that identify the bearer, they show up in the audit
 log as `operator:<label>`. Suggested patterns:
 
 - Per-person tokens: `alice@example.com`, `bob@example.com`.
@@ -119,7 +119,7 @@ token to rotate one of them breaks the others.
 Each token carries a list of permission scopes. The middleware enforces
 them per route: a token with `agents:read` can `GET /api/v1/agents` but
 gets a **403 Forbidden** on `POST /api/v1/agents/:id/restart`. The
-distinction matters — **401 Unauthorized** means "I don't know who you
+distinction matters, **401 Unauthorized** means "I don't know who you
 are" (no token / bad token), **403 Forbidden** means "I know who you
 are but you can't do this" (auth OK, scope missing). CLI clients
 should branch on the status code, not the message.
@@ -171,7 +171,7 @@ Tokens issued before v0.10 have no scopes recorded (the column didn't
 exist). The middleware treats those tokens as having **full access**
 so the v0.10 upgrade doesn't break every existing operator and
 automation token. The token-list UI renders them with a `legacy: full
-access` badge — operators should revoke and reissue with explicit
+access` badge, operators should revoke and reissue with explicit
 scopes when they get a chance.
 
 New tokens are required to declare scopes; the API rejects an empty
@@ -181,7 +181,7 @@ case so the choice is visible in the audit log.
 ## Expiry
 
 Tokens can carry an optional expiry. When a token's `expires_at` is in
-the past, Squadron rejects it at validate time — same 401 response as
+the past, Squadron rejects it at validate time, same 401 response as
 revoked or unknown tokens, so a guesser can't learn from the status
 which condition applies.
 
@@ -199,7 +199,7 @@ timestamp.
 From the CLI:
 
 ```bash
-# Duration shorthand: d (days), h, m, s. Repeatable units NOT supported —
+# Duration shorthand: d (days), h, m, s. Repeatable units NOT supported,
 # pick the unit that lands closest to your intended date.
 squadronctl auth create-token --label deploy-bot \
   --scope rollouts:write --scope configs:write \
@@ -225,7 +225,7 @@ The token row remains in the store with `expires_at` set; the
 
 Best practice: pair expiry with a calendar reminder for the
 operator/automation owner. Squadron does not (yet) email or webhook
-the owner when a token nears expiry — that's on the roadmap.
+the owner when a token nears expiry, that's on the roadmap.
 
 ### Recommended cadences
 
@@ -256,7 +256,7 @@ It's attached automatically to every API call. Clear it by signing out
 (or by deleting the key in your browser's devtools).
 
 > **localStorage caveat.** A successful XSS on the Squadron UI could
-> read the token. That's a real but bounded risk — the UI is admin-only,
+> read the token. That's a real but bounded risk, the UI is admin-only,
 > so anyone with XSS already has equivalent in-page access. If you need
 > stricter handling, front Squadron with an OIDC-aware reverse proxy and
 > leave `auth.enabled` off; the proxy enforces auth and Squadron sees
@@ -282,7 +282,7 @@ It's attached automatically to every API call. Clear it by signing out
   reference the token ID; keeping the row lets you resolve those IDs to
   labels long after revocation.
 
-There is no "expires_at" or rotation timer yet — operators rotate by
+There is no "expires_at" or rotation timer yet, operators rotate by
 revoking the old token and creating a new one. Automatic rotation is on
 the roadmap.
 
@@ -303,14 +303,14 @@ sqlite3 /data/app.db "DELETE FROM api_tokens"
 # Restart Squadron. A new bootstrap token will print to stderr.
 ```
 
-Document this for your on-call before you ship — needing to do this is
+Document this for your on-call before you ship, needing to do this is
 typically a 3am scenario.
 
 ## What's NOT included
 
 - **User accounts / passwords.** Squadron has tokens, not users.
 - **SSO / OIDC.** Use a reverse proxy with auth in front if you need it.
-  Squadron's bearer-token layer is orthogonal — you can run both.
+  Squadron's bearer-token layer is orthogonal, you can run both.
 - **RBAC.** Every token has full API access; there's no concept of
   "read-only" or "rollouts only" yet. Tracked on the roadmap.
 - **Automatic rotation.** Operators rotate by hand: create new, swap,

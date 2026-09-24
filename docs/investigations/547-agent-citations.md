@@ -1,4 +1,4 @@
-# Investigation: #547 — Ask context bag emits no kind=agent citations
+# Investigation: #547, Ask context bag emits no kind=agent citations
 
 **Status:** Findings only (no fix landed in this commit)
 **Investigated:** 2026-06-19
@@ -9,8 +9,8 @@
 Ask Squadron's context bag (the small `map[string]string` the
 handler hands to `ai.Service.Ask`) was widened in v0.68 to
 include agents alongside rollouts, audit events, cost spikes, and
-recommendations. The handler quotes a slim per-agent summary —
-name, status, drift status, group name, last seen — under the bag
+recommendations. The handler quotes a slim per-agent summary,
+name, status, drift status, group name, last seen, under the bag
 key `agent:<id>`. The system prompt enumerates `agent` as one of
 the five valid citation kinds. The UI's `AskSquadronDialog`
 already routes `agent` chips to `/agents?agent=<id>` and colors
@@ -20,36 +20,36 @@ emit `rollout`, `audit`, `spike`, and `rec` citations but never
 
 ## What I checked
 
-- `internal/api/handlers/ask.go:300-318` — the `buildBag` block
+- `internal/api/handlers/ask.go:300-318`, the `buildBag` block
   that pulls agents via `AskAgentLister.ListForAsk` and writes
   them into the bag as `agent:<id>` entries
-- `internal/api/handlers/ask.go:74-77` — the `AskAgentLister`
+- `internal/api/handlers/ask.go:74-77`, the `AskAgentLister`
   interface contract (`ListForAsk(ctx, limit) ([]AskAgent,
   error)`)
-- `internal/api/handlers/ask.go:62-71` — the `AskAgent` slim
+- `internal/api/handlers/ask.go:62-71`, the `AskAgent` slim
   shape; confirms `Name`, `Status`, `DriftStatus`, `GroupName`,
   `LastSeen` are the fields surfaced
-- `internal/api/handlers/ask.go:395-413` — `summarizeAgent`,
+- `internal/api/handlers/ask.go:395-413`, `summarizeAgent`,
   which emits a one-line `name=... status=... drift=...
   group=... last_seen=...` summary verbatim into the bag
-- `internal/api/server.go:434-510` — the wiring layer.
+- `internal/api/server.go:434-510`, the wiring layer.
   `newAskAgentsAdapter` adapts `services.AgentService`; the
   important block is the prioritization at lines 469-505
-- `internal/ai/ask.go:54` — confirms `AskCitation.Kind` is
+- `internal/ai/ask.go:54`, confirms `AskCitation.Kind` is
   documented as `rollout | agent | audit | spike | rec`
-- `internal/ai/ask.go:60-78` — `askSystemPrompt`. The kinds enum
+- `internal/ai/ask.go:60-78`, `askSystemPrompt`. The kinds enum
   in the prompt rule lists agent: "The kind is one of rollout,
   agent, audit, spike, rec."
-- `internal/ai/ask.go:171-216` — `parseAskAnswer`. The
+- `internal/ai/ask.go:171-216`, `parseAskAnswer`. The
   citation tag regex (`[cite:kind:id]`) treats all five kinds
   identically; there is no per-kind filter
-- `internal/api/handlers/ask_test.go:248-307` —
+- `internal/api/handlers/ask_test.go:248-307`,
   `TestAskHandler_IncludesAgentsInBag`. Stubs an AI response of
   `[cite:agent:a-9] [cite:agent:a-12]` and asserts the handler
   emits `Kind: "agent"` citations. The test passes today,
   confirming the parser + handler end-to-end path works when
   the model emits agent tags
-- `ui/src/components/AskSquadronDialog.tsx:280-320` —
+- `ui/src/components/AskSquadronDialog.tsx:280-320`,
   `citationPath` and `chipKindColor` both have a `case "agent"`
   branch. The UI is not the gap
 
@@ -63,7 +63,7 @@ renders it. The path is not broken.
 The actual gap is in the **wiring adapter's prioritization**, at
 `internal/api/server.go:469-505`. The adapter walks
 `AgentService.ListAgents`, partitions every agent into one of
-three buckets — `offline`, `drifted`, or `rest` — and then
+three buckets, `offline`, `drifted`, or `rest`, and then
 **explicitly discards the `rest` bucket**:
 
 ```go
@@ -80,8 +80,8 @@ _ = rest
 On a healthy fleet (every agent online + synced), `offline` and
 `drifted` are both empty. `ListForAsk` returns `[]`. The handler's
 `buildBag` iterates zero agents and writes zero `agent:*` keys.
-The model has no agent rows it can cite from — and the system
-prompt forbids citing anything outside the bag — so it correctly
+The model has no agent rows it can cite from, and the system
+prompt forbids citing anything outside the bag, so it correctly
 emits no `kind=agent` citations.
 
 The dogfood deployment and the demo seed produce healthy fleets
@@ -93,7 +93,7 @@ fleet. That matches the observed asymmetry in #547 exactly.
 The handler-test (`TestAskHandler_IncludesAgentsInBag`) bypasses
 this issue because it stubs the `AskAgentLister` with two agents
 that are explicitly `offline` and `drifted`. The test verifies
-the *handler* contract assuming the lister returns agents — it
+the *handler* contract assuming the lister returns agents, it
 does not exercise the adapter's filter behavior on a healthy
 fleet.
 
@@ -106,8 +106,8 @@ entirely, so the model cannot emit `kind=agent` citations even
 though every other surface (handler, prompt, parser, UI) is
 ready for them. The behavior is "by design" for the
 "anything wrong?" question, but it manifests as a perceived bug
-when an operator asks any other question — "what's running in
-the web-prod group?", "tell me about agent host-09" — because
+when an operator asks any other question, "what's running in
+the web-prod group?", "tell me about agent host-09", because
 those questions cannot be answered with citations either.
 
 ## Recommended fix scope
@@ -139,9 +139,9 @@ Total: roughly 100 lines across three files. No schema changes,
 no UI changes (the chip rendering already exists). No
 migrations.
 
-An alternative shape — surface the `rest` bucket unconditionally
+An alternative shape, surface the `rest` bucket unconditionally
 up to a small cap (e.g. 3 entries) when the prioritized buckets
-are empty — would land citations on the "anything wrong?"
+are empty, would land citations on the "anything wrong?"
 question too, but at the cost of the JARVIS framing the v0.68
 commit message argued for. Probably not the right trade. The
 bag-widening shape is closer to the original design intent.
@@ -150,7 +150,7 @@ bag-widening shape is closer to the original design intent.
 
 - **Is the original #547 task description accurate about
   observed behavior?** The description says "the Ask handler
-  does not emit citations with kind=agent — only
+  does not emit citations with kind=agent, only
   rollout/audit/spike/recommendation citations show." If the
   observed answers were against a steady-state healthy fleet
   this is consistent with the root cause above. If the

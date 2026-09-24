@@ -1,4 +1,4 @@
-# Discovery IaC (GitHub) — first-time setup
+# Discovery IaC (GitHub), first-time setup
 
 **As of v0.89.62, the unified Discovery dashboard at `/discovery` shows aggregated counts across all four clouds. See it for the cross-cloud view.**
 
@@ -31,7 +31,7 @@ Three things, in this order:
    credentials and never logs the token bytes.
 2. **A Squadron IaC connection** pointing at one GitHub repository.
    The connection records the repo, the default branch, the repo
-   layout (mono- or multi-), and the placement map (§Step 6) — the
+   layout (mono- or multi-), and the placement map (§Step 6), the
    table that tells Squadron which Terraform file should receive
    each kind of recommendation.
 3. **The "Open PR" loop** on the existing AWS Recommendations tab.
@@ -77,14 +77,14 @@ limitations.
   file with one trailing newline. It does not parse HCL, merge
   resource blocks, or deduplicate. If a resource already exists with
   the same name, `terraform plan` in your CI will surface a
-  duplicate-resource error immediately and legibly — same signal
+  duplicate-resource error immediately and legibly, same signal
   you'd see if you'd pasted the snippet manually.
 - **Slice 1.5 (v0.89.11) softens this for 4 of 9 kinds.** For the
   five recommendation kinds whose Terraform shape is a NET-NEW
   top-level resource (EC2 ADOT SSM association, S3 access logging,
   EKS observability addon, DynamoDB contributor insights), Squadron
   now writes a SIBLING file `squadron_<resource_kind>.tf` in the
-  placement file's directory — clean drop-in, no conflict. For the
+  placement file's directory, clean drop-in, no conflict. For the
   five kinds that MODIFY an existing resource block (Lambda OTel
   layer, RDS PI/EM, ALB access logs, EKS cluster logging, ECS
   container insights), the append-only behavior is preserved but
@@ -101,7 +101,7 @@ limitations.
   path. If the placement file fails to parse, the target resource
   address resolves to nothing, or any other slice-2 precondition
   is violated, the handler falls back cleanly to the slice-1.5
-  append-only behavior — the operator never loses a
+  append-only behavior, the operator never loses a
   recommendation; the PR just opens with the slice-1.5 marker
   plus a one-line note in the body naming the fallback reason.
   See
@@ -113,7 +113,7 @@ limitations.
   PR; if that's not what you want, exclude the `squadron/*` labels
   or the configured branch prefix from your auto-merge rules.
 - **GitHub App-based auth is not in this release.** Slice 1 ships
-  PAT only. PATs are org-wide for the user that owns them — that's a
+  PAT only. PATs are org-wide for the user that owns them, that's a
   real privilege concentration vs the per-repo scoping a Squadron
   GitHub App would offer. The App path is on the roadmap for slice
   2. For OSS deployments today, PAT is what you have.
@@ -128,10 +128,10 @@ limitations.
   access to that repository.
 - An understanding of which file (or files) in that repo should
   receive each kind of Squadron recommendation. You don't need to
-  know all seven up front — you can skip rows and configure them
+  know all seven up front, you can skip rows and configure them
   later when their recommendations first appear.
 
-## Step 1 — Create a GitHub Personal Access Token
+## Step 1, Create a GitHub Personal Access Token
 
 In the Squadron wizard at step 2 (Authentication), there is a deep
 link to GitHub's create-token page with the scope pre-filled. You
@@ -139,10 +139,10 @@ can click it now or follow this manually:
 
 1. Open <https://github.com/settings/tokens/new>.
 2. Set **Note** to something recognizable, e.g.
-   `Squadron — opens PRs against my-org/infra-terraform`.
+   `Squadron, opens PRs against my-org/infra-terraform`.
 3. Pick an **Expiration**. 90 days is a reasonable default for a
    first test; pick whatever your org policy requires. Squadron will
-   surface a 401 error with a humanized "Authentication failed —
+   surface a 401 error with a humanized "Authentication failed,
    re-run the IaC connect wizard with a fresh PAT" message when the
    token expires, so you don't need automation around rotation for
    slice 1 (see §Rotation below).
@@ -160,13 +160,13 @@ can click it now or follow this manually:
 If your org uses fine-grained PATs instead of classic PATs, the
 slice-1 server tests classic-style `ghp_*` tokens. Fine-grained
 tokens with `contents: read+write` and `pull_requests: write` on
-the specific repo work the same in practice — they're stricter
-which is a security win — but slice 1 does not validate the
+the specific repo work the same in practice, they're stricter
+which is a security win, but slice 1 does not validate the
 fine-grained flow end-to-end. If you use a fine-grained PAT and
 hit an unexpected scope error, the workaround is a classic PAT
 scoped `repo` until slice 2.
 
-## Step 2 — Open the IaC wizard
+## Step 2, Open the IaC wizard
 
 In the Squadron UI, navigate to **Discovery → IaC (GitHub)** in the
 sidebar. The connections list page renders. Click **Connect IaC
@@ -176,13 +176,13 @@ The wizard has six steps. You can step backward at any time without
 losing earlier inputs. Closing the wizard mid-flow discards
 everything except the validate-step preflight results (which are
 read-only anyway). The PAT input never persists to local storage,
-session storage, or the URL — closing the wizard means you'll need
+session storage, or the URL, closing the wizard means you'll need
 to paste the PAT again. This is intentional.
 
-## Step 3 — Authentication
+## Step 3, Authentication
 
 Two tiles render. **GitHub App** is disabled with a "Coming in slice
-2" badge — choose the **Personal Access Token** tile.
+2" badge, choose the **Personal Access Token** tile.
 
 Paste the PAT into the token field. The field is `type=password`
 with `autocomplete=off` so browsers and password managers will not
@@ -193,7 +193,7 @@ process; it is sealed in the connection row using your deployment's
 
 Click **Next**.
 
-## Step 4 — Repository
+## Step 4, Repository
 
 Enter your repo in `owner/repo` format. Examples:
 
@@ -202,12 +202,12 @@ Enter your repo in `owner/repo` format. Examples:
 - `mike-personal/lambda-poc`
 
 The wizard validates the format inline. No GitHub API call happens
-at this step — that's deferred to step 7 (Validate) so the operator
+at this step, that's deferred to step 7 (Validate) so the operator
 can change their mind cheaply before a network round-trip.
 
 Click **Next**.
 
-## Step 5 — Layout, branch, and advanced settings
+## Step 5, Layout, branch, and advanced settings
 
 This is the step where Squadron asks the question that most affects
 the rest of the setup: **how is your Terraform organized?**
@@ -222,7 +222,7 @@ just the EKS resources, or `acme-corp/prod-infra` is just the prod
 environment's resources.
 
 Why this matters for placement: in a multi-repo, the placement map
-in step 6 points at files like `modules/eks/main.tf` or `main.tf` —
+in step 6 points at files like `modules/eks/main.tf` or `main.tf`,
 shallow paths, one file per resource kind, no environment
 qualifier.
 
@@ -235,7 +235,7 @@ multiple paths.
 
 Why this matters for placement: in a mono-repo, the placement map
 points at deeper paths like `environments/prod/eks/main.tf`. The
-slice-1 placement map captures **one path per resource kind** — if
+slice-1 placement map captures **one path per resource kind**, if
 your mono-repo declares the same kind in multiple environments,
 slice 1 lands every PR in the first path. Connect a second IaC
 repo entry for the staging path (or wait for slice 2's per-path
@@ -251,7 +251,7 @@ nothing else changes between the two paths.
 Pre-filled with `main`. Change it if your repo's default branch is
 something else (`master`, `develop`, etc.). Squadron will overwrite
 this field with the live value from the GitHub API at the Validate
-step (§Step 7) — the field here is a hint, not a commitment.
+step (§Step 7), the field here is a hint, not a commitment.
 
 ### Advanced (collapsed by default)
 
@@ -271,7 +271,7 @@ Two optional fields. Skip both if you're not sure.
 
 Click **Next**.
 
-## Step 6 — Placement map
+## Step 6, Placement map
 
 This is the substantive step. Squadron's proposer emits nine kinds
 of recommendations today:
@@ -293,14 +293,14 @@ Squadron should append the snippet. Placeholder examples adapt to
 your repo-layout choice from step 5.
 
 You can **Skip** any row. Skipped rows render a "Copy" button only
-when their recommendations appear in the Recommendations tab — no
+when their recommendations appear in the Recommendations tab, no
 Open PR button until you come back and configure the row. The
 deep-link from the Recommendations tab will land you right back on
 this step, at the missing row, when an operator clicks the
 "Configure placement" affordance.
 
 There is also a **Pattern apply** affordance ("apply
-`modules/{kind}/main.tf` to all rows" — substitutes the
+`modules/{kind}/main.tf` to all rows", substitutes the
 `{kind}` token per row) and a **Skip all** for operators who want
 to configure per-kind on first hit instead of up front.
 
@@ -311,7 +311,7 @@ audit timeline records the change as
 
 Click **Next**.
 
-## Step 7 — Validate
+## Step 7, Validate
 
 Squadron calls GitHub with the PAT and runs a preflight:
 
@@ -326,16 +326,16 @@ Squadron calls GitHub with the PAT and runs a preflight:
    records whether the file exists and (if it does) its short SHA.
 
 Each row renders one of three icons: ✓ found, ✗ missing, ⊘ skipped.
-A missing file is **not** a blocker — you may want to add the file
+A missing file is **not** a blocker, you may want to add the file
 as part of the first PR Squadron opens. The Save button explicitly
 calls out which rows will be saved as-is vs which will be skipped on
 first PR open.
 
-A repo-level failure (RepoNotFound, AuthFailed) **is** a blocker —
+A repo-level failure (RepoNotFound, AuthFailed) **is** a blocker,
 the Save button stays disabled and the humanized error renders with
 a jump-back button to the relevant step (Authentication, Repository).
 
-## Step 8 — Save
+## Step 8, Save
 
 Click **Save Connection**. Two things happen:
 
@@ -343,14 +343,14 @@ Click **Save Connection**. Two things happen:
    The PAT is sealed before insert. The connection_id is a UUID.
 2. The audit event `iac.github.connection_created` is recorded with
    payload `{connection_id, repo_full_name, default_branch,
-   auth_kind, placement_map}` — never the token.
+   auth_kind, placement_map}`, never the token.
 
 The wizard closes. You land on the connections list page with a
 green "Connected" toast and your new row. The connection is
 immediately live; the next AWS scan will surface Open PR buttons on
 recommendation cards that match your placement map.
 
-## Step 9 — Open your first PR
+## Step 9, Open your first PR
 
 Navigate to **Discovery → AWS** and either trigger a fresh scan or
 open an existing one. Click **Generate recommendations**.
@@ -358,7 +358,7 @@ open an existing one. Click **Generate recommendations**.
 For each recommendation whose `resource_kind` has a row in your
 connection's placement map, the card grows an **Open PR** button
 alongside the existing **Copy** button. Click Open PR. The button
-shows a spinner ("Opening PR…") for roughly 3–5 seconds while
+shows a spinner ("Opening PR…") for roughly 3-5 seconds while
 Squadron:
 
 1. Reads the current default-branch HEAD SHA.
@@ -373,7 +373,7 @@ Squadron:
 
 On success, the card collapses into a success panel: the PR number
 and URL (target=_blank), the file path, and a footer that mirrors
-the language in the PR body — "Squadron will not push to this
+the language in the PR body, "Squadron will not push to this
 branch again." The Open PR button is removed; the Copy button
 persists in case you want to also paste the snippet somewhere else.
 
@@ -385,19 +385,19 @@ Re-run the Squadron scan after the apply lands. The previously
 uninstrumented resource should now report as instrumented; the
 recommendation drops from the Recommendations tab on its own.
 
-## PR disposition — new_file vs patch_existing
+## PR disposition, new_file vs patch_existing
 
 Slice 1.5 (v0.89.11, #626 Stream 27) routes each Open PR through
 one of two dispositions based on the resource_kind's structural
 Terraform shape:
 
-- **`new_file`** — the snippet defines a NET-NEW top-level Terraform
+- **`new_file`**, the snippet defines a NET-NEW top-level Terraform
   resource. Squadron writes a SIBLING file named
   `squadron_<resource_kind>.tf` in the placement file's directory.
   Clean drop-in; `terraform plan` in your CI passes on first try.
   The PR has the usual `squadron` + `squadron/<resource_kind>`
   labels and no manual-merge marker.
-- **`patch_existing`** — the snippet modifies an EXISTING top-level
+- **`patch_existing`**, the snippet modifies an EXISTING top-level
   resource block (e.g. adding `layers = [...]` to an
   `aws_lambda_function` your module already declares).
   - **Slice 2 path (v0.89.12, the default).** Squadron parses the
@@ -408,7 +408,7 @@ Terraform shape:
     as a clean drop-in PR. No `[needs manual merge]` title prefix;
     no `squadron/needs-manual-merge` label. If the target resource
     carries `lifecycle { ignore_changes = [...] }` referencing a
-    patched attribute, the PR body adds a one-line note — the
+    patched attribute, the PR body adds a one-line note, the
     file change still lands but `terraform apply` will no-op the
     corresponding attribute until you edit the ignore_changes
     entry.
@@ -423,7 +423,7 @@ Terraform shape:
     body's callout names the fallback reason (parse_error,
     resource_not_found, etc.) so you can act on it.
 
-The disposition is STRUCTURAL — Squadron's server applies the same
+The disposition is STRUCTURAL, Squadron's server applies the same
 mapping on every request, independent of the proposer's output.
 The Recommendations card surfaces the disposition BEFORE you click:
 patch_existing kinds with a slice-2 structured patch get a small
@@ -462,13 +462,13 @@ carries:
 |-----------------------|------------------------------------------------------------------------|
 | `parse_error`         | Existing placement file is not valid HCL today. Fix it and re-scan.    |
 | `resource_not_found`  | The target resource address (`<type>.<name>`) doesn't exist in the file. The operator may have renamed the resource since the scan. |
-| `ambiguous_resource`  | Multiple resource blocks match the same address (shouldn't happen — Terraform itself rejects this — but the check is defensive). |
+| `ambiguous_resource`  | Multiple resource blocks match the same address (shouldn't happen, Terraform itself rejects this, but the check is defensive). |
 | `unknown_op`          | The proposer emitted an HCL patch op outside the 5-op vocabulary. Re-running the proposer (newer prompt) usually fixes it. |
 | `invalid_value_type`  | The proposer emitted a value whose Go-side type doesn't match the op (e.g. `scalar_set` with a list). Same fix as `unknown_op`. |
 | `no_patch_emitted`    | The proposer is on a pre-v0.89.12 prompt and didn't emit a structured patch at all. Re-run the scan after upgrading. |
 | `other`               | Unclassified merge error. Open an issue with the audit payload.        |
 
-## Trust thesis — what Squadron does and does not do
+## Trust thesis, what Squadron does and does not do
 
 Read this if you're going to deploy Squadron in a regulated
 environment, or if you're explaining the security model to a
@@ -515,7 +515,7 @@ reviewer.
   `recommendation.pr_opened` audit row (or
   `recommendation.pr_open_failed` on failure). The payload includes
   `repo_full_name, pr_number, pr_url, branch, commit_sha, file_path,
-  actor` — never the snippet content, never the PAT, never the
+  actor`, never the snippet content, never the PAT, never the
   file's prior content.
 - Every connection lifecycle change produces an
   `iac.github.connection_created` / `connection_validated` /
@@ -533,17 +533,17 @@ logs.
 
 ### Validate / Save errors
 
-**`AuthFailed`** — The PAT is invalid, expired, or missing `repo`
+**`AuthFailed`**, The PAT is invalid, expired, or missing `repo`
 scope.
 
 - Fix: re-run §Step 1. Check the scope checkbox. Copy the token
-  immediately — GitHub shows it once.
+  immediately, GitHub shows it once.
 - If you copied the token correctly and it still fails, the most
   common cause is the PAT was created on a different GitHub account
   than the one that has access to the repo. Check the URL of the
   token-creation page when you create the token.
 
-**`RepoNotFound`** — Squadron called GitHub with the PAT and got a
+**`RepoNotFound`**, Squadron called GitHub with the PAT and got a
 404 for `GET /repos/{owner}/{repo}`.
 
 - Fix: check the spelling of `owner/repo` in step 4. GitHub is
@@ -555,7 +555,7 @@ scope.
   a personal sandbox, the PAT must belong to the account that owns
   the sandbox.
 
-**`FileNotFound`** — A placement row pointed at a path that doesn't
+**`FileNotFound`**, A placement row pointed at a path that doesn't
 exist on the default branch. Surfaces only on Validate; not a Save
 blocker.
 
@@ -563,7 +563,7 @@ blocker.
   as-is and Squadron will skip Open PR for this kind until you fix
   the path later.
 
-**`ConnectionConflict`** — There's already an IaC connection for
+**`ConnectionConflict`**, There's already an IaC connection for
 this `(provider, repo_full_name)` pair. Squadron enforces one
 connection per repo.
 
@@ -574,7 +574,7 @@ connection per repo.
 
 ### Open PR errors
 
-**`NoPlacementMapping`** — You clicked Open PR for a
+**`NoPlacementMapping`**, You clicked Open PR for a
 recommendation whose `resource_kind` has no row in the placement
 map (or the row was skipped at save time).
 
@@ -584,23 +584,23 @@ map (or the row was skipped at save time).
 
 - Suggested paths: when this error fires, Squadron scans your
   connected repo (its `.tf` files) and suggests where this fix most
-  likely belongs — ranked by which file already declares the matching
+  likely belongs, ranked by which file already declares the matching
   resource type, then by filename, then by convention. The
   suggestions appear in the error message and in a `suggested_paths`
   field on the response; pick one when you add the placement-map row.
   If the repo has no obvious home, Squadron proposes a conventional
-  new file name (for example `storage.tf`). This is advisory only —
+  new file name (for example `storage.tf`). This is advisory only,
   it never opens a PR on its own.
 
-**`DefaultBranchWriteRefused`** — This is the security invariant
+**`DefaultBranchWriteRefused`**, This is the security invariant
 firing. It means Squadron's branch-name resolution somehow produced
 the default branch name, which should not happen.
 
-- This is a Squadron bug — please file an issue with the audit
+- This is a Squadron bug, please file an issue with the audit
   payload (everything except the PAT) attached. The fact that the
   invariant fired and the write was blocked is working as designed.
 
-**`AuthFailed` (on Open PR specifically)** — The PAT was valid at
+**`AuthFailed` (on Open PR specifically)**, The PAT was valid at
 Validate time but is no longer valid. Usually means the PAT
 expired or was revoked between the Save step and the Open PR
 click.
@@ -608,17 +608,17 @@ click.
 - Fix: re-run §Step 1 to generate a fresh PAT, delete the existing
   connection, walk the wizard again.
 
-**`SquadronFileAlreadyExists`** — v0.89.11 (#626 Stream 27) slice-1.5
+**`SquadronFileAlreadyExists`**, v0.89.11 (#626 Stream 27) slice-1.5
 only. You clicked Open PR for a `new_file`-disposition kind, but a
 prior Squadron PR for the same kind already created
 `squadron_<resource_kind>.tf` in the placement file's directory.
 The next Open PR for the same kind would collide because slice 1.5
-does not update an existing Squadron sibling file — that's slice 2
+does not update an existing Squadron sibling file, that's slice 2
 territory.
 
 - Fix: in GitHub, find the existing
   `squadron_<resource_kind>.tf` file. Either merge the open PR
-  that created it (preferred — the new scan's snippet may already
+  that created it (preferred, the new scan's snippet may already
   be redundant) or close that PR and delete the file from the
   default branch, then re-run the scan. Squadron's next Open PR
   will create a fresh file.
@@ -643,12 +643,12 @@ in the timeline.
 
 The connections list has a **Delete** button per row. Confirm in the
 modal. Squadron removes the row from SQLite immediately. The
-deletion does not delete any branches or PRs on GitHub — those are
+deletion does not delete any branches or PRs on GitHub, those are
 your repository's history and Squadron leaves them alone. Open PRs
 that Squadron created stay open; close them in GitHub if you don't
 want them.
 
-Deleting a connection is idempotent — re-deleting an already-deleted
+Deleting a connection is idempotent, re-deleting an already-deleted
 connection returns HTTP 204 without an error. No audit event fires
 in slice 1; this is a known gap (slice 1.5 should land the
 `iac.github.connection_deleted` event for symmetry with the other
@@ -657,7 +657,7 @@ lifecycle events).
 ### Revoking a PAT on GitHub's side
 
 If you suspect a Squadron deployment's host is compromised, revoke
-the PAT on GitHub immediately — <https://github.com/settings/tokens>
+the PAT on GitHub immediately, <https://github.com/settings/tokens>
 → Revoke. This invalidates the credential. Then delete the
 connection in Squadron. Squadron's next attempt to use the token
 will surface `AuthFailed`; the deletion cleans up the sealed
@@ -667,7 +667,7 @@ ciphertext.
 
 - **GitHub App authentication.** Slice 2.
 - **Webhooks from GitHub back to Squadron** for
-  `recommendation.pr_merged` events. **SHIPPED in v0.89.23 — see
+  `recommendation.pr_merged` events. **SHIPPED in v0.89.23, see
   [webhook-listener.md](./webhook-listener.md) for the operator
   runbook.** The receiver requires the operator's Squadron
   deployment to expose a public callback URL. `pr_closed`-without-
@@ -678,7 +678,7 @@ ciphertext.
   IaC connection per GitHub repository.
 - **Editing the PR body or title after open.** Each Open PR click
   is a new branch and a new PR.
-- **Auto-merge.** Outside of Squadron's scope — your operator's
+- **Auto-merge.** Outside of Squadron's scope, your operator's
   call, configured on GitHub's side.
 - **GitLab, Bitbucket, Azure DevOps.** Roadmap, not slice 1.
 - **HCL-aware merging.** Slice 1 appends; slice 1.5 (v0.89.11)
@@ -692,18 +692,18 @@ ciphertext.
 
 ## See also
 
-- [discovery-aws-first-time-setup.md](discovery-aws-first-time-setup.md)
-  — the AWS half of the setup. Connect AWS first; IaC builds on it.
-- [universal-discovery-design.md](universal-discovery-design.md) —
+- [discovery-aws-first-time-setup.md](discovery-aws-first-time-setup.md),
+the AWS half of the setup. Connect AWS first; IaC builds on it.
+- [universal-discovery-design.md](universal-discovery-design.md),
   the broader design doc this runbook operationalizes.
-- [proposals/603-connect-iac-repo.md](proposals/603-connect-iac-repo.md)
-  — the design doc that scoped this slice 1, including the threat
+- [proposals/603-connect-iac-repo.md](proposals/603-connect-iac-repo.md),
+the design doc that scoped this slice 1, including the threat
   model and the slice-2 roadmap (GitHub App, webhooks, multi-repo).
-- [webhook-listener.md](webhook-listener.md) — v0.89.23 operator
+- [webhook-listener.md](webhook-listener.md), v0.89.23 operator
   runbook for the inbound webhook that records
   `recommendation.pr_merged` events when Squadron-opened PRs land.
-- [discovery-proposer-learning.md](discovery-proposer-learning.md)
-  — v0.89.28 operator runbook for the discovery proposer's
+- [discovery-proposer-learning.md](discovery-proposer-learning.md),
+v0.89.28 operator runbook for the discovery proposer's
   feedback loop, which reads `recommendation.pr_merged` events
   and stops re-proposing accepted recommendations on the next
   scan. The connection's `LearnFromAcceptedRecommendations` flag

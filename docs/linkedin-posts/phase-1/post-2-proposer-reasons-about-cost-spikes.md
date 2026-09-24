@@ -25,7 +25,7 @@ v0.84 playground:
    the proposer.
 2. The proposer's decision framework evaluates: one config change
    or sequenced changes? Two independent high-cardinality
-   attributes argue for staging the drops — observe between
+   attributes argue for staging the drops, observe between
    steps, abort if step 0 is enough on its own.
 3. The model emits a `Kind: "plan"` result with two
    `PlanStepCandidate` entries. Step 0 drops `container.id` with
@@ -73,7 +73,7 @@ capabilities enabled.
 - **Annotations:** none on the body. A small "v0.84.0 dogfood run"
   caption added below the screenshot in the LinkedIn post body, not
   baked into the image. The reasoning text and metering numbers are
-  the point — let them speak.
+  the point, let them speak.
 - **Crop:** include the route in the browser address bar so the
   reader can verify the surface. Drop the OS chrome.
 
@@ -81,8 +81,8 @@ capabilities enabled.
 
 Resists **the backwards-from-marketing post** from
 linkedin-rollout.md "Anti-patterns to avoid". This post walks the
-exact code path that runs on a real spike — bridge → decision
-framework → dispatch → engine sequencing → approval gate — with
+exact code path that runs on a real spike, bridge → decision
+framework → dispatch → engine sequencing → approval gate, with
 the numbers from a real playground run. Nothing is invented to fit
 the claim. The 312% spike, the two attributes, the two-step plan
 are all what the "Two attrs → plan" starter actually produces. The

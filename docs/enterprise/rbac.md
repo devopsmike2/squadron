@@ -3,7 +3,7 @@
 The enterprise edition replaces the OSS flat-scope authorizer with a
 **store-backed, deny-by-default, resource-aware** role engine at the single
 `middleware.RequireScope` enforcement seam. Roles and bindings are a real,
-API-managed product surface — not a redeploy-to-change static file — and every
+API-managed product surface, not a redeploy-to-change static file, and every
 allow/deny is written to the audit log as an `authz.decision` event.
 
 !!! note "RBAC only bites with auth on"
@@ -34,21 +34,21 @@ flowchart TD
 A **role** is a tenant-scoped bundle of permissions. Each permission is
 `{scope, resource_type, all_resources, resource_ids}`:
 
-- **scope** — the same scope vocabulary the OSS bearer layer uses
+- **scope**, the same scope vocabulary the OSS bearer layer uses
   (`rollouts:read`, `configs:write`, and so on).
-- **resource_type** — the kind of resource this permission governs
-  (`rollout`, `config`, ...).
-- **all_resources** — when `true`, the permission covers every resource of that
+- **resource_type**, the kind of resource this permission governs
+  (`rollout`, `config`...).
+- **all_resources**, when `true`, the permission covers every resource of that
   type; when `false`, it is restricted to the listed IDs.
-- **resource_ids** — the explicit allow-list used when `all_resources` is
+- **resource_ids**, the explicit allow-list used when `all_resources` is
   `false`.
-- **label_match** *(optional; ADR 0053)* — a `{key: value}` map that further
+- **label_match** *(optional; ADR 0053)*, a `{key: value}` map that further
   narrows the permission to resources carrying matching **cluster/environment**
   labels. All entries must match (AND) against the resource's server-observed
   `deployment.environment` / `k8s.cluster.name`; an unknown key or an empty label
   on the resource **fails closed**. Omit it (the default) for a
   label-agnostic permission. This is how you build a *prod-only* or
-  *us-west-2-only* role — see [Cluster/environment-scoped roles](#clusterenvironment-scoped-roles).
+  *us-west-2-only* role, see [Cluster/environment-scoped roles](#clusterenvironment-scoped-roles).
 
 A **binding** attaches a role to a principal. There is no user model, so a
 binding keys on the API token: `{role_id, principal_kind, principal_ref}` where
@@ -61,7 +61,7 @@ Role and binding management lives under `/api/v1/rbac/*` (enterprise-only; OSS
 returns 404). The routes are gated `rbac:read` / `rbac:write`; the bootstrap
 admin token passes.
 
-Create a role — read on all rollouts, write on two specific ones:
+Create a role, read on all rollouts, write on two specific ones:
 
 ```bash
 curl -sX POST localhost:8080/api/v1/rbac/roles \
@@ -104,7 +104,7 @@ authorizer stamps the target's server-observed `deployment.environment` /
 when every `label_match` entry matches. This works for agent and rollout actions
 and for the scoped audit views (`resource_type: "audit"`).
 
-Create a **prod-only** auditor — read audit events in `prod`, nothing else:
+Create a **prod-only** auditor, read audit events in `prod`, nothing else:
 
 ```bash
 curl -sX POST localhost:8080/api/v1/rbac/roles \
@@ -135,7 +135,7 @@ prod on-call PATCH prod agents (200) but not staging ones (403).
     On its own, `label_match` scopes what an *operator* may touch. Because
     `deployment.environment` / `k8s.cluster.name` are client-asserted
     `AgentDescription` labels, it is **not** an agent-spoofing boundary unless
-    you also bind those labels to the enrollment credential — see
+    you also bind those labels to the enrollment credential, see
     [Authenticated env/cluster binding](#authenticated-envcluster-binding).
 
 ## Authenticated env/cluster binding
@@ -143,7 +143,7 @@ prod on-call PATCH prod agents (200) but not staging ones (403).
 *(ADR 0056. Released: OSS seam `v0.89.485` + enterprise fill `v0.89.486`.)*
 
 By default an agent's `deployment.environment` / `k8s.cluster.name` come from the
-`AgentDescription` it reports — a display hint the agent controls. To make
+`AgentDescription` it reports, a display hint the agent controls. To make
 cluster/env scoping a real boundary, **pin** the authorized values onto the
 agent's OpAMP enrollment token. The pin rides the token **label** as
 whitespace-separated `env:` / `cluster:` segments (composable with the
@@ -167,7 +167,7 @@ audit.
   require the `agents:write` scope; an ordinary `auth:write` token-minter cannot
   issue a scope-pinned enrollment token.
 - **Leading run only.** Pins are honored from the leading contiguous run of
-  pin segments, matching the mint guard's leading-prefix check — a pin segment
+  pin segments, matching the mint guard's leading-prefix check, a pin segment
   after a plain name segment (e.g. `ci-runner env:prod`) is neither gated nor
   honored, so it cannot smuggle in an ungated scope.
 - **Grace-first.** Unpinned enrollment tokens are unaffected; adopt the boundary
@@ -184,7 +184,7 @@ export SQUADRON_RBAC_BOOTSTRAP_LABELS="bootstrap,break-glass"
 ```
 
 Any token whose label is in that set passes `rbac:*` / `tenants:*` before any
-role exists — letting you provision the first real roles and tenants. Revoke the
+role exists, letting you provision the first real roles and tenants. Revoke the
 bootstrap token once real scoped tokens and roles are in place; keep a
 break-glass label as the strict-identity lockout safety net.
 
@@ -194,11 +194,11 @@ break-glass label as the strict-identity lockout safety net.
     Enterprise flips the OSS default (`empty scopes = legacy full access`) to
     **deny**. Once any real role exists, a token whose *flat* scopes would have
     granted access is still **denied** unless a **bound role** grants the
-    required scope — and, where the route carries a resolvable resource, the
+    required scope, and, where the route carries a resolvable resource, the
     permission's predicate admits that resource. The enterprise authorizer does
     not consult flat token scopes.
 
-Every decision — allow or deny — is emitted as an `authz.decision` audit event,
+Every decision, allow or deny, is emitted as an `authz.decision` audit event,
 so an access review can reconstruct exactly what was permitted and why. See
 [Compliance audit](compliance-audit.md).
 

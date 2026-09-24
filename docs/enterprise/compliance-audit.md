@@ -11,9 +11,9 @@ secrets**, and every authenticated mutating request lands as a per-call
 
 Each audit row carries three chain columns, sequenced **per tenant**:
 
-- **`seq`** — a monotonically increasing sequence number within the tenant.
-- **`prev_hash`** — the `row_hash` of the previous row in that tenant's chain.
-- **`row_hash`** — a hash over this row's content **and** its `prev_hash`.
+- **`seq`**, a monotonically increasing sequence number within the tenant.
+- **`prev_hash`**, the `row_hash` of the previous row in that tenant's chain.
+- **`row_hash`**, a hash over this row's content **and** its `prev_hash`.
 
 Because each row's hash folds in the previous row's hash, the chain is a
 Merkle-style linked list: any change to a historical row breaks every `row_hash`
@@ -32,11 +32,11 @@ flowchart LR
 
 ## Verify and attest
 
-- **Self-verify** — Squadron recomputes a tenant's chain from row 0 and confirms
+- **Self-verify**, Squadron recomputes a tenant's chain from row 0 and confirms
   the recomputed head matches the stored head (`head_seq` / `head_row_hash`).
-- **Fleet verify** — the same recomputation across **all tenants**, so an
+- **Fleet verify**, the same recomputation across **all tenants**, so an
   operator can attest the entire instance in one pass.
-- **Sealed attestation** — Squadron emits an attestation JSON pinning the head
+- **Sealed attestation**, Squadron emits an attestation JSON pinning the head
   (`head_seq`, `head_row_hash`) and, when `SQUADRON_SECRETS_KEY` is set, a
   `sealed_sig` in which the Squadron key vouches for that head. That signed
   head is the SOC 2 evidence artifact.
@@ -61,7 +61,7 @@ JSON. It recomputes the hash-chain offline and confirms the recomputed head
 matches the attestation's `head_row_hash` / `head_seq`, exiting **non-zero** if
 the chain is invalid or the tip does not match. If `SQUADRON_SECRETS_KEY` is set
 and the attestation carries a `sealed_sig`, it additionally opens the seal to
-confirm the Squadron key vouches for that head — but a missing or rotated key
+confirm the Squadron key vouches for that head, but a missing or rotated key
 **never** fails the primary zero-secret result.
 
 ## Cross-tenant export and review
@@ -69,14 +69,14 @@ confirm the Squadron key vouches for that head — but a missing or rotated key
 The single-tenant CSV/JSON evidence export ships in OSS breadth.
 The enterprise wedge is the cross-tenant surface:
 
-- **Audit export** (`/api/v1/audit-export/*`) — a streamed CSV/NDJSON export
+- **Audit export** (`/api/v1/audit-export/*`), a streamed CSV/NDJSON export
   across tenants.
-- **Access review** (`/api/v1/audit-review/*`) — cross-tenant access-review
+- **Access review** (`/api/v1/audit-review/*`), cross-tenant access-review
   queries with per-actor, per-resource, and per-tenant patterns.
 
 !!! note "These need the cross-tenant scopes"
     Reaching beyond a single tenant requires the dedicated cross-tenant scopes
-    (`audit:export`, `audit:cross_tenant`) in addition to the base read — see the
+    (`audit:export`, `audit:cross_tenant`) in addition to the base read, see the
     [cross-tenant two-scope rule](multi-tenancy.md#the-cross-tenant-two-scope-rule).
 
 ## SIEM export
@@ -85,8 +85,8 @@ The Compliance Pack builds a **bounded-queue dispatcher** and installs a fan-out
 adapter on the audit service, so **every recorded audit event is forwarded to
 every configured destination**. Two poster types ship:
 
-- **Splunk HEC** — HTTP Event Collector.
-- **HMAC-signed webhook** — a generic signed webhook post.
+- **Splunk HEC**, HTTP Event Collector.
+- **HMAC-signed webhook**, a generic signed webhook post.
 
 The engine and exporter code live in the open core's `internal/siem` but are
 left un-constructed there; the Compliance Pack's wire file constructs the
@@ -97,7 +97,7 @@ destinations can be stored but are never delivered to.
 
 The Compliance Pack also installs `middleware.APIAccessAudit`, so **every
 authenticated mutating request** lands in `audit_events` as an `api.request`
-row — per-call evidence of who did what, alongside the existing state-change
+row, per-call evidence of who did what, alongside the existing state-change
 events and the RBAC `authz.decision` events. Together they give an access review
 the full transcript: the request, the authorization decision, and the resulting
 state change.

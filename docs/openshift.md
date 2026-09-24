@@ -17,7 +17,7 @@ enterprise OpenShift cluster.
 - Outbound HTTPS to `api.anthropic.com` if you want AI features
   on. Skipping AI is fine; everything else works without it.
 
-## Step 1 — Mirror the image into your cluster's registry
+## Step 1, Mirror the image into your cluster's registry
 
 Most enterprise OpenShift clusters can't pull from public
 registries directly. Mirror the Squadron image into the
@@ -35,7 +35,7 @@ docker push \
 Alternative: use an OpenShift BuildConfig to build directly from
 the GitHub repo. `oc new-build` with the source URL works.
 
-## Step 2 — Copy the example overlay
+## Step 2, Copy the example overlay
 
 ```bash
 cp -r deploy/openshift/overlays/example deploy/openshift/overlays/<your-env>
@@ -44,16 +44,16 @@ cp -r deploy/openshift/overlays/example deploy/openshift/overlays/<your-env>
 Edit `deploy/openshift/overlays/<your-env>/kustomization.yaml`
 and change three things:
 
-1. `namespace:` — your project name.
-2. `images:` — `newName` to point at your mirrored image.
+1. `namespace:`, your project name.
+2. `images:`, `newName` to point at your mirrored image.
 3. The two Route hostname patches and the `BACKEND_URL` env var
-   patch — set to a hostname under your cluster's apps domain.
+   patch, set to a hostname under your cluster's apps domain.
 
 To find your cluster's apps domain, run `oc get route` in any
 project you have access to and look at the hostname suffix.
 It'll look like `*.apps.<cluster-name>.<organization>`.
 
-## Step 3 — Apply
+## Step 3, Apply
 
 ```bash
 oc apply -k deploy/openshift/overlays/<your-env>
@@ -61,14 +61,14 @@ oc apply -k deploy/openshift/overlays/<your-env>
 
 This creates:
 
-- `Deployment/squadron` — the application pod.
-- `Service/squadron` — internal ClusterIP for in-cluster
+- `Deployment/squadron`, the application pod.
+- `Service/squadron`, internal ClusterIP for in-cluster
   collectors and the Route to find the pod.
-- `Route/squadron` — external HTTPS access to the UI and API.
-- `PersistentVolumeClaim/squadron-data` — 10 GiB of SQLite +
+- `Route/squadron`, external HTTPS access to the UI and API.
+- `PersistentVolumeClaim/squadron-data`, 10 GiB of SQLite +
   DuckDB state.
-- `ConfigMap/squadron-config` — the `squadron.yaml`.
-- `Secret/squadron-secrets` — empty by default; populate via
+- `ConfigMap/squadron-config`, the `squadron.yaml`.
+- `Secret/squadron-secrets`, empty by default; populate via
   `oc set data secret/squadron-secrets ANTHROPIC_API_KEY=...`.
 
 Watch the rollout:
@@ -87,9 +87,9 @@ oc describe pvc squadron-data
 ```
 
 If the pod CrashLoopBackoffs, that's almost always a UID/volume
-permission issue — see the troubleshooting section below.
+permission issue, see the troubleshooting section below.
 
-## Step 4 — Get the bootstrap token
+## Step 4, Get the bootstrap token
 
 On first start Squadron logs an auto-generated admin token. Pull
 it from the pod logs:
@@ -115,7 +115,7 @@ oc set data secret/squadron-secrets BOOTSTRAP_TOKEN=sq_your_token_here
 oc rollout restart deployment/squadron
 ```
 
-## Step 5 — Point collectors at Squadron
+## Step 5, Point collectors at Squadron
 
 Open the Squadron UI at your Route hostname. The Quickstart
 wizard at `/quickstart` walks through both fresh-install
@@ -176,7 +176,7 @@ poorly. Two paths:
 1. Switch to a block-storage StorageClass (the example overlay
    uses `powerstore-xfs-retain`). This is the preferred fix.
 2. If you must use NFS, set `supplementalGroups` to match your
-   NFS export's group ID — check with your storage team.
+   NFS export's group ID, check with your storage team.
 
    ```yaml
    - op: add
@@ -205,13 +205,13 @@ auto-creates the new tables on first start.
 alongside Lawrence in the same project under different Service /
 Route / PVC names. Point a few test collectors at Squadron, verify
 behavior, then update the rest of the fleet's OpAMP server URL
-config and decommission Lawrence. Don't migrate data — fresh
+config and decommission Lawrence. Don't migrate data, fresh
 fleet inventory builds up quickly from collector check-ins.
 
 ## See also
 
-- `docs/getting-started.md` — single-node Docker quickstart.
-- `docs/auth.md` — bootstrap token + scopes + token expiry.
-- `docs/scale-testing.md` — what to expect performance-wise.
-- `docs/cost-spikes.md` — v0.29 cost-spike alerting (extra config
+- `docs/getting-started.md`, single-node Docker quickstart.
+- `docs/auth.md`, bootstrap token + scopes + token expiry.
+- `docs/scale-testing.md`, what to expect performance-wise.
+- `docs/cost-spikes.md`, v0.29 cost-spike alerting (extra config
   needed in your `squadron.yaml`).

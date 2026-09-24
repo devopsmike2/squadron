@@ -1,4 +1,4 @@
-# Consumer lag detection slice 2 — Queue tier per-axis depth (post-widening)
+# Consumer lag detection slice 2, Queue tier per-axis depth (post-widening)
 
 **Status:** SHIPPED at v0.89.167 (this doc).
 **Implementation chunks queued:** v0.89.168 through v0.89.171.
@@ -24,7 +24,7 @@ established the playbook:
 - Ship the slice across 4 clouds + cross-cloud closeout in
   a 5-tag arc.
 
-Consumer lag is slice 2 — the second per-axis depth axis.
+Consumer lag is slice 2, the second per-axis depth axis.
 
 ## 2. Problem statement
 
@@ -55,7 +55,7 @@ Slice 2 ships TWO detection rules, both substrate-dependent.
 
 A queue with a non-zero backlog AND no consumer activity in
 the last N minutes (the substrate-specific quiet window) is
-in a stalled-consumer state. The combination is the signal —
+in a stalled-consumer state. The combination is the signal,
 backlog alone is normal (every queue carries some); silence
 alone is normal (idle queues exist). Backlog + silence is the
 firing condition.
@@ -65,8 +65,8 @@ Per-cloud field mapping for the backlog axis:
 | Cloud | Surface | Backlog field | Consumer-silence field |
 |-------|---------|----------------|------------------------|
 | AWS   | SQS queue | ApproximateNumberOfMessages (CloudWatch metric) | ApproximateAgeOfOldestMessage |
-| GCP   | Cloud Tasks queue | n/a — §3.1 honest framing (Cloud Tasks API surfaces task count via list pagination only, not as a directly-queryable metric) | n/a |
-| Azure | Service Bus queue | activeMessageCount on the per-queue resource | n/a — requires queue walk (§3.2 honest framing inherited from DLQ slice 1) |
+| GCP   | Cloud Tasks queue | n/a, §3.1 honest framing (Cloud Tasks API surfaces task count via list pagination only, not as a directly-queryable metric) | n/a |
+| Azure | Service Bus queue | activeMessageCount on the per-queue resource | n/a, requires queue walk (§3.2 honest framing inherited from DLQ slice 1) |
 | OCI   | Queue Service queue | runtimeMetadata.visibleMessages | runtimeMetadata.timeStateLastChanged |
 
 ### 3.2 Throughput inversion rule
@@ -108,7 +108,7 @@ gap.
 
 The future Azure Service Bus per-queue walk slice closes
 BOTH the DLQ slice 1 chunk 3 deferrals AND the slice 2
-chunk 3 deferrals in one go — a single API extension
+chunk 3 deferrals in one go, a single API extension
 unblocks two per-axis detection rules.
 
 ## 4. Storage schema
@@ -117,17 +117,17 @@ NO migration. The existing `event_source_instance` table
 from v0.89.100 has the right shape. Slice 2 records the
 per-queue lag axis as informational Detail bag entries:
 
-- `lag_backlog_depth` (int) — the per-cloud backlog field
+- `lag_backlog_depth` (int), the per-cloud backlog field
   value when readable; -1 sentinel when the field is absent
   or honest-framing applies.
-- `lag_backlog_depth_high` (bool) — true when
+- `lag_backlog_depth_high` (bool), true when
   `lag_backlog_depth` exceeds the heuristic threshold
   `BacklogDepthHighThreshold = 1000` (same per-cloud shared
   semantics as the DLQ slice 1 band).
-- `lag_consumer_silence_seconds` (int) — seconds since the
+- `lag_consumer_silence_seconds` (int), seconds since the
   last consumer activity heartbeat (substrate-specific
   surrogate); -1 when not readable from admin scan.
-- `lag_consumer_silence_high` (bool) — true when
+- `lag_consumer_silence_high` (bool), true when
   `lag_consumer_silence_seconds` exceeds
   `ConsumerSilenceHighThreshold = 300` (5 minutes).
 
@@ -141,8 +141,8 @@ Per chunk:
   `approximateNumberOfMessages` +
   `approximateAgeOfOldestMessage` to the GetQueueAttributes
   attribute list. Backlog axis fires when count > 1000 AND
-  oldest message age > 300 seconds. NO new IAM permission
-  — both attributes are part of the existing
+  oldest message age > 300 seconds. NO new IAM permission,
+both attributes are part of the existing
   `sqs:GetQueueAttributes` call already permitted by the
   slice 4 IAM template.
 - GCP Cloud Tasks (chunk 2, v0.89.169): NO new API calls.
@@ -166,7 +166,7 @@ Per chunk:
 
 NO new endpoint calls (the AWS chunk adds two attribute
 names to an existing GetQueueAttributes parameter list which
-is NOT a new endpoint call — it's a wider response from
+is NOT a new endpoint call, it's a wider response from
 the same call), NO new pagination, NO IAM extension.
 
 ## 6. API surface
@@ -200,7 +200,7 @@ queues-backlog-monitor-add
 queues-consumer-silence-investigate
 ```
 
-Webhook routing extends THE EXISTING per-cloud prefixes —
+Webhook routing extends THE EXISTING per-cloud prefixes,
 NO new prefixes needed.
 
 Reasoning template for `sqs-backlog-monitor-add`:
@@ -312,17 +312,17 @@ pin.
    fields**.
 10. **Webhook routes all 6 kinds (2 AWS + 1 GCP + 1 Azure +
     2 OCI) via the existing per-cloud prefix switch**.
-11. **Cold-start parity preserved** — proposer prompts
+11. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.166 when no lag rows trigger
     recommendations.
 
 ## 12. Cross-references
 
-- [DLQ configuration analysis slice 1](./dlq-configuration-analysis-slice1.md) —
+- [DLQ configuration analysis slice 1](./dlq-configuration-analysis-slice1.md),
   the predecessor slice that established the per-axis depth
   playbook + the two honest-framing patterns.
-- [Event source tier slice 1 design doc](./event-source-tier-slice1.md) —
+- [Event source tier slice 1 design doc](./event-source-tier-slice1.md),
   the slice that introduced the EventSourceInstanceSnapshot
   Detail bag shape this slice extends.
-- [Event source tier — operator guide](../event-source-tier-operator-guide.md) —
+- [Event source tier, operator guide](../event-source-tier-operator-guide.md),
   the runbook this slice extends with the lag axis close.

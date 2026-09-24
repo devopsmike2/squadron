@@ -1,4 +1,4 @@
-# Event source tier slice 4 — AWS SQS (third AWS surface)
+# Event source tier slice 4, AWS SQS (third AWS surface)
 
 **Status:** design doc, locked for slice 4 implementation.
 Continues the widening pass started in slice 3 by adding AWS
@@ -54,24 +54,24 @@ surface.
 
 ### What slice 4 does NOT address
 
-- **Non-AWS event source widening** — slices 5-7 will add
+- **Non-AWS event source widening**, slices 5-7 will add
   GCP Cloud Tasks, Azure Event Grid + Event Hubs, OCI
   Notification Service.
-- **SNS-to-SQS subscription fan-out trace correlation** —
+- **SNS-to-SQS subscription fan-out trace correlation**,
   per-subscription propagation analysis remains slice 8+
   candidate.
-- **SQS consumer-side analysis** — Lambda event source
+- **SQS consumer-side analysis**, Lambda event source
   mappings already covered in serverless tier; deeper
   consumer-side correlation is slice 8+.
 
 ## 2. Non-goals (slice 4)
 
-- **AWS SES, EventBridge Scheduler, AppFlow** — other AWS
+- **AWS SES, EventBridge Scheduler, AppFlow**, other AWS
   event-adjacent surfaces. Not in slice 4; deferred to
   later slices when prioritized.
 - **GCP Cloud Tasks / Azure Event Grid + Event Hubs / OCI
-  Notification Service** — slices 5-7.
-- **SNS-to-SQS subscription configuration inspection** —
+  Notification Service**, slices 5-7.
+- **SNS-to-SQS subscription configuration inspection**,
   whether the SNS subscription is configured to wrap message
   attributes. Slice 8+.
 - **SQS message body inspection.** Squadron reads queue
@@ -84,7 +84,7 @@ surface.
   in slice 4.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — AWS SQS
+## 3. Detection surface, AWS SQS
 
 API: `sqs:ListQueues`, `sqs:GetQueueAttributes`. Required IAM
 extension to the existing AWS scanner policy.
@@ -159,7 +159,7 @@ The SQS API:
   QueueArn, FifoQueue, ContentBasedDeduplication, etc.
 - The AWS SDK Go v2 package `github.com/aws/aws-sdk-go-v2/service/sqs`
   exposes both. Already in go.mod from previous discovery
-  work — no new dependency.
+  work, no new dependency.
 
 ### DLQ resolution
 
@@ -204,7 +204,7 @@ sqs-deadletter-queue-attach
 ```
 
 Both reuse the existing AWS event source webhook prefix
-convention. Specifically, the `sqs-` prefix is NEW — webhook
+convention. Specifically, the `sqs-` prefix is NEW, webhook
 routing extends:
 
 ```
@@ -221,7 +221,7 @@ Reasoning template for `sqs-redrive-policy-enable`:
 > the message gets put back on the queue and retried
 > indefinitely. Without a redrive policy + dead-letter
 > queue, eventually the message expires from the queue's
-> retention window and vanishes silently — the
+> retention window and vanishes silently, the
 > single most common AWS messaging production failure.
 >
 > This Terraform PR configures a dead-letter queue + redrive
@@ -234,7 +234,7 @@ Reasoning template for `sqs-deadletter-queue-attach`:
 > "This SQS queue has a RedrivePolicy set with
 > deadLetterTargetArn pointing at a queue ARN that Squadron
 > could NOT resolve in the same account+region. The DLQ may
-> be in a different account/region (cross-account DLQ —
+> be in a different account/region (cross-account DLQ,
 > verify the source queue's IAM policy permits send) OR the
 > DLQ doesn't exist (the policy is dangling).
 >
@@ -262,8 +262,8 @@ resource "aws_sqs_queue" "<name>" {
 }
 ```
 
-There's NO Terraform pattern for `sqs-deadletter-queue-attach`
-— it's an audit-only recommendation. The runbook documents
+There's NO Terraform pattern for `sqs-deadletter-queue-attach`,
+it's an audit-only recommendation. The runbook documents
 this.
 
 ## 9. Slice 4 contract
@@ -307,19 +307,19 @@ this.
   runbook update + README index.** ~600-800 lines.
   **v0.89.142.**
 
-Total: 2 release tags. Same pattern as slice 3 — small
+Total: 2 release tags. Same pattern as slice 3, small
 arcs that reuse the slice 1 + slice 3 scaffolding.
 
 ## 11. Acceptance tests
 
-1. **AWS ScanSQSQueues returns queues** — paginated list
+1. **AWS ScanSQSQueues returns queues**, paginated list
    response is walked.
 2. **Queue with RedrivePolicy + reachable DLQ → both axes
    true**.
 3. **Queue with NO RedrivePolicy → both axes false**.
 4. **Queue with RedrivePolicy but unresolvable DLQ ARN →
    has_trace_axis = true (policy exists) BUT
-   has_log_axis = false (DLQ unreachable)** — the audit
+   has_log_axis = false (DLQ unreachable)**, the audit
    path.
 5. **Queue with KmsMasterKeyId → snapshot Detail records
    the encryption flag**.
@@ -339,7 +339,7 @@ arcs that reuse the slice 1 + slice 3 scaffolding.
 13. **Webhook routes sqs-deadletter-queue-attach to aws**.
 14. **Discovery summary AWS event_source_count surfaces
     non-zero when queues exist**.
-15. **Cold-start parity preserved** — proposer prompts
+15. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.139 when no SQS rows trigger
     recommendations.
 
@@ -358,7 +358,7 @@ For a fleet of 1000 queues in one region:
 - ~33 seconds added to scan duration
 
 The two-pass DLQ resolution walk adds another N=1000 string
-matches in-memory — negligible.
+matches in-memory, negligible.
 
 **Cost surface.** SQS API queries are free. No new
 operator-facing cost decisions per the no-money brief.
@@ -385,16 +385,16 @@ stays at zero.
 
 ## 13. Slice 5+ candidates
 
-- **GCP Cloud Tasks** — second GCP surface. Slice 5.
-- **Azure Event Grid** — second Azure surface. Slice 6.
-- **Azure Event Hubs** — third Azure surface. Slice 6 or 7.
-- **OCI Notification Service** — second OCI surface. Slice 7.
-- **SNS-to-SQS subscription fan-out trace correlation** —
+- **GCP Cloud Tasks**, second GCP surface. Slice 5.
+- **Azure Event Grid**, second Azure surface. Slice 6.
+- **Azure Event Hubs**, third Azure surface. Slice 6 or 7.
+- **OCI Notification Service**, second OCI surface. Slice 7.
+- **SNS-to-SQS subscription fan-out trace correlation**,
   per-subscription propagation detection.
-- **SQS consumer-side analysis** — Lambda event source
+- **SQS consumer-side analysis**, Lambda event source
   mappings already covered in serverless; cross-tier
   correlation is slice 8+.
-- **Per-queue depth anomaly detection** — slice 5+ may add
+- **Per-queue depth anomaly detection**, slice 5+ may add
   message-in / message-out rate baselining using the
   substrate's MetricQuerier (the third diagnostic
   dimension), turning SQS depth into a metric-correlated
@@ -408,10 +408,10 @@ Slice 4 continues the widening pass on the event source
 tier. After slice 4:
 
 > "Squadron covers EIGHT event source surfaces across four
-> clouds — AWS EventBridge + SNS + SQS, GCP Pub/Sub, Azure
+> clouds, AWS EventBridge + SNS + SQS, GCP Pub/Sub, Azure
 > Service Bus, OCI Streaming."
 
-Wait — that's only six. The widening pass added one
+Wait, that's only six. The widening pass added one
 surface to AWS in slice 3 and another in slice 4; the other
 three clouds still have one surface each. The honest framing
 remains: AWS now has the most complete event source
@@ -430,15 +430,15 @@ After slice 4, the canonical pub/sub failure chain is fully
 visible in Squadron:
 
 1. **SNS topic** without delivery logging (slice 3
-   `sns-delivery-logging-enable`) — operator can't see
+   `sns-delivery-logging-enable`), operator can't see
    per-message fan-out success/failure
 2. **SQS queue** without redrive policy (slice 4
-   `sqs-redrive-policy-enable`) — failed messages vanish
+   `sqs-redrive-policy-enable`), failed messages vanish
    silently
 3. **Lambda consumer** without trace primitive (serverless
-   tier) — even if traces flow, the consumer doesn't emit
+   tier), even if traces flow, the consumer doesn't emit
 4. **Lambda cold-start regression / error rate spike**
-   (substrate's three diagnostics) — workload-health view
+   (substrate's three diagnostics), workload-health view
    shows where it broke
 
 Four layers. One control plane. Each layer gets its own

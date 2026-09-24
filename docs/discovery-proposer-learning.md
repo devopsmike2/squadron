@@ -1,4 +1,4 @@
-# Discovery proposer feedback loop — operator runbook
+# Discovery proposer feedback loop, operator runbook
 
 This is the operator-facing runbook for the v0.89.28 implementation
 of [#643 slice 1](./proposals/643-discovery-proposer-verdict-learning.md):
@@ -10,7 +10,7 @@ to read the audit signal, and the worked example end-to-end.
 If you're not yet running v0.89.23's webhook listener, start there
 first: [webhook-listener.md](./webhook-listener.md). This runbook
 assumes the webhook is live and recording
-`recommendation.pr_merged` events — that's the signal this loop
+`recommendation.pr_merged` events, that's the signal this loop
 reads.
 
 For a first test against a sandbox repo with one accepted PR, the
@@ -94,7 +94,7 @@ limitations.
 - **No per-recommendation suppression.** v0.89.26 shipped this
   for cost-spike rollouts (`Rollout.ExcludeFromLearning`). The
   discovery analog would need to store recommendations
-  themselves, which slice 1 does not do — recommendations are
+  themselves, which slice 1 does not do, recommendations are
   computed on-demand from the scan + proposer call. Slice 2
   candidate.
 - **No wizard UI for the per-connection flag.** Slice 1 ships
@@ -131,7 +131,7 @@ limitations.
   segment shape (`squadron/rec/<kind>/<account>/<region>/<id>`)
   and DO match.
 
-## Step 1 — Decide the per-connection policy
+## Step 1, Decide the per-connection policy
 
 The flag is per-connection, not per-deployment. Default to
 **enabled** for connections where:
@@ -139,7 +139,7 @@ The flag is per-connection, not per-deployment. Default to
 - The operator team that approves Squadron PRs is the same
   team that pulls insight from the next scan.
 - The PRs Squadron opens are reviewed substantively (not
-  rubber-stamped) — accepted PRs reflect deliberate operator
+  rubber-stamped), accepted PRs reflect deliberate operator
   judgment, which is the signal the loop reads.
 
 Default to **disabled** for connections where:
@@ -152,10 +152,10 @@ Default to **disabled** for connections where:
   acceptances into another team's scan would be noise.
 
 The flag is reversible. Cold-start parity holds when the flag
-is off — flipping it later has no historical effect, only
+is off, flipping it later has no historical effect, only
 forward effect on the next scan.
 
-## Step 2 — Flip the per-connection flag
+## Step 2, Flip the per-connection flag
 
 Slice 1 ships the flag via API only. The wizard UI step is
 slice 2.
@@ -193,7 +193,7 @@ curl -H "Authorization: Bearer $SQUADRON_API_TOKEN" \
 
 Expected output: `true` or `false`.
 
-## Step 3 — Understand the selection policy
+## Step 3, Understand the selection policy
 
 When the policy is enabled and the connection has scoped PR
 merges, `Bridge.assembleAcceptedRecommendations` picks examples
@@ -213,7 +213,7 @@ Selection mechanics:
   `connection_id`, `account_id`, and `region` (via SQLite's
   `json_extract`), ordered by timestamp DESC.
 - Rows with empty `account_id` or `region` payload fields
-  (legacy 4-segment branches) do not match the scope filter —
+  (legacy 4-segment branches) do not match the scope filter,
   the loop ignores them.
 - The bridge returns up to 4 examples newest-first. No per-kind
   cap (unlike the cost-spike side, which splits N=4 across
@@ -226,7 +226,7 @@ sees the 4 newest. If it has 1, the model sees just the 1. If
 it has 0 (cold start), the prompt is byte-for-byte identical
 to v0.85.
 
-## Step 4 — What the prompt looks like
+## Step 4, What the prompt looks like
 
 The user message grows a block immediately before the final
 "Return your recommendations" instruction. Verbatim:
@@ -249,7 +249,7 @@ Recently accepted recommendations for this scope (operator merged a Squadron-ope
 Use these as preference signal. Do NOT re-propose recommendations
 of the same kind against the same resource that was already
 accepted within the window above. The accepted snapshot may have
-drifted — if a resource clearly NEEDS a fresh recommendation
+drifted, if a resource clearly NEEDS a fresh recommendation
 (the previous PR was reverted, the resource's instrumented state
 is missing again), propose it with a note in the reasoning
 explaining the divergence.
@@ -260,22 +260,22 @@ A few subtleties worth knowing:
 - **The "do not re-propose" instruction line is load-bearing.**
   Without it, the model sometimes interprets "accepted" as "do
   nothing on this scope ever again," which is wrong. The
-  resource can drift — the operator's CI can roll back the
+  resource can drift, the operator's CI can roll back the
   change, the resource can be re-created, the recommendation
   can be valid again. The instruction tells the model: propose
   if you have fresh evidence, but cite the divergence.
 - **Empty list → entire block omitted.** Cold-start parity
-  holds — no block header, no examples, no instruction. The
+  holds, no block header, no examples, no instruction. The
   prompt matches v0.85 exactly. The
   `TestDiscoveryProposerLearning_ColdStartParity` acceptance
   test pins this.
 - **Inline config snippets from past PRs are NEVER shipped to
   the model.** Slice 1's example shape is PR URL, branch,
-  merged_by, kind — no diff contents. Configs are where
+  merged_by, kind, no diff contents. Configs are where
   sensitive material lives; we exclude them at the bridge
   layer the same way the cost-spike side does.
 
-## Step 5 — Reading the audit timeline
+## Step 5, Reading the audit timeline
 
 The new `discovery_proposal.created` event fires every time
 the discovery proposer is invoked through
@@ -326,16 +326,16 @@ The Timeline page humanizer renders this event:
 - Cold start (`verdict_examples_used` empty): **"Discovery
   recommendations generated"**.
 - Cited 1+ PRs: **"Discovery recommendations generated
-  (informed by N prior accepted PRs)"** — exact wording per
+  (informed by N prior accepted PRs)"**, exact wording per
   the `handleIaCAuditEvent` humanizer at
   [`internal/api/handlers/timeline.go`](../internal/api/handlers/timeline.go).
 
 If you've written external log parsers against pre-v0.89.28
-audit shapes, no change is needed — `discovery_proposal.created`
+audit shapes, no change is needed, `discovery_proposal.created`
 is a new event type. Your existing rules for
 `recommendation.pr_*` events are unchanged.
 
-## Step 6 — Backward compatibility on branch names
+## Step 6, Backward compatibility on branch names
 
 The branch-name encoding extension is the trickiest piece of
 slice 1 to get right. Squadron opens PRs from branches under
@@ -376,24 +376,24 @@ recommendation through the Recommendations tab on the next
 scan, which generates a fresh branch under the new shape, and
 merge that one. The audit lineage will then carry the scope.
 
-## Step 7 — Worked example
+## Step 7, Worked example
 
 A platform team running Squadron against AWS account
 `123456789012`, region `us-east-1`, connection `conn-acme-infra`
 pointed at `github.com/acme/infra`.
 
-1. **Day 0 — Initial scan.** Squadron scans account
+1. **Day 0, Initial scan.** Squadron scans account
    `123456789012/us-east-1` and surfaces 15 uninstrumented
    resources across six categories. The proposer batches by
    category. The first PR Squadron opens is for the rds-pi-em
    recommendation, against the mysql instance.
-2. **Day 0 — Branch + PR.** Squadron creates branch
+2. **Day 0, Branch + PR.** Squadron creates branch
    `squadron/rec/rds-pi-em/123456789012/us-east-1/abc1234`
    and opens PR #142 against `main`. The proposer's "Why"
    section is in the PR body.
-3. **Day 1 — Operator merges.** The reviewer approves, the CI
+3. **Day 1, Operator merges.** The reviewer approves, the CI
    passes, the operator clicks Squash and Merge.
-4. **Day 1 — Webhook fires.** GitHub posts the
+4. **Day 1, Webhook fires.** GitHub posts the
    `pull_request closed + merged=true` event to
    `/api/v1/webhooks/github`. The receiver verifies the
    signature against `SQUADRON_GITHUB_WEBHOOK_SECRET`. The
@@ -401,21 +401,21 @@ pointed at `github.com/acme/infra`.
    `region=us-east-1`. The audit event
    `recommendation.pr_merged` lands with the full scope
    payload.
-5. **Day 7 — Next scan.** A new scan kicks off against the
+5. **Day 7, Next scan.** A new scan kicks off against the
    same account + region. The recommendations handler calls
    `assembleAcceptedRecommendations(conn-acme-infra,
    123456789012, us-east-1)`. The query returns the 1 example
    from Day 1.
-6. **Day 7 — Prompt enriched.** The user message gains the
+6. **Day 7, Prompt enriched.** The user message gains the
    Recently accepted recommendations block listing the rds-pi-
    em PR. The instruction tells the model not to re-propose
    the same kind against the same resource.
-7. **Day 7 — Proposer output.** The proposer returns
+7. **Day 7, Proposer output.** The proposer returns
    recommendations for the OTHER 5 categories. The rds-pi-em
    slot is absent (the model honored the instruction). The
    handler emits `discovery_proposal.created` with
    `verdict_examples_used = ["https://github.com/acme/infra/pull/142"]`.
-8. **Day 7 — Timeline.** The Timeline page renders the new
+8. **Day 7, Timeline.** The Timeline page renders the new
    event as **"Discovery recommendations generated (informed
    by 1 prior accepted PR)"**.
 
@@ -427,12 +427,12 @@ fire-and-forget once the per-connection flag is on.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| New scan still proposes a recommendation operator merged | The merged PR is on a pre-v0.89.28 branch shape (4 segments) | Confirm with `git branch -a` on the IaC repo. Re-open the recommendation from the Recommendations tab — the new PR uses the 6-segment shape and will contribute |
+| New scan still proposes a recommendation operator merged | The merged PR is on a pre-v0.89.28 branch shape (4 segments) | Confirm with `git branch -a` on the IaC repo. Re-open the recommendation from the Recommendations tab, the new PR uses the 6-segment shape and will contribute |
 | Audit timeline shows raw `discovery_proposal.created` | Squadron version mismatch (humanizer was added in v0.89.28) | Upgrade Squadron; existing audit events will re-render with the new humanizer |
 | `verdict_examples_used: []` on every event | Per-connection flag is off, OR no PRs merged in the 30-day window, OR all merged PRs are legacy 4-segment branches | Check the flag via `GET /api/v1/iac/github/connections/:id`; check `recommendation.pr_merged` payloads for `account_id` + `region` populated |
-| Examples surfacing from wrong scope (cross-account leak) | This is a bug in slice 1; the bridge filter must enforce same connection × account × region. File an issue with the audit event payload that leaked | N/A — slice 1 design forbids this |
-| Webhook delivery shows 200 ignored but examples don't surface | The merge happened from a non-Squadron repo (no `iac_connection` matched) — the audit event records the merge with empty `connection_id`, so the scope filter never matches | Expected behavior; only Squadron-managed connections feed the loop |
-| `connection_id` empty in audit payload despite Squadron-opened PR | Slice 1's handler-emit adapter walks all connections rather than keying on one — see #643 spec §11 Q4. PR URL in `verdict_examples_used` still allows SIEM correlation | Use PR URL for correlation; slice 2 will populate `connection_id` directly |
+| Examples surfacing from wrong scope (cross-account leak) | This is a bug in slice 1; the bridge filter must enforce same connection × account × region. File an issue with the audit event payload that leaked | N/A, slice 1 design forbids this |
+| Webhook delivery shows 200 ignored but examples don't surface | The merge happened from a non-Squadron repo (no `iac_connection` matched), the audit event records the merge with empty `connection_id`, so the scope filter never matches | Expected behavior; only Squadron-managed connections feed the loop |
+| `connection_id` empty in audit payload despite Squadron-opened PR | Slice 1's handler-emit adapter walks all connections rather than keying on one, see #643 spec §11 Q4. PR URL in `verdict_examples_used` still allows SIEM correlation | Use PR URL for correlation; slice 2 will populate `connection_id` directly |
 
 ## Slice 2 roadmap
 
@@ -444,13 +444,13 @@ the architectural decision to share a `verdictsel` +
 surfaces while keeping storage surface-local. The items
 actually shipping in slice 2 implementation:
 
-- **Rejected-signal definition — answered.** Slice 2 promotes
+- **Rejected-signal definition, answered.** Slice 2 promotes
   two negative signals: a new
   `recommendation.pr_closed_not_merged` audit event (the
   webhook receiver already no-ops on this case; slice 2 turns
   the no-op into a proper audit emit) plus an operator-set
   exclusion via a new `iac_recommendation_verdicts` table.
-- **Per-recommendation suppression — partially answered.**
+- **Per-recommendation suppression, partially answered.**
   The new `iac_recommendation_verdicts` table is the storage
   scope 1 of #643 deferred. It holds the exclusion flag (and
   optional `resource_id` for resource-level vs kind-level
@@ -468,7 +468,7 @@ actually shipping in slice 2 implementation:
   accepted `rds-pi-em` PRs from getting a prompt that teaches
   only that one pattern.
 - **Wizard UI for the per-connection flag.** Still deferred to
-  a later slice — settings JSON works; the wizard step is
+  a later slice, settings JSON works; the wizard step is
   lower priority than the affordances above.
 - **Cross-scope learning with namespace mode.** Deferred to
   slice 3. No real operator ask yet.
@@ -479,7 +479,7 @@ actually shipping in slice 2 implementation:
   anyone; useful only for retroactive analytics.
 
 Read [#531 slice 2](./proposals/531-proposer-learning-slice2.md)
-for the locked spec — the architectural decision in §3, the
+for the locked spec, the architectural decision in §3, the
 selection policy in §6, the prompt format in §7, the 10
 acceptance tests in §12. None of slice 2 ships in v0.89.28;
 everything in this runbook describes slice 1 behavior you can
@@ -500,7 +500,7 @@ false → true transition (or `exclude_cleared` on the inverse
 restore click). The discovery proposer's next scan reads the
 exclusion via the bridge's verdict pool and drops the
 recommendation kind (or kind + resource_id, when scoped) from
-the prompt's example list — same selection-policy filter that
+the prompt's example list, same selection-policy filter that
 honors the per-rollout exclude flag on the cost-spike side.
 
 The card visually dims (opacity + grayscale + an "Excluded"
@@ -513,15 +513,15 @@ in the audit timeline via the v0.89.37 humanizer.
 Exclusions survive page refresh as of v0.89.40. The
 Recommendations tab hydrates its `excludedSet` from a new
 `GET /api/v1/discovery/aws/recommendations/excluded` endpoint on
-mount (the same scope tuple — `connection_id × account_id ×
-region` — the bridge sweeps on its proposer-side reads). The GET
+mount (the same scope tuple, `connection_id × account_id ×
+region`, the bridge sweeps on its proposer-side reads). The GET
 surfaces the persisted `iac_recommendation_verdicts` rows whose
 `exclude_from_learning` bit is set; the UI seeds the Set from
 the returned `recommendation_id` values so the Excluded badges
 appear on first paint. On error the tab degrades gracefully:
 the failure is logged to the browser console and the Set stays
 empty so the operator can still toggle. No new schema, no new
-audit events — this is purely a read surface over the chunk 4
+audit events, this is purely a read surface over the chunk 4
 storage method.
 
 Granularity (kind-level vs resource-level): v1 ships with the
@@ -535,17 +535,17 @@ slice; chunk 5 ships the simpler default to stay bounded.
 
 ## Cross-references
 
-- [Proposer learning loop (cost-spike side)](./proposer-learning-loop.md) —
+- [Proposer learning loop (cost-spike side)](./proposer-learning-loop.md),
   the sibling runbook for the cost-spike proposer feedback loop
   (#531 slice 1, shipped v0.89.17). Same shape, different
   signal source, different scope tuple.
-- [GitHub webhook listener](./webhook-listener.md) — the
+- [GitHub webhook listener](./webhook-listener.md), the
   upstream signal source. Without the webhook live, this
   loop has no input.
-- [Connect IaC repo first-time setup](./discovery-iac-first-time-setup.md) —
+- [Connect IaC repo first-time setup](./discovery-iac-first-time-setup.md),
   prerequisite for the IaC connection that owns the per-
   connection flag.
-- [#643 design doc](./proposals/643-discovery-proposer-verdict-learning.md) —
+- [#643 design doc](./proposals/643-discovery-proposer-verdict-learning.md),
   the locked slice-1 spec this runbook operationalizes.
-- [Audit log](./audit-log.md) — full catalog of event types
+- [Audit log](./audit-log.md), full catalog of event types
   including the new `discovery_proposal.created`.

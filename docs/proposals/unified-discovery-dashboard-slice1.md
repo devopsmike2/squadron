@@ -1,4 +1,4 @@
-# Unified Discovery dashboard — slice 1 design
+# Unified Discovery dashboard, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. Arc
 opens after the four cloud arcs (AWS / GCP / Azure / OCI) all
@@ -31,7 +31,7 @@ with multi-cloud fleets must click through four separate pages
 to see the full discovery picture. Each page renders its own
 Wizard / Inventory / Recommendations tabs scoped to one provider.
 The aggregate "how much of my fleet is uninstrumented across all
-clouds" question has no answer in the UI — only in the audit log
+clouds" question has no answer in the UI, only in the audit log
 via custom queries.
 
 This works for operators with one cloud, or operators who already
@@ -67,7 +67,7 @@ the default landing experience for the Discovery section.
   here's one batched action") is slice 2.
 - **Cross-provider topology view.** A graph showing how
   resources across clouds connect (e.g., an AWS Lambda calling
-  a GCP Cloud Function). Slice 2+ — needs trace data integration.
+  a GCP Cloud Function). Slice 2+, needs trace data integration.
 - **Cross-provider rollout / drift correlation.** Surface the
   proposer's verdict-learning state aggregated across providers.
   Slice 2.
@@ -76,7 +76,7 @@ the default landing experience for the Discovery section.
   pages for create / edit / delete operations.
 - **Real-time SSE updates.** Slice 1 polls the summary endpoint
   on tab focus (and on manual refresh). Real-time push is slice
-  2 — not blocking for the visual story.
+  2, not blocking for the visual story.
 - **Per-account / per-project drill-down within a provider.**
   The per-provider page already shows that. Slice 1 keeps the
   drill-down on the per-provider page.
@@ -85,7 +85,7 @@ the default landing experience for the Discovery section.
 
 Two real options for the aggregation layer:
 
-### Option A — Backend aggregation endpoint
+### Option A, Backend aggregation endpoint
 
 A new `/api/v1/discovery/summary` endpoint that queries all four
 provider stores + recent scan audit events, composes a single
@@ -96,7 +96,7 @@ load.
 test (one endpoint, one shape). Backend has more visibility into
 each store's auth model. Cache-friendly if needed in slice 2.
 
-### Option B — Frontend aggregation
+### Option B, Frontend aggregation
 
 Front-end calls four list endpoints in parallel and composes
 client-side.
@@ -301,12 +301,12 @@ GCP" / "Connect Azure" / "Connect OCI" buttons.
 2. **What about cost-spike data on the dashboard?** The
    four-cloud claim is observability-focused, but Squadron also
    does cost-spike alerting. Should the dashboard surface a "cost
-   anomalies last 7 days" card? Slice 1 says no — keep the
+   anomalies last 7 days" card? Slice 1 says no, keep the
    discovery focus pure; cost goes in the existing Cost page.
    Slice 2 candidate.
 3. **What about IaC connection summary?** The IaC GitHub
    connection is the substrate for Open PR. Slice 1 doesn't
-   surface IaC connection counts on the dashboard — that's a
+   surface IaC connection counts on the dashboard, that's a
    separate Settings concern.
 4. **Authorization scope.** The summary endpoint requires the
    same bearer auth as other discovery endpoints. Should there
@@ -370,7 +370,7 @@ locked spec.
 
 This dashboard is the **demo moment** for Squadron's four-cloud
 claim. The runbook says "scans AWS, GCP, Azure, AND Oracle Cloud
-fleets" — the dashboard MAKES that visible in one screen.
+fleets", the dashboard MAKES that visible in one screen.
 
 Until this lands, an operator clicking around the Squadron UI
 sees four separate /discovery/* pages with no aggregate view.

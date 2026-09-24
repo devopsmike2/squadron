@@ -1,17 +1,17 @@
 # SSO and SCIM
 
 The enterprise edition adds IdP **single sign-on (OIDC)** and directory
-**provisioning (SCIM 2.0)** — without changing the OSS `Authenticator` contract.
+**provisioning (SCIM 2.0)**, without changing the OSS `Authenticator` contract.
 The design choice that makes this work: OIDC login **mints a normal Squadron
 bearer**; every subsequent request flows through the unchanged
 `RequireBearer` → `Validate` path. There is no per-request ID-token validation
-and no new user schema — the subject is encoded in the token *label*
+and no new user schema, the subject is encoded in the token *label*
 (`oidc:<sub>`).
 
 ## OIDC login flow
 
 `/auth/oidc/login` and `/auth/oidc/callback` mount **pre-bearer** (on the root
-router alongside `/healthz` and `/metrics`) — the login flow is how a browser
+router alongside `/healthz` and `/metrics`), the login flow is how a browser
 obtains a bearer in the first place. In OSS these routes 404.
 
 Connections live in the enterprise SQLite `oidc_connections` table, **not in
@@ -42,7 +42,7 @@ sequenceDiagram
 
 - **Session TTL** = the ID token's `exp`, with a **12h fallback** if the IdP
   omits it. **Logout = revoke** the minted token (idempotent, audited).
-- **JIT provisioning** — a first-time subject is auto-created:
+- **JIT provisioning**, a first-time subject is auto-created:
   `Issue(label="oidc:<sub>")` → assign to the connection's tenant → bind roles.
   A label longer than 64 chars becomes `oidc:sha256:<hex>` (hashed, not
   truncated, to avoid identity collision).
@@ -50,7 +50,7 @@ sequenceDiagram
 !!! warning "Requirements before OIDC login works"
     `SQUADRON_SECRETS_KEY` must be set to a base64 32-byte key so the client
     secret can be unsealed, and the connection's `tenant_id` must reference an
-    existing tenant — [provision the tenant](multi-tenancy.md#provisioning-tenants)
+    existing tenant, [provision the tenant](multi-tenancy.md#provisioning-tenants)
     first. Under strict, a connection with **no** tenant binding fails fast.
 
 ## SCIM 2.0 directory
@@ -61,7 +61,7 @@ and authenticated by a SCIM **service token**. In OSS these routes 404.
 **Mint the SCIM service token internally, not via the public API.** The token
 must carry a reserved **`scim:`-prefixed** label, the **`scim:write`** scope, and
 be **bound to the target tenant**. Because `scim:` is a reserved label prefix,
-the public `POST /api/v1/auth/tokens` **rejects** a `scim:` label — so mint it
+the public `POST /api/v1/auth/tokens` **rejects** a `scim:` label, so mint it
 internally (the path bootstrap uses), assign it to the tenant, and hand the
 plaintext to the IdP. A SCIM connection can therefore provision **only** its own
 tenant.
@@ -83,7 +83,7 @@ Point the IdP at the SCIM base URL `https://<host>/api/v1/scim/v2` with
   group must be named exactly for the role you intend.
 
 !!! note "SCIM is the directory, not the binder"
-    SCIM records users, groups, and memberships — it does **not** write per-user
+    SCIM records users, groups, and memberships, it does **not** write per-user
     RBAC bindings. At OIDC login the callback reads the user's active
     group→role set and **materializes** those bindings under the real
     `oidc:<sub>` label. A user with no SCIM record falls back to the connection's
@@ -95,14 +95,14 @@ Point the IdP at the SCIM base URL `https://<host>/api/v1/scim/v2` with
 ## Strict identity-source mode
 
 Like strict tenant scoping, strict identity-source enforcement is **auto-on in
-the enterprise wire — no config knob**. The wire calls
+the enterprise wire, no config knob**. The wire calls
 `services.SetStrictIdentitySource(true)` after the reserved allow-set
 (`bootstrap` exact + `oidc:`/`scim:` prefixes) is populated.
 
 !!! warning "Under strict, raw operator tokens are rejected"
     `RequireBearer` rejects any bearer whose label is **not** a validated
-    identity source — i.e. not `oidc:`/`scim:`-prefixed and not the `bootstrap`
-    break-glass label — with the **generic bad-token 401** (no provenance leak).
+    identity source, i.e. not `oidc:`/`scim:`-prefixed and not the `bootstrap`
+    break-glass label, with the **generic bad-token 401** (no provenance leak).
     A raw pasted operator token no longer authenticates. Only IdP-minted
     (`oidc:<sub>`), SCIM-service (`scim:*`), and break-glass (`bootstrap`) tokens
     pass. Confirm from the startup log: `enterprise: … strict identity-source

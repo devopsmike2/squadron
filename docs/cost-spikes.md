@@ -4,8 +4,8 @@ The v0.29 cost-spike layer is Squadron's "tap on the shoulder"
 mechanism. Every minute the detector compares the current
 $/month projection against a rolling baseline. When projection
 breaks above the warn or critical threshold, Squadron opens a
-**cost spike event** with attribution — which agents and which
-attribute keys drove the jump — and surfaces it on the
+**cost spike event** with attribution, which agents and which
+attribute keys drove the jump, and surfaces it on the
 Dashboard banner + Savings page panel.
 
 It's automatic and zero-config. The existing operator-authored
@@ -21,7 +21,7 @@ Each tick:
 1. Pull the current fleet $/month projection from the v0.27
    pricing layer (same code that powers `/pricing/projection`).
 2. Push the value into a 60-sample rolling ring buffer.
-3. Compute the **baseline** — the trimmed mean of the last 59
+3. Compute the **baseline**, the trimmed mean of the last 59
    samples (excluding the just-recorded one, trimming 10% top
    and bottom).
 4. Compare:
@@ -41,7 +41,7 @@ worth waking anyone up.
 When a spike opens, the detector immediately calls
 `insights.TopAgents` and `insights.TopAttributes` for the
 dominant signal and records the top 3 of each on the event row
-as `attribution_json`. This is captured at **fire time** — even
+as `attribution_json`. This is captured at **fire time**, even
 hours later when the live insights state has moved on, the
 operator sees the picture that was true when the alarm went off.
 
@@ -51,19 +51,19 @@ fleet-wide attribute explosion.
 
 ## Lifecycle
 
-- **open** — projection is over threshold. Banner visible.
-- **warn → critical** — escalation happens in place on the same
+- **open**, projection is over threshold. Banner visible.
+- **warn → critical**, escalation happens in place on the same
   row; we don't open a new event for severity bumps on the same
   incident.
-- **acknowledged** — operator clicked "Acknowledge" in the
+- **acknowledged**, operator clicked "Acknowledge" in the
   Savings panel. Banner is suppressed for the duration; the row
   stays open in the audit trail.
-- **closed** — projection dropped back below the warn threshold,
+- **closed**, projection dropped back below the warn threshold,
   or baseline fell below `min_baseline_usd`. Sets `ended_at`.
 
 ## Configuration
 
-In `squadron.yaml` (all optional — defaults work for most
+In `squadron.yaml` (all optional, defaults work for most
 installs):
 
 ```yaml
@@ -75,7 +75,7 @@ cost_spike:
   window: 1h             # insights window
 ```
 
-Currently these are wired from `costspikes.DefaultConfig()` —
+Currently these are wired from `costspikes.DefaultConfig()`,
 the YAML knob to override is a v0.29.x follow-up.
 
 ## API
@@ -89,7 +89,7 @@ the YAML knob to override is a v0.29.x follow-up.
 ## Why a separate package from `alerts`?
 
 The existing `alerts` package is an operator-authored
-rule-evaluator — every alert rule is a Squadron QL query plus a
+rule-evaluator, every alert rule is a Squadron QL query plus a
 threshold. Cost spikes don't need operator authoring; the
 heuristic plus the pricing projection IS the rule. Mixing them
 into the same storage shape would pollute the rules list with
@@ -117,16 +117,16 @@ acknowledged → closed) that doesn't map cleanly to the
 
 ## See also
 
-- `docs/savings.md` — the pricing layer the detector consumes.
-- `docs/alerts.md` — the existing rules-based alert system.
-- `docs/recommendations.md` — what to actually do about a spike
+- `docs/savings.md`, the pricing layer the detector consumes.
+- `docs/alerts.md`, the existing rules-based alert system.
+- `docs/recommendations.md`, what to actually do about a spike
   once you see one.
 
 ## Diagram: cost-spike detection
 
 Every minute the detector projects the fleet's $/month spend, compares it
-against the rolling baseline, and — when the projection breaks past the warn or
-critical threshold — opens an attributed event that surfaces on the Dashboard
+against the rolling baseline, and, when the projection breaks past the warn or
+critical threshold, opens an attributed event that surfaces on the Dashboard
 banner.
 
 ```mermaid
@@ -135,7 +135,7 @@ flowchart TD
     P --> B[Push into 60-sample<br/>rolling ring buffer]
     B --> BASE[Baseline = trimmed mean<br/>of last 59 samples]
     BASE --> MIN{Baseline &ge;<br/>min_baseline_usd?}
-    MIN -- no --> SKIP[Skip — too small to matter]
+    MIN -- no --> SKIP[Skip, too small to matter]
     MIN -- yes --> CMP{Projection vs baseline}
     CMP -- ">= +50% critical" --> CRIT[Critical spike]
     CMP -- ">= +25% warn" --> WARN[Warn spike]

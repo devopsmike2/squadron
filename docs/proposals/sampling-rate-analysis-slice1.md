@@ -1,11 +1,11 @@
-# Sampling rate analysis slice 1 — substrate's second diagnostic
+# Sampling rate analysis slice 1, substrate's second diagnostic
 
 **Status:** design doc, locked for slice 1 implementation.
 Closes the explicit slice 1 deferral from span quality
-(§13: "Sampling rate analysis — compares observed span
+(§13: "Sampling rate analysis, compares observed span
 throughput against expected throughput from cloud-native
 metrics"). Second diagnostic running on the cold-start
-latency substrate (v0.89.113 + v0.89.118) — proves the
+latency substrate (v0.89.113 + v0.89.118), proves the
 substrate compounds.
 
 **See also:**
@@ -32,7 +32,7 @@ Squadron sees are REPRESENTATIVE of the resource's actual
 traffic. When the SDK's sampler drops 95% of invocations,
 the spans Squadron observes are only 5% of the truth.
 Squadron sees no orphans, no malformed traceparents, no
-placeholder values — but the operator's slow-path P99
+placeholder values, but the operator's slow-path P99
 queries that hit timeout are exactly the 95% that got
 dropped.
 
@@ -41,15 +41,15 @@ canonical "why isn't this regression visible in our
 dashboards?" surface:
 
 - A Lambda function with X-Ray ratio sampling at 0.05
-  (5%) — the team has been running with this since launch;
+  (5%), the team has been running with this since launch;
   nobody remembers why.
 - A Cloud Run service with an OTel SDK configured for
-  `TRACEIDRATIO_BASED` at 0.01 — somebody copy-pasted the
+  `TRACEIDRATIO_BASED` at 0.01, somebody copy-pasted the
   default. The slow-tail invocations that matter most are
   in the 99% that gets dropped.
 - An Azure Function with no explicit sampling, relying on
   Application Insights' adaptive sampling which throttles
-  to 5 traces/sec when the function is busy — exactly when
+  to 5 traces/sec when the function is busy, exactly when
   observability matters.
 
 Slice 1 adds a single new detection at the per-resource
@@ -66,7 +66,7 @@ Where:
   received from the resource in the last 24h
 - `expected_invocation_count` = invocations from the
   cloud-native metric over the same window
-- `SAMPLING_RATIO_FLOOR` = 0.05 (5% — below this is
+- `SAMPLING_RATIO_FLOOR` = 0.05 (5%, below this is
   unusually aggressive)
 - `MIN_INVOCATION_COUNT` = 1000 (statistical noise floor)
 
@@ -139,7 +139,7 @@ OTel SDK defaults vary by SDK and framework. Common
 defaults Squadron should NOT flag as aggressive:
 - 100% (always-on): obviously fine.
 - 10% (`TRACEIDRATIO_BASED` 0.1): common production default.
-- 5% sustained: at the edge — the floor sits right at this
+- 5% sustained: at the edge, the floor sits right at this
   value, not below. The detection fires at 4.9%, not 5%.
 
 Sub-5% ratios sustained over a 24h window are unusual
@@ -149,9 +149,9 @@ always a regression or misconfig.
 ### 3.2 Why 1000 invocations minimum?
 
 A function invoked 50 times in 24h with 2 spans observed
-gives a 4% ratio — looks aggressive but is statistical
+gives a 4% ratio, looks aggressive but is statistical
 noise. 1000 invocations corresponds to roughly 40/hour
-sustained — a meaningful traffic level where percentages
+sustained, a meaningful traffic level where percentages
 are reliable.
 
 ### 3.3 Why a single ratio threshold?
@@ -181,7 +181,7 @@ window). IAM unchanged from cold-start slice 1
 ### 4.2 GCP Cloud Run
 
 Metric: `run.googleapis.com/request_count` filtered by
-`response_code_class != "5xx"` (exclude server errors —
+`response_code_class != "5xx"` (exclude server errors,
 the upstream sampling decision is what matters, not
 ingress success). IAM unchanged from cold-start slice 2.
 
@@ -285,7 +285,7 @@ Per-Serverless-row Sampling Ratio column: each cloud's
 Serverless table gains a "Sampling rate (24h)" column
 between "Cold-start P95 (24h)" and "Last seen":
 
-- "—" when no observation (function too new, scan didn't run,
+- ", " when no observation (function too new, scan didn't run,
   or invocation_count below minimum)
 - ratio value as percentage (e.g. "4.1%") in slate when
   above floor
@@ -301,7 +301,7 @@ span-quality-sampling-too-aggressive
 ```
 
 Reuses the existing `span-quality-` webhook prefix from
-v0.89.86 — NO new webhook routing.
+v0.89.86, NO new webhook routing.
 
 Reasoning template:
 
@@ -321,7 +321,7 @@ Reasoning template:
 >    OPERATOR-EXPERIENCED rate, not the configured rate.
 > 3. **Tail-sampling collector.** A tail-sampling collector
 >    (in front of Squadron) selectively keeps spans. If
->    that's intentional, decline the recommendation — the
+>    that's intentional, decline the recommendation, the
 >    exclusion table records.
 >
 > This Terraform PR raises the sampler ratio. If your case
@@ -378,7 +378,7 @@ draft uses 0.5 as a starting point.
 
 ## 10. Implementation chunks
 
-- **Chunk 1: Foundation — 24h Quality counter +
+- **Chunk 1: Foundation, 24h Quality counter +
   per-cloud invocation metric support.** ~900-1100 lines.
   Extends `QualityCounters` + per-cloud `MetricQuerier`
   metric routing. Per-cloud rate limit accounting stays.
@@ -392,7 +392,7 @@ draft uses 0.5 as a starting point.
 - **Chunk 4: Operator runbook + README index.**
   ~300-400 lines. **v0.89.125.**
 
-Total: 4 release tags. No parallel scanner fan-out — the
+Total: 4 release tags. No parallel scanner fan-out, the
 substrate already exists per-cloud; slice 1 extends each
 cloud's MetricQuerier with one new metric name (additive,
 small).
@@ -409,20 +409,20 @@ small).
    AND cloudfunctions.googleapis.com/function/execution_count.**
 6. **Azure QueryAggregate supports FunctionInvocations.**
 7. **OCI QueryAggregate supports function_invocation_count.**
-8. **Detection — ratio 4.9% at 5000 invocations fires
+8. **Detection, ratio 4.9% at 5000 invocations fires
    recommendation** (below 5% floor AND above 1000 min).
-9. **Detection — ratio 5.0% at 5000 invocations does NOT
+9. **Detection, ratio 5.0% at 5000 invocations does NOT
    fire** (at floor, not below).
-10. **Detection — ratio 2.0% at 500 invocations does NOT
+10. **Detection, ratio 2.0% at 500 invocations does NOT
     fire** (below minimum invocation count).
-11. **Detection — ratio 4% with NULL traceindex count
+11. **Detection, ratio 4% with NULL traceindex count
     does NOT fire** (missing data).
 12. **Per-resource sampling endpoint shape per §6.1.**
 13. **Inventory Lambda row includes sampling_ratio field**.
 14. **UI SPAN QUALITY panel renders 6th column when
     non-zero**.
 15. **UI SPAN QUALITY panel hides when all 6 are zero**.
-16. **Cold-start parity preserved** — all 4 providers
+16. **Cold-start parity preserved**, all 4 providers
     cold-start prompts byte-identical to v0.89.120 when no
     sampling rows trigger recommendations.
 
@@ -462,7 +462,7 @@ the exclusion path; slice 2 may add a per-resource
 "tail-sampling intentional" flag.
 
 **False positives on adaptive sampling.** Same as
-tail-sampling — the observed rate IS the operator-facing
+tail-sampling, the observed rate IS the operator-facing
 rate, but the operator may have intended adaptive
 throttling. Decline path handles.
 
@@ -496,7 +496,7 @@ stays at zero.
 
 This is the second diagnostic running on the cold-start
 latency substrate. The architectural bet that the
-substrate compounds is now PROVEN — building the
+substrate compounds is now PROVEN, building the
 `MetricQuerier` interface as a generic per-cloud metric
 query primitive was the right call. Slice 1 of sampling
 rate adds:
@@ -511,7 +511,7 @@ That's roughly 1/4 the implementation cost of cold-start
 slice 1, because slice 1 paid the substrate cost.
 
 After this arc, Squadron's universal claim doesn't grow a
-new verb — it makes the existing MEASURES verb more
+new verb, it makes the existing MEASURES verb more
 specific. The "where did my trace go?" diagnostic chain
 gains a third sibling under "is the latency reasonable?":
 

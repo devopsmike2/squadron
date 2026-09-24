@@ -30,8 +30,8 @@ your Terraform provider writes the actual configuration.
 Squadron's scan captures a summary (IDs, type, region), not every
 attribute. Rather than reproduce each provider's full schema (brittle,
 perpetually incomplete), Squadron produces the part it can do
-precisely — the resource type + a sane address + the provider-specific
-import ID — and lets the provider serialize the live config via
+precisely, the resource type + a sane address + the provider-specific
+import ID, and lets the provider serialize the live config via
 `-generate-config-out`. The generated config can then flow through the
 `terraform validate` merge-ready gate.
 
@@ -42,7 +42,7 @@ import ID — and lets the provider serialize the live config via
   resource already listed, and returns `already_imported` when there's
   nothing new.
 - Squadron only emits an import block when it knows the resource type's
-  exact import-ID format. Anything else is **skipped with a reason** —
+  exact import-ID format. Anything else is **skipped with a reason**,
   it never guesses an import ID that would fail at `terraform import`.
 
 ## Coverage

@@ -1,16 +1,16 @@
-# Event source tier — operator guide
+# Event source tier, operator guide
 
 This is the operator-facing runbook for the v0.89.99 through
 v0.89.103 event source tier slice 1 arc. Squadron now scans
-four event source surfaces across all four clouds — AWS
-EventBridge, GCP Pub/Sub, Azure Service Bus, OCI Streaming —
+four event source surfaces across all four clouds, AWS
+EventBridge, GCP Pub/Sub, Azure Service Bus, OCI Streaming,
 for the observability primitives that determine whether trace
 context propagates through the inbound layer of your
 architecture.
 
 The strategic frame: Squadron previously covered five tiers
 (compute / database / kubernetes / serverless / orchestration)
-across four clouds. Event sources are the sixth tier — the
+across four clouds. Event sources are the sixth tier, the
 root of trace continuity. The "request → orchestration →
 execution" chain Squadron scans now starts at the request
 entry point. A Pub/Sub topic without `tracingConfig.samplingRatio`
@@ -19,7 +19,7 @@ means the trace ID never gets created (or never reaches the
 downstream consumer), and every span Squadron's traceindex
 receives downstream looks orphaned.
 
-For a first test, the walkthrough takes about 20 minutes —
+For a first test, the walkthrough takes about 20 minutes,
 most of it spent confirming your cloud connections have the
 additional read permissions for the event source APIs.
 
@@ -27,11 +27,11 @@ additional read permissions for the event source APIs.
 
 - A team running EventBridge for event orchestration and
   wanting to confirm at least one rule targets a log
-  destination — Squadron's traceindex needs spans from the
+  destination, Squadron's traceindex needs spans from the
   downstream consumer to land somewhere it can read.
 - A GCP team with Pub/Sub topics that publish to Cloud Run /
   Cloud Functions and seeing orphan spans on the consumer
-  side — the cause is almost always `tracingConfig.samplingRatio`
+  side, the cause is almost always `tracingConfig.samplingRatio`
   not being set above 0.
 - An Azure team running Service Bus + Functions where some
   namespaces have diagnostic settings and some don't, and
@@ -56,7 +56,7 @@ intentionally narrow:
   own substrate.
 - **Cross-cloud event flows are slice 3+.** A message
   published to AWS EventBridge that flows out via SNS to a
-  GCP Pub/Sub topic — that's a real architecture but the
+  GCP Pub/Sub topic, that's a real architecture but the
   trace correlation across cloud boundaries is its own arc.
 - **Per-target trace propagation on EventBridge rules is
   slice 2+.** Rules can have multiple targets; each target
@@ -88,11 +88,11 @@ Discovery page.
 This catches first-time operators. EventBridge has two
 mechanisms that look like "trace primitives":
 
-1. **Schemas Discoverer** — a service that auto-discovers
+1. **Schemas Discoverer**, a service that auto-discovers
    event schemas as they flow through the bus. Conceptually
    close to "trace this bus" because it implies the bus is
    observable.
-2. **CloudWatch Logs target rules** — a rule that routes events
+2. **CloudWatch Logs target rules**, a rule that routes events
    to a CloudWatch Logs log group, making event content
    inspectable.
 
@@ -107,7 +107,7 @@ share the proxy in slice 1).
 This means: an EventBridge bus that has Schemas Discoverer
 ENABLED but no log-target rules gets `has_trace_axis = false`
 from Squadron. The `eventbridge-xray-enable` recommendation
-that fires is a soft positive — the operator may already
+that fires is a soft positive, the operator may already
 have observability via Schemas. Decline the recommendation
 if your trace strategy doesn't rely on the log-target path;
 the verdict learning loop records.
@@ -122,7 +122,7 @@ indistinguishable from a topic with explicit
 `tracingConfig.samplingRatio = 0`. Both produce
 `has_trace_axis = false` in slice 1. The
 `pubsub-trace-enable` recommendation drafts a PR that sets
-`tracing_config { sampling_ratio = 1.0 }` (full sampling) —
+`tracing_config { sampling_ratio = 1.0 }` (full sampling),
 operators who deliberately set 0 for cost reasons should
 decline and either reduce the sampling rate in the PR or
 explicitly opt the topic out.
@@ -180,31 +180,31 @@ eventbridge-logging-enable
 
 ### AWS EventBridge
 
-- **`eventbridge-xray-enable`** / **`eventbridge-schemas-discover`** —
+- **`eventbridge-xray-enable`** / **`eventbridge-schemas-discover`**,
   in slice 1 both target the same Terraform pattern (slice 2
   will distinguish): `aws_schemas_discoverer description = "Squadron-recommended discoverer for bus X" source_arn = aws_cloudwatch_event_bus.<name>.arn`
-- **`eventbridge-logging-enable`** —
+- **`eventbridge-logging-enable`**,
   `aws_cloudwatch_event_target target_id = "logs" arn = aws_cloudwatch_log_group.bus.arn rule = aws_cloudwatch_event_rule.<name>.name event_bus_name = aws_cloudwatch_event_bus.<name>.name`
 
 ### GCP Pub/Sub
 
-- **`pubsub-trace-enable`** — `google_pubsub_topic tracing_config { sampling_ratio = 1.0 }`
+- **`pubsub-trace-enable`**, `google_pubsub_topic tracing_config { sampling_ratio = 1.0 }`
   (or operator-tuned floor)
-- **`pubsub-schema-attach`** —
+- **`pubsub-schema-attach`**,
   `google_pubsub_topic schema_settings { schema = google_pubsub_schema.<name>.id encoding = "JSON" }`
   (requires existing `google_pubsub_schema` resource; the PR
   body includes the dependency note)
 
 ### Azure Service Bus
 
-- **`servicebus-diagnostics-enable`** —
+- **`servicebus-diagnostics-enable`**,
   `azurerm_monitor_diagnostic_setting target_resource_id = azurerm_servicebus_namespace.<name>.id`
   with either `workspace_id = azurerm_log_analytics_workspace.<name>.id`
   OR `application_insights_id = azurerm_application_insights.<name>.id`
 
 ### OCI Streaming
 
-- **`streaming-logging-enable`** —
+- **`streaming-logging-enable`**,
   `oci_logging_log` resource with
   `configuration { source { resource = oci_streaming_stream.<name>.id service = "streaming" category = "all" } }`
 
@@ -228,13 +228,13 @@ The Event sources table shows:
 | Last seen     | relative time (per v0.89.77)          |
 | Quality       | dot indicator (AWS only; per established slice 1 pattern) |
 
-QualityDot ships on AWS only — same slice 1 constraint as
+QualityDot ships on AWS only, same slice 1 constraint as
 v0.89.92 and v0.89.97. Slice 2 unifies across all 4 providers.
 
 Implementation note: DiscoveryAWS uses a collapsible section
 pattern (mirroring the existing Orchestration / Serverless
 sections); DiscoveryGCP/Azure/OCI use the sub-tab pattern.
-Same rationale as v0.89.97 — match each page's existing
+Same rationale as v0.89.97, match each page's existing
 architecture.
 
 ## Dashboard surfaces
@@ -248,7 +248,7 @@ orchestration which left OCI at 0 in slice 1).
 ### Trace coverage endpoint extension
 
 `GET /api/v1/discovery/trace_coverage` per-provider response
-gains `event_source_pct` — % of inventoried event sources
+gains `event_source_pct`, % of inventoried event sources
 emitting a span within 24h. All 4 providers populate.
 
 The Discovery dashboard TRACE COVERAGE chip breakdown adds
@@ -259,7 +259,7 @@ COMPUTE 67% | DB 42% | K8S 89% | SERVERLESS 33% | ORCH 12% | EVT 8%
 ```
 
 When `event_source_pct` is zero across all 4 providers, the
-EVT column hides — same pattern as the SERVERLESS and ORCH
+EVT column hides, same pattern as the SERVERLESS and ORCH
 columns.
 
 ## Webhook routing
@@ -281,7 +281,7 @@ audit scope. SIEM consumers can filter on:
 recommendation_kind ~= "^(eventbridge-|pubsub-|servicebus-|streaming-)"
 ```
 
-## Workflow — first event source scan
+## Workflow, first event source scan
 
 1. Open the per-provider Discovery page (e.g.
    `/discovery/aws`). Note your existing connection.
@@ -289,7 +289,7 @@ recommendation_kind ~= "^(eventbridge-|pubsub-|servicebus-|streaming-)"
    need to upgrade the IAM policy / SA permissions / RBAC
    role to include the new event source API actions. The
    in-product IAM upgrade flow (#590) shows the diff.
-3. Click "Run scan" — the default tier list now includes
+3. Click "Run scan", the default tier list now includes
    `event_source`. The scan walks event buses / topics /
    namespaces / streams in addition to the existing five
    tiers.
@@ -305,7 +305,7 @@ recommendation_kind ~= "^(eventbridge-|pubsub-|servicebus-|streaming-)"
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new
+Slice 1 reuses the existing audit event types, no new
 constants. The discovery scan emits the existing
 `discovery.{provider}.scan_completed` event with the
 `event_source_count` field included in the payload.
@@ -315,11 +315,11 @@ The recommendation lifecycle carries the new kind values.
 ## Troubleshooting
 
 - **Event buses don't appear in the Event sources sub-tab.**
-  Check the IAM policy — `events:ListEventBuses`,
+  Check the IAM policy, `events:ListEventBuses`,
   `events:ListRules`, `events:ListTargetsByRule` are required.
   The in-product IAM upgrade documentation shows the diff.
 - **A Pub/Sub topic with samplingRatio = 0.05 shows
-  `has_trace_axis = true`.** This is correct — any value
+  `has_trace_axis = true`.** This is correct, any value
   > 0 satisfies. The recommendation doesn't fire for this
   topic.
 - **An EventBridge bus with Schemas Discoverer enabled but
@@ -329,7 +329,7 @@ The recommendation lifecycle carries the new kind values.
   your trace strategy doesn't rely on the log-target path.
 - **A Service Bus namespace with diagnostic settings routing
   to Event Hub only shows `has_trace_axis = false`.** This
-  is the documented disjunction — Event Hub is a logging-only
+  is the documented disjunction, Event Hub is a logging-only
   destination in slice 1. If you have a custom processor
   pulling from Event Hub, decline the recommendation.
 - **An OCI Stream with OCI Notifications configured but no
@@ -346,7 +346,7 @@ The recommendation lifecycle carries the new kind values.
   appear in the index; sources that don't emit OTel-native
   spans don't.
 
-# Slice 2 — per-message propagation (v0.89.104 through v0.89.107)
+# Slice 2, per-message propagation (v0.89.104 through v0.89.107)
 
 Slice 1 surfaced whether the cloud-native trace primitive is
 on at the SOURCE level: does this EventBridge bus / Pub/Sub
@@ -359,7 +359,7 @@ PR that closes them.
 
 The strategic frame: orphan spans on the consumer side of an
 event-driven architecture are almost always a propagation
-break somewhere upstream — and operators rarely have the
+break somewhere upstream, and operators rarely have the
 tooling to find which boundary breaks them. Slice 1 ruled
 out "the primitive is off." Slice 2 rules out the next layer
 of gaps:
@@ -393,21 +393,21 @@ Each per-cloud scanner extended in slice 2 (chunks 1-4,
 v0.89.105-v0.89.106) sets two new fields on every
 EventSourceInstanceSnapshot:
 
-- `has_propagation_config: bool` — true when the source's
+- `has_propagation_config: bool`, true when the source's
   control-plane config preserves trace context end-to-end;
   false when at least one config gap would drop it.
-- `propagation_notes: []string` — human-readable per-issue
+- `propagation_notes: []string`, human-readable per-issue
   strings explaining each gap. Empty when
   `has_propagation_config` is true.
 
 The snapshot blob carries both fields; the storage schema
-stays at v13 (no migration in slice 2 — both fields live in
+stays at v13 (no migration in slice 2, both fields live in
 the `snapshot_json` JSON column the slice 1 row already
 uses).
 
 The per-cloud detection logic:
 
-### AWS EventBridge — per-rule propagation
+### AWS EventBridge, per-rule propagation
 
 For each rule on the bus:
 
@@ -428,7 +428,7 @@ The bus's `has_propagation_config` is true when ALL its
 rules preserve propagation (or there are no rules). A single
 broken rule fails the bus axis.
 
-### GCP Pub/Sub — schema + subscription
+### GCP Pub/Sub, schema + subscription
 
 - Topic with no `schemaSettings`: PRESERVED (publisher owns
   attribute presence).
@@ -443,7 +443,7 @@ broken rule fails the bus axis.
   excluding the traceparent attribute key. Recommendation
   kind: `pubsub-subscription-preserves-attrs`.
 
-### Azure Service Bus — namespace authorization rules
+### Azure Service Bus, namespace authorization rules
 
 - Namespace with at least one `Listen + Send` rule and no
   property-restricting RBAC role at the namespace scope:
@@ -452,7 +452,7 @@ broken rule fails the bus axis.
   is in place): BROKEN. Recommendation kind:
   `servicebus-policy-preserves-traceparent`.
 
-### OCI Streaming — retention threshold
+### OCI Streaming, retention threshold
 
 - Stream with `retentionInHours >= 24`: PRESERVED.
 - Stream with `retentionInHours < 24`: BROKEN (some OCI
@@ -462,7 +462,7 @@ broken rule fails the bus axis.
 
 ## The 5 new recommendation kinds
 
-Slice 2 adds 5 propagation kinds — one per cloud × surface
+Slice 2 adds 5 propagation kinds, one per cloud × surface
 plus an extra for Pub/Sub subscriptions:
 
 ```
@@ -491,12 +491,12 @@ DiscoveryAzure / DiscoveryOCI):
 - ✗ when false. Rendered as an amber clickable button. The
   tooltip shows the first `propagation_notes` entry; clicking
   opens a side panel listing every note for the row.
-- — (em dash) when `has_propagation_config` is undefined
+-, (em dash) when `has_propagation_config` is undefined
   (no rules / no schema / no subscriptions to evaluate, or
   a surface the slice 2 scanner cannot inspect yet).
 
 The amber palette on ✗ matches the slice 1 "primitive on,
-config gap" convention — green ✓ on the trace/log axes
+config gap" convention, green ✓ on the trace/log axes
 means "the primitive is on," amber ✗ on Propagation means
 "the primitive is on but the config gap drops trace
 context."
@@ -514,7 +514,7 @@ field`.
 The Discovery dashboard TRACE COVERAGE chip breakdown EVT
 column gains a `(prop N%)` suffix when the fleet-wide event
 source count is non-zero. The suffix surfaces the
-cross-provider weighted average of `propagation_pct` —
+cross-provider weighted average of `propagation_pct`,
 the per-provider count of `has_propagation_config = true`
 divided by total event source count, weighted by emitting
 count per provider (same aggregation as the existing tier
@@ -528,7 +528,7 @@ This reads as: 80% of inventoried event sources have a
 recent span observed, but only 45% of inventoried event
 sources have the propagation config that preserves trace
 context end-to-end. The gap (35 percentage points) is the
-slice 2 surface — sources where the primitive is on but
+slice 2 surface, sources where the primitive is on but
 trace context drops at the per-message control-plane
 boundary.
 
@@ -547,8 +547,8 @@ slice 2 finding:
 1. Open the per-provider Discovery page Event sources
    sub-tab. Sort by the Propagation column descending; the
    amber ✗ rows surface at the top.
-2. Click the ✗ button on a row. Read the side panel notes
-   — each line names the specific rule / schema /
+2. Click the ✗ button on a row. Read the side panel notes,
+each line names the specific rule / schema /
    subscription / config that breaks propagation.
 3. Open the Recommendations tab. The matching
    recommendation kind (one of the 5 slice 2 kinds) is
@@ -562,7 +562,7 @@ slice 2 finding:
 
 - **An EventBridge bus with mixed rules shows
   `has_propagation_config = false` even though most rules
-  are fine.** This is correct — a single broken rule fails
+  are fine.** This is correct, a single broken rule fails
   the bus axis. The `propagation_notes` lists every
   offending rule by name; the operator can address them
   in a single PR or one at a time. The Terraform Squadron
@@ -572,7 +572,7 @@ slice 2 finding:
   `has_propagation_config = false`.** The slice 2 substring
   match is `traceparent` / `googclient_OpenTelemetryTraceparent`
   / `trace_context`. `trace_id` alone is not the W3C
-  traceparent header — it's the span ID, not the propagated
+  traceparent header, it's the span ID, not the propagated
   context. Decline the recommendation if your schema uses a
   custom propagation convention; verdict learning records.
 - **An OCI Stream with `retentionInHours = 12` deliberately
@@ -643,12 +643,12 @@ X-Ray sampling decision; your Lambda's spans look orphaned
 because the parent context never arrived." Slice 1 ships
 the visibility (does the event source have a trace primitive
 on); **slice 2 (v0.89.104-v0.89.107) ships the per-message
-propagation diagnosis** — does the source's config preserve
+propagation diagnosis**, does the source's config preserve
 trace context end-to-end? After slice 2, an operator running
 Squadron's Discovery scan gets an honest answer at TWO
 levels for every inbound event source surface.
 
-## Slice 3 SHIPPED in v0.89.137-v0.89.139 — AWS SNS
+## Slice 3 SHIPPED in v0.89.137-v0.89.139, AWS SNS
 
 Slice 3 starts the widening pass on the event source tier
 by adding AWS SNS as a second AWS surface alongside
@@ -659,14 +659,14 @@ Honest scope: ONE new surface per arc keeps the
 verification gate quality high. A 6-surface arc would
 push past the soft cap multiple times.
 
-### The new AWS surface — SNS
+### The new AWS surface, SNS
 
 | Cloud | Surface | Trace axis                                                | Log axis                                          |
 |-------|---------|-----------------------------------------------------------|----------------------------------------------------|
 | AWS   | SNS     | `SubscriptionsConfirmed > 0` (has active downstream consumers; orphan-topic detection) | Per-protocol delivery feedback role ARN configured (http/sqs/lambda/application/firehose) |
 
 Like the EventBridge log-target proxy from slice 1, SNS
-doesn't have a direct OTel integration — Squadron uses the
+doesn't have a direct OTel integration, Squadron uses the
 per-protocol delivery feedback role attachment as the
 canonical "is delivery being audited?" signal.
 
@@ -680,7 +680,7 @@ Webhook routing: `sns- → aws`.
 
 ### sns-subscriptions-attach (audit-only)
 
-Fires on SNS topics with zero confirmed subscriptions —
+Fires on SNS topics with zero confirmed subscriptions,
 messages published get dropped on the floor. This is an
 audit-only recommendation; there's NO Terraform pattern
 because the operator decides:
@@ -698,7 +698,7 @@ topic" flag.
 Fires on SNS topics with active subscriptions but NO
 per-protocol delivery feedback role configured. The
 Terraform pattern configures all 5 protocols
-(http/sqs/lambda/application/firehose) — prune the protocols
+(http/sqs/lambda/application/firehose), prune the protocols
 you don't use.
 
 If you use a non-CloudWatch destination for delivery audit
@@ -707,7 +707,7 @@ decline.
 
 ### The Terraform pattern
 
-Verbatim from §8 of the design doc — IAM role +
+Verbatim from §8 of the design doc, IAM role +
 assume_role_policy + AmazonSNSRole policy attachment +
 per-protocol feedback role ARN attachments on the
 `aws_sns_topic` resource:
@@ -784,16 +784,16 @@ For a fleet of 1000 topics in one region:
 
 Per §13 of the design doc:
 
-- **Slice 4: AWS SQS** — third AWS event source surface
-- **Slice 5: GCP Cloud Tasks** — second GCP surface
-- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+- **Slice 4: AWS SQS**, third AWS event source surface
+- **Slice 5: GCP Cloud Tasks**, second GCP surface
+- **Slice 6: Azure Event Grid + Event Hubs**, second + third
   Azure surfaces
-- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 7: OCI Notification Service**, second OCI surface
 - **Slice 8+: subscription-level propagation analysis**,
   message filter inspection, multi-account fan-out
   coordination
 
-## Slice 4 SHIPPED in v0.89.140-v0.89.142 — AWS SQS
+## Slice 4 SHIPPED in v0.89.140-v0.89.142, AWS SQS
 
 Slice 4 continues the widening pass on the event source tier
 by adding AWS SQS as the third AWS surface alongside
@@ -805,7 +805,7 @@ Honest scope: ONE new surface per arc keeps the verification
 gate quality high. SQS completes the canonical AWS pub/sub
 fan-out architecture: `EventBridge | SNS → SQS → consumer`.
 
-### The new AWS surface — SQS
+### The new AWS surface, SQS
 
 | Cloud | Surface | Trace axis                                                | Log axis                                          |
 |-------|---------|-----------------------------------------------------------|----------------------------------------------------|
@@ -844,19 +844,19 @@ Fires on SQS queues with a RedrivePolicy set but the
 `deadLetterTargetArn` doesn't resolve to a queue Squadron can
 see in the same account+region. Two possibilities:
 
-1. **Cross-account/region DLQ** — your DLQ is in a different
+1. **Cross-account/region DLQ**, your DLQ is in a different
    account or region. Verify the source queue's IAM policy
    permits send to the DLQ ARN; declare the intent by
    declining this recommendation.
-2. **Dangling reference** — the DLQ was deleted but the
+2. **Dangling reference**, the DLQ was deleted but the
    source queue's redrive policy wasn't updated. Recreate the
    DLQ OR update the redrive policy.
 
-NO Terraform pattern — the operator confirms intent.
+NO Terraform pattern, the operator confirms intent.
 
 ### The Terraform pattern (case 1: missing RedrivePolicy)
 
-Verbatim from §8 of the design doc — `aws_sqs_queue` DLQ
+Verbatim from §8 of the design doc, `aws_sqs_queue` DLQ
 resource + `redrive_policy` jsonencode block:
 
 ```hcl
@@ -903,20 +903,20 @@ For a fleet of 1000 queues in one region:
 - ~33 seconds added to scan duration (1 GetQueueAttributes
   per queue + the two-pass DLQ resolution walk in-memory)
 
-### The canonical pub/sub failure chain — fully visible
+### The canonical pub/sub failure chain, fully visible
 
 After slice 4, the AWS pub/sub failure chain is fully covered:
 
 1. **SNS topic** without delivery logging (slice 3
-   `sns-delivery-logging-enable`) — operator can't see
+   `sns-delivery-logging-enable`), operator can't see
    per-message fan-out success/failure
 2. **SQS queue** without redrive policy (slice 4
-   `sqs-redrive-policy-enable`) — failed messages vanish
+   `sqs-redrive-policy-enable`), failed messages vanish
    silently
 3. **Lambda consumer** without trace primitive (serverless
-   tier) — even if traces flow, the consumer doesn't emit
+   tier), even if traces flow, the consumer doesn't emit
 4. **Lambda cold-start regression / error rate spike**
-   (substrate's three diagnostics) — workload-health view
+   (substrate's three diagnostics), workload-health view
    shows where it broke
 
 Four layers. One control plane. Each layer gets its own
@@ -925,21 +925,21 @@ recommendation kind + IaC PR.
 ### Slice 5+ deferrals
 
 Per §13 of the design doc:
-- **Slice 5: GCP Cloud Tasks** — second GCP surface
-- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+- **Slice 5: GCP Cloud Tasks**, second GCP surface
+- **Slice 6: Azure Event Grid + Event Hubs**, second + third
   Azure surfaces
-- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 7: OCI Notification Service**, second OCI surface
 - **Slice 8+: subscription-level propagation analysis**,
   per-queue depth anomaly detection using the MetricQuerier
   substrate, message filter inspection, multi-account fan-out
   coordination
 
-## Slice 5 SHIPPED in v0.89.143-v0.89.145 — GCP Cloud Tasks
+## Slice 5 SHIPPED in v0.89.143-v0.89.145, GCP Cloud Tasks
 
 Slice 5 continues the widening pass by adding GCP Cloud Tasks
 as the second GCP event source surface alongside Pub/Sub.
 After slice 5, GCP comes into architectural parity with AWS
-on the event source tier — both have a fan-out primitive
+on the event source tier, both have a fan-out primitive
 (EventBridge/SNS, Pub/Sub) and a queue-based primitive (SQS,
 Cloud Tasks).
 
@@ -949,7 +949,7 @@ out to many subscribers; each subscriber adds work items to a
 Cloud Tasks queue; the queue drives an HTTP endpoint with
 retry-on-failure semantics.
 
-### The new GCP surface — Cloud Tasks
+### The new GCP surface, Cloud Tasks
 
 | Cloud | Surface     | Trace axis                                                    | Log axis                                          |
 |-------|-------------|---------------------------------------------------------------|----------------------------------------------------|
@@ -1023,7 +1023,7 @@ cloudtasks.queues.get
 Cloud Tasks API queries are free for read operations. No new
 operator-facing cost decisions per the no-money brief.
 
-### The canonical GCP queue-based failure chain — fully visible
+### The canonical GCP queue-based failure chain, fully visible
 
 After slice 5, the GCP queue-based failure chain is fully
 covered:
@@ -1044,14 +1044,14 @@ Five layers. One control plane.
 ### Slice 6+ deferrals
 
 Per §13 of the design doc:
-- **Slice 6: Azure Event Grid + Event Hubs** — second + third
+- **Slice 6: Azure Event Grid + Event Hubs**, second + third
   Azure surfaces
-- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 7: OCI Notification Service**, second OCI surface
 - **Slice 8+: GCP Eventarc**, per-queue depth anomaly
   detection via MetricQuerier substrate, per-task execution-
   time analysis, multi-project fan-out coordination
 
-## Slice 6 SHIPPED in v0.89.146-v0.89.148 — Azure Event Grid
+## Slice 6 SHIPPED in v0.89.146-v0.89.148, Azure Event Grid
 
 Slice 6 continues the widening pass by adding Azure Event Grid
 as the second Azure event source surface alongside Service
@@ -1065,19 +1065,19 @@ Apps`: an Event Grid Topic publishes events; subscribers
 (Service Bus queues, Functions, Logic Apps, custom webhooks)
 consume them via filter rules.
 
-### The new Azure surface — Event Grid
+### The new Azure surface, Event Grid
 
 | Cloud | Surface    | Trace axis                                                  | Log axis                                          |
 |-------|------------|-------------------------------------------------------------|----------------------------------------------------|
 | Azure | Event Grid | `properties.inputSchema == "CloudEventSchemaV1_0"`          | diagnostic settings → App Insights OR Log Analytics workspace |
 
 The trace axis uses CloudEvents 1.0 schema enforcement as the
-proxy — CloudEvents 1.0 includes the distributed tracing
+proxy, CloudEvents 1.0 includes the distributed tracing
 extension (traceparent in event extensions), while the
 proprietary EventGridSchema and CustomEventSchema don't.
 
-The log axis mirrors the slice 1 Service Bus pattern verbatim
-— same Microsoft.Insights/diagnosticSettings child resource +
+The log axis mirrors the slice 1 Service Bus pattern verbatim,
+same Microsoft.Insights/diagnosticSettings child resource +
 same destination check.
 
 ### The 2 new recommendation kinds
@@ -1100,14 +1100,14 @@ via variable).
 Decline if your team uses a non-Insights destination (custom
 webhook capture, etc.).
 
-### eventgrid-cloudevent-schema-enforce — BREAKING CHANGE
+### eventgrid-cloudevent-schema-enforce, BREAKING CHANGE
 
 Fires on Event Grid Topics with `inputSchema = "EventGridSchema"`
 or `"CustomEventSchema"`. The recommendation drafts a PR
 changing to `"CloudEventSchemaV1_0"`.
 
 ⚠ **This is a BREAKING CHANGE for existing subscribers.** The
-wire format changes — subscribers configured to consume the
+wire format changes, subscribers configured to consume the
 proprietary EventGridSchema or CustomEventSchema will fail to
 parse CloudEvents-formatted events.
 
@@ -1132,7 +1132,7 @@ CloudEvents 1.0 carries the `traceparent` (and optionally
 `tracestate`) extension in the event envelope. Subscribers
 consuming CloudEvents-formatted events from an Event Grid
 Topic with CloudEventSchemaV1_0 get W3C-standard trace
-context for free — no per-event extraction code needed.
+context for free, no per-event extraction code needed.
 
 Combined with the trace coverage diagnostic from the existing
 trace integration arc, this means CloudEvents-formatted Event
@@ -1148,7 +1148,7 @@ succeeds (slice 6's existing read-only RBAC covers), the
 operator still sees Event Grid topics. Same in the other
 direction.
 
-NO IAM extension required — the existing Azure Reader role
+NO IAM extension required, the existing Azure Reader role
 covers `Microsoft.EventGrid/topics/read` + the diagnostic
 settings child read.
 
@@ -1157,43 +1157,43 @@ settings child read.
 Azure ARM read operations are free. No new operator-facing
 cost decisions per the no-money brief.
 
-### The canonical Azure event distribution chain — fully visible
+### The canonical Azure event distribution chain, fully visible
 
 After slice 6, the Azure event distribution chain is fully
 covered:
 
 1. **Event Grid topic** without diagnostic settings (this
-   slice `eventgrid-diagnostics-enable`) — operator has no
+   slice `eventgrid-diagnostics-enable`), operator has no
    per-event delivery audit
 2. **Event Grid topic** with proprietary schema (this slice
-   `eventgrid-cloudevent-schema-enforce`) — events lose
+   `eventgrid-cloudevent-schema-enforce`), events lose
    cross-vendor interoperability + W3C trace context
 3. **Service Bus namespace** without diagnostic settings
-   (slice 1 `servicebus-diagnostics-enable`) — downstream
+   (slice 1 `servicebus-diagnostics-enable`), downstream
    queue has no audit
 4. **Azure Functions / Logic Apps** without trace primitive
    (serverless + orchestration tiers)
 5. **Azure Functions cold-start regression** (substrate's
-   three diagnostics) — workload-health view
+   three diagnostics), workload-health view
 
 Five layers. One control plane.
 
 ### Slice 7+ deferrals
 
 Per §13 of the design doc:
-- **Slice 7: Azure Event Hubs** — third Azure surface
-- **Slice 7: OCI Notification Service** — second OCI surface
+- **Slice 7: Azure Event Hubs**, third Azure surface
+- **Slice 7: OCI Notification Service**, second OCI surface
 - **Slice 8+: Event Grid Domains**, Event Grid System Topics,
   per-subscription filter rule inspection, per-event
   CloudEvents payload validation, private endpoint
   configuration validation
 
-## Slice 7 SHIPPED in v0.89.149-v0.89.151 — OCI Notification Service
+## Slice 7 SHIPPED in v0.89.149-v0.89.151, OCI Notification Service
 
 Slice 7 closes the cross-cloud event source widening pass by
 adding OCI Notification Service (ONS) as the second OCI
 event source surface alongside Streaming. ONS serves the
-pub/sub fan-out pattern — the analog of AWS SNS + GCP Pub/Sub
+pub/sub fan-out pattern, the analog of AWS SNS + GCP Pub/Sub
 on the alert distribution side.
 
 After slice 7, the cross-cloud surface count lands at
@@ -1211,18 +1211,18 @@ widening pass closes here.
 
 1 new kind in slice 7:
 
-- `ons-logging-enable` — ONS Topic has no OCI Logging
+- `ons-logging-enable`, ONS Topic has no OCI Logging
   configuration. Without a log group capturing topic
   delivery events, the operator has no audit trail for
   which alarms / notifications were delivered to which
-  subscribers — the first question in any incident
+  subscribers, the first question in any incident
   postmortem where the operator needs to confirm "did the
   page actually get sent?".
 
 The Logging axis mirrors the slice 1 Streaming
 `streaming-logging-enable` pattern exactly. The
 `listLogsForTopic` helper is structurally identical to
-`listLogsForStream` from slice 1 chunk 4 — same OCI Logging
+`listLogsForStream` from slice 1 chunk 4, same OCI Logging
 `/logs` endpoint, same `searchTerm=<ocid>` convention, same
 defensive `Source.Resource` side-check.
 
@@ -1259,7 +1259,7 @@ resource "oci_logging_log" "<name>_delivery_log" {
 ### Decline path
 
 Decline `ons-logging-enable` if your team routes ONS audit
-through a non-OCI-Logging destination — Cloud Guard custom
+through a non-OCI-Logging destination, Cloud Guard custom
 recipes, OCI Streaming capture, third-party SIEM connectors
 all count. The verdict learning loop records the decline and
 quiets the recommendation on future scans matching the same
@@ -1304,13 +1304,13 @@ fully visible end-to-end:
    (substrate's three diagnostics: cold-start P95, sampling
    rate, error rate)
 2. **ONS topic** without Logging configured (this slice
-   `ons-logging-enable`) — operator has no audit of which
+   `ons-logging-enable`), operator has no audit of which
    subscribers got the page
-3. **ONS subscription** (slice 8+ — protocol enforcement,
+3. **ONS subscription** (slice 8+, protocol enforcement,
    retry policy tuning)
 4. **Functions / OKE** without trace primitive (serverless +
    kubernetes tiers)
-5. **Workload health view** — workload-health dashboard
+5. **Workload health view**, workload-health dashboard
    panel from v0.89.131-133
 
 Five layers. One control plane. Four clouds. Fully widened
@@ -1319,28 +1319,28 @@ on the event source tier.
 ### Slice 8+ deferrals
 
 Per §13 of the slice 7 design doc:
-- **Azure Event Hubs** — third Azure surface (deferred from
+- **Azure Event Hubs**, third Azure surface (deferred from
   slice 7 honest deferral; design doc §1 picks ONS first
   for closing the OCI pass)
-- **OCI Queue Service** — third OCI surface (transactional
+- **OCI Queue Service**, third OCI surface (transactional
   message queues, distinct primitive)
-- **Per-subscription protocol enforcement** — HTTP → HTTPS
+- **Per-subscription protocol enforcement**, HTTP → HTTPS
   recommendation at subscription scope
-- **Per-subscription retry policy tuning** — extending
+- **Per-subscription retry policy tuning**, extending
   `deliveryPolicy.maxRetryDuration` on subscriptions with
   short default retries
-- **ONS Subscription confirmation lag detection** — flag
+- **ONS Subscription confirmation lag detection**, flag
   PENDING subscriptions older than 24h
-- **CMEK / vault key rotation validation** — deeper
+- **CMEK / vault key rotation validation**, deeper
   encryption posture
-- **Per-delivery audit reconstruction** — assemble per-event
+- **Per-delivery audit reconstruction**, assemble per-event
   delivery timelines from the Logging stream
 
-## Slice 8 SHIPPED in v0.89.152-v0.89.154 — Azure Event Hubs
+## Slice 8 SHIPPED in v0.89.152-v0.89.154, Azure Event Hubs
 
 Slice 8 brings Azure to parity with AWS on the event source
 tier at 3 surfaces. Event Hubs is Azure's big-data event
-ingestion primitive — a partitioned log analogous to Kafka,
+ingestion primitive, a partitioned log analogous to Kafka,
 distinct from the messaging primitives (Service Bus = queue,
 Event Grid = fan-out topic).
 
@@ -1358,14 +1358,14 @@ Total: **10 event source surfaces across 4 clouds.**
 
 2 new kinds in slice 8:
 
-- `eventhubs-diagnostics-enable` — Event Hubs Namespace has
+- `eventhubs-diagnostics-enable`, Event Hubs Namespace has
   no diagnostic settings configured. Without diagnostic
   settings routing to App Insights OR a Log Analytics
   workspace, the operator has no visibility into per-namespace
   delivery health, capture status, or throughput unit
   utilization.
 
-- `eventhubs-capture-enable` — Event Hubs Namespace has NO
+- `eventhubs-capture-enable`, Event Hubs Namespace has NO
   event hub with Capture enabled. Without Capture, events
   expire after the namespace's retention window (1 day
   default; 7 days max on Standard; 90 days max on Premium).
@@ -1373,7 +1373,7 @@ Total: **10 event source surfaces across 4 clouds.**
   retention window for incident postmortems.
 
 The diagnostic settings axis mirrors the slice 1 Service
-Bus + slice 6 Event Grid patterns exactly — same
+Bus + slice 6 Event Grid patterns exactly, same
 `azurerm_monitor_diagnostic_setting` resource shape, same
 log analytics workspace destination.
 
@@ -1446,7 +1446,7 @@ destination). Verdict learning loop records both.
 
 The `eventhubs-capture-enable` Terraform leaves `<hub_name>`
 as a placeholder. Squadron does NOT prescribe WHICH hub to
-enable Capture on — operators routinely have multiple hubs
+enable Capture on, operators routinely have multiple hubs
 per namespace with different durability requirements, and
 Squadron cannot infer the per-hub durability profile from
 the ARM API surface alone. The reasoning text emphasizes
@@ -1488,46 +1488,46 @@ After slice 8, the Azure event chain is fully visible
 end-to-end:
 
 1. **Event Hubs namespace** without diagnostic settings
-   (this slice `eventhubs-diagnostics-enable`) — no
+   (this slice `eventhubs-diagnostics-enable`), no
    per-namespace delivery audit
 2. **Event Hubs namespace** without Capture anywhere (this
-   slice `eventhubs-capture-enable`) — event content lost
+   slice `eventhubs-capture-enable`), event content lost
    after retention window
 3. **Event Grid topic** without diagnostic settings (slice
-   6 `eventgrid-diagnostics-enable`) — no per-event audit
+   6 `eventgrid-diagnostics-enable`), no per-event audit
 4. **Service Bus namespace** without diagnostic settings
-   (slice 1 `servicebus-diagnostics-enable`) — no queue
+   (slice 1 `servicebus-diagnostics-enable`), no queue
    audit
 5. **Azure Functions / Logic Apps** without trace primitive
    (serverless + orchestration tiers)
 6. **Azure Functions cold-start regression** (substrate's
-   three diagnostics) — workload-health view
+   three diagnostics), workload-health view
 
 Six layers. One control plane.
 
 ### Slice 9+ deferrals
 
 Per §13 of the slice 8 design doc:
-- **OCI Queue Service** — third OCI surface (transactional
+- **OCI Queue Service**, third OCI surface (transactional
   message queues, distinct from ONS pub/sub primitive)
-- **Event Hubs Geo-DR** — paired namespace pattern for
+- **Event Hubs Geo-DR**, paired namespace pattern for
   disaster recovery
-- **Per-consumer-group lag detection** — Event Hubs
+- **Per-consumer-group lag detection**, Event Hubs
   per-CG offset lag vs. tail position
-- **Per-partition throughput-unit utilization** —
+- **Per-partition throughput-unit utilization**,
   auto-inflate detection via per-namespace metrics through
   the substrate's MetricQuerier
-- **Schema Registry validation** — Event Hubs Schema
+- **Schema Registry validation**, Event Hubs Schema
   Registry integration health
-- **Private endpoint configuration validation** — deeper
+- **Private endpoint configuration validation**, deeper
   network access analysis
 
-## Slice 9 SHIPPED in v0.89.155-v0.89.157 — OCI Queue Service
+## Slice 9 SHIPPED in v0.89.155-v0.89.157, OCI Queue Service
 
 Slice 9 brings OCI to parity with AWS + Azure on the event
 source tier at 3 surfaces. Queue Service is OCI's
 transactional FIFO message queue primitive analogous to AWS
-SQS — distinct from ONS pub/sub fan-out (one consumer per
+SQS, distinct from ONS pub/sub fan-out (one consumer per
 message vs. many-consumer fan-out) and from Streaming
 partitioned log analytics intake.
 
@@ -1547,14 +1547,14 @@ pass at **3-3-3-3 / 12 surfaces**.
 
 1 new kind in slice 9:
 
-- `queues-logging-enable` — OCI Queue has no OCI Logging
+- `queues-logging-enable`, OCI Queue has no OCI Logging
   configuration. Without a log group capturing queue
   delivery events, the operator has no audit trail for
   which messages were dequeued, processed, or sent to the
-  DLQ — critical for postmortem analysis of consumer-side
+  DLQ, critical for postmortem analysis of consumer-side
   failures and poison-message investigation. When a message
   lands in the DLQ at 2am the operator has no record of
-  which consumer attempted it — only that the DLQ count
+  which consumer attempted it, only that the DLQ count
   incremented.
 
 The Logging axis mirrors the slice 1 Streaming and slice 7
@@ -1590,7 +1590,7 @@ resource "oci_logging_log" "<name>_queue_log" {
 ### Decline path
 
 Decline `queues-logging-enable` if your team routes queue
-audit through a non-OCI-Logging destination — Cloud Guard
+audit through a non-OCI-Logging destination, Cloud Guard
 custom recipes, OCI Streaming capture, third-party SIEM
 connectors all count. The verdict learning loop records.
 
@@ -1635,11 +1635,11 @@ visible end-to-end:
 2. **ONS topic** → alert distribution (slice 7
    `ons-logging-enable`)
 3. **Queue** → task processing (this slice
-   `queues-logging-enable`) — operator has no audit of
+   `queues-logging-enable`), operator has no audit of
    which messages were dequeued or sent to DLQ
 4. **Functions / OKE** consumers without trace primitive
    (serverless + kubernetes tiers)
-5. **Workload health view** — workload-health dashboard
+5. **Workload health view**, workload-health dashboard
    panel from v0.89.131-133
 
 Five layers. One control plane. Three primitives covered on
@@ -1648,38 +1648,38 @@ OCI.
 ### Slice 10+ deferrals
 
 Per §13 of the slice 9 design doc:
-- **Third GCP surface** — Cloud Pub/Sub Lite, Cloud
+- **Third GCP surface**, Cloud Pub/Sub Lite, Cloud
   Dataflow are candidate primitives to bring GCP to 3
   surfaces (closing the widening at 3-3-3-3 / 12 surfaces)
-- **DLQ configuration inspection** — per-queue
+- **DLQ configuration inspection**, per-queue
   `deadLetterQueueDeliveryCount` + redelivery policy
   analysis
-- **Per-message visibility timeout analysis** —
+- **Per-message visibility timeout analysis**,
   substrate-level analysis of consumer processing lag vs.
   visibility timeout
-- **Channel-level inspection** — OCI Queue per-channel
+- **Channel-level inspection**, OCI Queue per-channel
   routing detection
-- **Streaming-Queue cross-surface correlation** — when an
+- **Streaming-Queue cross-surface correlation**, when an
   OCI Streaming pipeline routes into an OCI Queue
   downstream
 - **Per-queue CMEK / vault key rotation validation**
-- **Shared listLogsForOCID helper refactor** — collapse
+- **Shared listLogsForOCID helper refactor**, collapse
   the three parallel listLogsForStream / listLogsForTopic /
   listLogsForQueue helpers into one shared
   resource-OCID-agnostic implementation
 
-## Slice 10 SHIPPED in v0.89.158-v0.89.160 — GCP Pub/Sub Lite — **CLOSES THE WIDENING PASS at 3-3-3-3 / 12 surfaces**
+## Slice 10 SHIPPED in v0.89.158-v0.89.160, GCP Pub/Sub Lite, **CLOSES THE WIDENING PASS at 3-3-3-3 / 12 surfaces**
 
 Slice 10 brings GCP to parity with AWS + Azure + OCI at 3
 event source surfaces by adding Pub/Sub Lite as the third
 GCP surface alongside Pub/Sub and Cloud Tasks. **This slice
 closes the cross-cloud event source widening pass.**
 
-Pub/Sub Lite is GCP's partitioned-log primitive — the
+Pub/Sub Lite is GCP's partitioned-log primitive, the
 structural analog of AWS Kinesis Data Streams and Azure
 Event Hubs. Distinct from full Pub/Sub in that Lite trades
 managed routing + global delivery for cost efficiency at
-high volume — operators self-manage partition capacity via
+high volume, operators self-manage partition capacity via
 reservations. Zone-pinned by design.
 
 After slice 10, the cross-cloud surface count lands at
@@ -1696,19 +1696,19 @@ After slice 10, the cross-cloud surface count lands at
 
 2 new kinds in slice 10:
 
-- `pubsublite-logging-enable` — Pub/Sub Lite topic has no
+- `pubsublite-logging-enable`, Pub/Sub Lite topic has no
   Cloud Logging sink configured filtering on
   `resource.type="pubsublite_topic"` + the topic's ID.
   Without the sink, the operator has no audit trail for
   publish failures, per-partition throughput exhaustion
-  events, or reservation-related throttling — the failure
+  events, or reservation-related throttling, the failure
   modes unique to the Lite tier.
 
-- `pubsublite-reservation-attach` — Pub/Sub Lite topic has
+- `pubsublite-reservation-attach`, Pub/Sub Lite topic has
   NO reservation attached OR the referenced reservation
   does not exist in the topic's zone. Without a
   reservation, the topic is throttled to the bare minimum
-  publish + subscribe throughput per partition — typically
+  publish + subscribe throughput per partition, typically
   becoming a silent bottleneck under peak load.
 
   **CRITICAL: this recommendation CREATES A BILLABLE
@@ -1716,7 +1716,7 @@ After slice 10, the cross-cloud surface count lands at
   recommendation that creates a billable resource. Default
   sizing is conservative (4 publish + subscribe units) but
   the operator MUST validate against ACTUAL peak throughput
-  before merging — under-sized reservations re-create the
+  before merging, under-sized reservations re-create the
   throttling problem the recommendation solves.
 
 ### Terraform Squadron emits
@@ -1816,7 +1816,7 @@ like:
 3-3-3-3. 12 surfaces. 4 clouds. Every cloud carries every
 primitive pattern.
 
-### Strategic close — what's next
+### Strategic close, what's next
 
 After slice 10, the event source tier's widening pass is
 **COMPLETE**. Future event source work is **per-axis depth**,
@@ -1837,10 +1837,10 @@ NOT per-cloud breadth:
   registries
 
 The horizon shifts from "do we see every cloud's event
-source surfaces?" (yes — 3-3-3-3) to "do we see what the
+source surfaces?" (yes, 3-3-3-3) to "do we see what the
 operator actually needs to know about each surface?" The
 substrate (MetricQuerier from cold-start slice 1+2) is the
-primary enabler for the per-axis depth work — most slice
+primary enabler for the per-axis depth work, most slice
 11+ candidates ride on it.
 
 ### Slice 11+ candidates
@@ -1858,45 +1858,45 @@ primary enabler for the per-axis depth work — most slice
 
 ## Cross-references
 
-- [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md) —
-- [Event source tier slice 2 design doc](./proposals/event-source-tier-slice2.md) —
+- [Event source tier slice 1 design doc](./proposals/event-source-tier-slice1.md),
+- [Event source tier slice 2 design doc](./proposals/event-source-tier-slice2.md),
   the slice 2 spec this runbook extension operationalizes.
   Adds per-message propagation detection across all 4
   surfaces and 5 new recommendation kinds reusing the
   slice 1 webhook prefixes.
   the locked spec this runbook operationalizes.
-- [Event source tier slice 3 design doc](./proposals/event-source-tier-slice3.md) —
+- [Event source tier slice 3 design doc](./proposals/event-source-tier-slice3.md),
   the slice 3 spec that adds AWS SNS as the second AWS
   surface and 2 new recommendation kinds
   (sns-subscriptions-attach + sns-delivery-logging-enable)
   routed via the new sns- webhook prefix.
-- [Event source tier slice 4 design doc](./proposals/event-source-tier-slice4.md) —
+- [Event source tier slice 4 design doc](./proposals/event-source-tier-slice4.md),
   the slice 4 spec that adds AWS SQS as the third AWS
   surface and 2 new recommendation kinds
   (sqs-redrive-policy-enable + sqs-deadletter-queue-attach)
   routed via the new sqs- webhook prefix.
-- [Event source tier slice 5 design doc](./proposals/event-source-tier-slice5.md) —
+- [Event source tier slice 5 design doc](./proposals/event-source-tier-slice5.md),
   the slice 5 spec that adds GCP Cloud Tasks as the second
   GCP surface and 2 new recommendation kinds
   (cloudtasks-retry-policy-enable + cloudtasks-logging-enable)
   routed via the new cloudtasks- webhook prefix.
-- [Event source tier slice 6 design doc](./proposals/event-source-tier-slice6.md) —
+- [Event source tier slice 6 design doc](./proposals/event-source-tier-slice6.md),
   the slice 6 spec that adds Azure Event Grid as the second
   Azure surface and 2 new recommendation kinds
   (eventgrid-diagnostics-enable +
-  eventgrid-cloudevent-schema-enforce — the latter is a
+  eventgrid-cloudevent-schema-enforce, the latter is a
   BREAKING CHANGE for existing subscribers) routed via the
   new eventgrid- webhook prefix.
-- [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md) —
+- [Orchestration tier slice 1](./proposals/orchestration-tier-slice1.md),
   the prior tier-expansion arc this composes with.
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   the trace integration arc this composes with.
-- [Span quality — operator guide](./span-quality-operator-guide.md) —
+- [Span quality, operator guide](./span-quality-operator-guide.md),
   the span quality arc whose orphan-span detector catches
   the symptom event sources surface the cause of.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.
 
-## DLQ Configuration Analysis SHIPPED in v0.89.162-v0.89.166 — Queue tier per-axis depth slice 1 (post-widening, FIRST per-axis depth slice)
+## DLQ Configuration Analysis SHIPPED in v0.89.162-v0.89.166, Queue tier per-axis depth slice 1 (post-widening, FIRST per-axis depth slice)
 
 After slice 10 closes the cross-cloud event source widening
 pass at 3-3-3-3 / 12 surfaces, Squadron transitions to PER-AXIS
@@ -1923,7 +1923,7 @@ Recommendation kinds (7 total): `sqs-dlq-attach`,
 `servicebus-dlq-queue-walk-prerequisite`,
 `queues-dlq-attach`, `queues-dlq-retry-count-bound`. All
 routed via existing per-cloud webhook prefixes (`sqs-`,
-`cloudtasks-`, `servicebus-`, `queues-`) — NO new prefix
+`cloudtasks-`, `servicebus-`, `queues-`), NO new prefix
 routing.
 
 Honest framing patterns established:
@@ -1944,7 +1944,7 @@ Cold-start parity preserved (additive Detail bag keys only).
 Cross-reference:
 [DLQ configuration analysis slice 1 design doc](./proposals/dlq-configuration-analysis-slice1.md).
 
-## Consumer Lag Detection SHIPPED in v0.89.167-v0.89.171 — Queue tier per-axis depth slice 2 (post-DLQ)
+## Consumer Lag Detection SHIPPED in v0.89.167-v0.89.171, Queue tier per-axis depth slice 2 (post-DLQ)
 
 Slice 2 of the per-axis depth horizon. Same playbook as DLQ
 slice 1: 4-chunk arc + design doc, additive Detail bag keys,
@@ -1957,7 +1957,7 @@ condition; either alone is normal.
 Per-cloud field mapping: AWS SQS uses
 `ApproximateNumberOfMessages` +
 `ApproximateAgeOfOldestMessage` (already in the slice 4
-GetQueueAttributes response — read more fields from same
+GetQueueAttributes response, read more fields from same
 payload). GCP Cloud Tasks uses §3.3 honest framing (admin
 API gap). Azure Service Bus uses §3.4 inherited §3.2
 scanner-coverage-gap. OCI Queue Service uses
@@ -1972,7 +1972,7 @@ Recommendation kinds (6 total):
 `servicebus-backlog-queue-walk-prerequisite` (§3.4),
 `queues-backlog-monitor-add`,
 `queues-consumer-silence-investigate`. All routed via
-existing per-cloud webhook prefixes — NO new prefix
+existing per-cloud webhook prefixes, NO new prefix
 routing.
 
 Honest framing patterns reused (FOURTH application across
@@ -1994,7 +1994,7 @@ Cross-reference:
 [Consumer lag detection slice 2 design doc](./proposals/consumer-lag-detection-slice2.md).
 
 
-## Poison-Message Rate Analysis SHIPPED in v0.89.172-176 — Queue tier per-axis depth slice 3 (post-consumer-lag)
+## Poison-Message Rate Analysis SHIPPED in v0.89.172-176, Queue tier per-axis depth slice 3 (post-consumer-lag)
 
 THIRD per-axis-depth slice. Identical 4-chunk + design-doc
 shape to DLQ slice 1 (v0.89.162-166) and consumer lag slice
@@ -2006,7 +2006,7 @@ between the structural DLQ-presence axis (slice 1: does a
 DLQ exist?) and the temporal consumer-lag axis (slice 2: is
 the consumer keeping up?). A spiking poison-message rate
 signals schema drift, a downstream dependency outage, or a
-code regression on a single message shape — high rates burn
+code regression on a single message shape, high rates burn
 consumer-side processing budget before messages reach the
 DLQ.
 
@@ -2014,7 +2014,7 @@ Detection axis (2 additive Detail keys per surface):
 `poison_rate_per_hour` + `poison_rate_high_band`. Across
 ALL FOUR clouds these are hard-coded to the absent state
 (`poison_rate_per_hour=-1`, `poison_rate_high_band=false`)
-under §3.3 substrate-metric-dependence honest framing —
+under §3.3 substrate-metric-dependence honest framing,
 the per-queue poison rate requires a time-series metric
 delta the single-pass scanner does not query:
 
@@ -2028,19 +2028,19 @@ delta the single-pass scanner does not query:
 - OCI Queue Service: dead-letter delivery delta via OCI
   Monitoring SummarizeMetricsData.
 
-Recommendation kinds (4 total — one per cloud, identical
+Recommendation kinds (4 total, one per cloud, identical
 shape, all §3.3 honest framing):
 `sqs-poison-rate-monitor-add`,
 `cloudtasks-poison-rate-monitor-add`,
 `servicebus-poison-rate-monitor-add`,
 `queues-poison-rate-monitor-add`. Each ALWAYS fires with
 reasoning text explicitly calling out that Squadron cannot
-yet compute the rate from the scanner pass — the generated
+yet compute the rate from the scanner pass, the generated
 Terraform alarm (threshold 60/hour, 5-minute window) is the
 operator's load-bearing surrogate until the substrate
 MetricQuerier integration lands. All routed via existing
 per-cloud webhook prefixes (`sqs-`, `cloudtasks-`,
-`servicebus-`, `queues-`) — NO new prefix routing.
+`servicebus-`, `queues-`), NO new prefix routing.
 
 §3.3 is the FIFTH application of the honest-framing taxonomy
 and the FIRST where a single variant covers all four clouds
@@ -2059,17 +2059,17 @@ Cross-reference:
 [Poison-message rate analysis slice 3 design doc](./proposals/poison-message-rate-slice3.md).
 
 
-## Poison-Rate Substrate Integration — AWS SQS reverted to honest framing (v0.89.230)
+## Poison-Rate Substrate Integration, AWS SQS reverted to honest framing (v0.89.230)
 
 Slice 3 (v0.89.172-176) shipped the poison-rate axis across
-all four clouds as §3.3 honest framing — the rate was never
+all four clouds as §3.3 honest framing, the rate was never
 actually measured (`poison_rate_per_hour = -1` always). Slice
 4 builds the per-cloud MetricQuerier integration that closes
 that deferral, one cloud per chunk, mirroring the cold-start
 latency arc's per-cloud substrate build.
 
 **CORRECTION (v0.89.230): AWS SQS poison-rate was reverted to §3.3 honest
-framing.** The `NumberOfMessagesSent` approach described above was wrong —
+framing.** The `NumberOfMessagesSent` approach described above was wrong,
 messages moved to a DLQ by the redrive policy (the actual poison messages) are
 NOT counted by `NumberOfMessagesSent`; only manual SendMessage calls are. So it
 reported a confident 0/hour for DLQs filling via the normal failed-processing
@@ -2100,25 +2100,25 @@ Cross-reference:
 [Poison-rate substrate integration slice 4 design doc](./proposals/poison-rate-substrate-slice4.md).
 
 
-## Consumer-Lag Substrate Integration SHIPPED in v0.89.182 — slice 5 chunk 1 (GCP Cloud Tasks backlog real)
+## Consumer-Lag Substrate Integration SHIPPED in v0.89.182, slice 5 chunk 1 (GCP Cloud Tasks backlog real)
 
 A new substrate arc, parallel to the poison-rate substrate
 (slice 4). Consumer lag slice 2 shipped the lag axis across four
 clouds, but GCP Cloud Tasks (§3.1) and Azure Service Bus (§3.2)
 shipped the backlog as honest framing (`lag_backlog_depth = -1`).
 Slice 5 closes those deferrals by reading the backlog metric from
-the per-cloud MetricQuerier substrate the cold-start arc built —
+the per-cloud MetricQuerier substrate the cold-start arc built,
 the same proven pattern, applied to the lag axis.
 
 Chunk 1 makes the **GCP Cloud Tasks backlog real**. Squadron reads
 `cloudtasks.googleapis.com/queue/depth` (a gauge: number of tasks
-in the queue) via Cloud Monitoring with the `ALIGN_MAX` aligner —
+in the queue) via Cloud Monitoring with the `ALIGN_MAX` aligner,
 the peak backlog over the trailing 1-hour window. For each Cloud
 Tasks queue, `lag_backlog_depth` is overwritten with the measured
 peak and `lag_backlog_depth_high` with the real `depth >= 1000`
 verdict (matching the AWS + OCI backlog threshold).
 
-Scope — backlog only. The consumer-silence half of the lag axis
+Scope, backlog only. The consumer-silence half of the lag axis
 (`lag_consumer_silence_seconds` / `lag_consumer_silence_high`)
 stays honest-framed (`-1`) for Cloud Tasks: there is no clean
 per-queue oldest-task-age metric the way SQS exposes
@@ -2129,7 +2129,7 @@ silence remains a documented deferral.
 Same real-zero versus absent contract: a measured `0` is a genuine
 "empty queue" reading; `-1` strictly means "not measured" (queue
 too new, no datapoints, metric client unwired, or a metric-name
-mismatch — which degrades safely to `-1`, never false data).
+mismatch, which degrades safely to `-1`, never false data).
 `cloudtasks-backlog-monitor-add` reasoning now reports the measured
 backlog instead of disclaiming the §3.1 gap. Azure Service Bus lag
 backlog stays §3.2 honest-framed until chunk 2 (`ActiveMessages`
@@ -2145,26 +2145,26 @@ Cross-reference:
 [Consumer-lag substrate integration slice 5 design doc](./proposals/consumer-lag-substrate-slice5.md).
 
 
-## Cost-Correlation Enrichment SHIPPED in v0.89.185 — slice 6 chunk 3 (AWS SQS service cost on DLQ-bearing queues)
+## Cost-Correlation Enrichment SHIPPED in v0.89.185, slice 6 chunk 3 (AWS SQS service cost on DLQ-bearing queues)
 
 Chunk 3 joins AWS SQS service cost onto DLQ-bearing queue
 snapshots, so a poison-rate / DLQ recommendation can carry the
 operator-facing spend context: "Amazon SQS is costing ~$X/mo on
 this account; draining this DLQ reduces wasted spend."
 
-**Safety posture — plumbed but gated, no spend by default.** Like
+**Safety posture, plumbed but gated, no spend by default.** Like
 the entire metric substrate, `enrichSQSCost` is a no-op unless
 BOTH a Cost Explorer client and a `CostBudgetGovernor` are wired
 onto the scanner (`WithCostExplorerClient` + `WithCostBudgetGovernor`).
 No production code wires them by default, so **no charged Cost
 Explorer call fires during a scan until an operator explicitly
-opts in at that wiring step** — that is where the decision to
+opts in at that wiring step**, that is where the decision to
 spend lives. When wired, the governor caps spend at the default
 $1/30-day-window/account.
 
 **Spend hygiene.** At most ONE charged `GetCostAndUsage` call per
 scan, and only when at least one queue actually has a DLQ to
-correlate cost to — a scan with no DLQ-bearing queues makes zero
+correlate cost to, a scan with no DLQ-bearing queues makes zero
 cost calls. Cost is attributed at the SERVICE level (account-wide
 SQS spend), not per-queue: resource-level cost is a paid Cost
 Explorer opt-in the substrate deliberately avoids. The figure is
@@ -2173,35 +2173,35 @@ surfaced as context on queues that have an actionable DLQ.
 Detail keys added (only on a Covered reading; absent otherwise):
 `service_cost_monthly_micro_usd` (integer micro-USD; divide by
 1,000,000 for dollars), `service_cost_currency`, and
-`service_cost_scope` = `"service"` — an explicit honest label that
+`service_cost_scope` = `"service"`, an explicit honest label that
 the figure is the service total, not a per-queue attribution.
 
 **Reporting rule (enforced in the proposer prompt).** The model
 reports the figure plainly, always labeled service-level, with no
-editorializing about whether the cost is high or low — just the
+editorializing about whether the cost is high or low, just the
 number and the actionable next step. When the keys are absent it
 says nothing about cost rather than guessing.
 
 Per-call cost surface: AWS Cost Explorer `GetCostAndUsage` is
 ~$0.01/request (see the design doc §3 table). At one call per scan
-and a daily cadence, SQS cost correlation is ~$0.30/mo/account —
+and a daily cadence, SQS cost correlation is ~$0.30/mo/account,
 well under the governor ceiling.
 
 Cross-reference:
 [Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).
 
 
-## Cost-Correlation SHIPPED in v0.89.186 — slice 6 chunk 4 (Azure Service Bus cost reader)
+## Cost-Correlation SHIPPED in v0.89.186, slice 6 chunk 4 (Azure Service Bus cost reader)
 
-Chunk 4 adds the **Azure Cost Management** cost reader — the
-second cloud after AWS — and attaches Service Bus service cost to
+Chunk 4 adds the **Azure Cost Management** cost reader, the
+second cloud after AWS, and attaches Service Bus service cost to
 namespace snapshots, so a Service Bus poison-rate / dead-letter
 recommendation can carry the same spend context AWS SQS now does.
 
 Azure Cost Management `/query` is **free per call** (throttle-
 limited, not billed), so the per-call cost is `0` and the governor
 authorizes it unconditionally. The governor is still REQUIRED as
-the opt-in "cost correlation enabled" signal — Azure cost queries
+the opt-in "cost correlation enabled" signal, Azure cost queries
 (and the extra ARM calls they make) never run by default, only
 when explicitly wired. Like the rest of the substrate, no
 production code wires it by default.
@@ -2210,7 +2210,7 @@ The reader issues exactly one read-only `Microsoft.CostManagement/query`
 POST per scan, filtered to the `Service Bus` ServiceName dimension,
 and finds the Cost + Currency columns by name (order-independent).
 Amounts are parsed to integer micro-USD (no float). Cost is
-attributed at the SERVICE level (account-wide Service Bus spend) —
+attributed at the SERVICE level (account-wide Service Bus spend),
 the same honest `service_cost_scope="service"` label as AWS;
 per-resource cost (Azure can do it, unlike AWS) is a future
 refinement.
@@ -2222,7 +2222,7 @@ source billing currency, preserved honestly for non-USD accounts),
 report-don't-editorialize rule covers both clouds.
 
 Cost reader status: AWS SQS (Cost Explorer, ~$0.01/call) + Azure
-Service Bus (Cost Management, free). GCP (BigQuery billing export —
+Service Bus (Cost Management, free). GCP (BigQuery billing export,
 heavier, operator-setup-dependent) and OCI (usage-report objects)
 land in later chunks.
 
@@ -2230,10 +2230,10 @@ Cross-reference:
 [Cost-correlation substrate slice 6 design doc](./proposals/cost-correlation-substrate-slice6.md).
 
 
-## Cost-Correlation Opt-In SHIPPED in v0.89.188 — slice 6 chunk 6 (the production switch, default OFF)
+## Cost-Correlation Opt-In SHIPPED in v0.89.188, slice 6 chunk 6 (the production switch, default OFF)
 
 Chunk 6 ships the operator-facing switch that flips the cost path
-from plumbed-but-dormant to live — and **it is OFF by default**.
+from plumbed-but-dormant to live, and **it is OFF by default**.
 Until an operator explicitly enables it, Squadron makes ZERO
 cost-reporting API calls and incurs ZERO spend on connected
 accounts.
@@ -2257,11 +2257,11 @@ Cost Management is free.
 Safety properties (enforced + tested):
 
 - **Default off.** An omitted block or `enabled: false` means no
-  cost client, no governor — `QueryCost` refuses to issue a
+  cost client, no governor, `QueryCost` refuses to issue a
   charged call (the dormant state the rest of the substrate
   already sits in).
 - **Bounded.** `monthly_budget_usd` defaults to $1.00 and a
-  non-positive value falls back to the $1.00 default — never
+  non-positive value falls back to the $1.00 default, never
   unbounded.
 - **Fails loud, not silent.** If the wiring is attempted on a
   factory that can't build a Cost Explorer client,

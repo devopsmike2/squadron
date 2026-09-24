@@ -109,7 +109,7 @@ See [Alerts → API reference](./alerts.md#api-reference). Endpoints under
 
 | Method | Path                       | Purpose                                                |
 |--------|----------------------------|--------------------------------------------------------|
-| GET    | `/api/v1/events`           | Server-Sent Events stream — agent state, drift, rollout transitions, audit. |
+| GET    | `/api/v1/events`           | Server-Sent Events stream, agent state, drift, rollout transitions, audit. |
 
 Example consumer with curl:
 

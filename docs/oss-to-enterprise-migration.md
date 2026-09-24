@@ -13,12 +13,12 @@ the `enterprise` (and `compliance`) build tags set. The enterprise pack's
 `make build-enterprise` clones OSS, drops the `//go:build enterprise` wire
 files into `cmd/all-in-one/`, injects the `require`/`replace` into `go.mod`,
 builds, and reverts the OSS tree afterward. Nothing in the OSS source tree
-changes permanently — entitlement is simply *which code got compiled in*. In
+changes permanently, entitlement is simply *which code got compiled in*. In
 OSS those seams are inert: the enterprise HTTP mounts return 404 and the
 provider hooks return nil.
 
 **2. There is no schema migration.** `tenant_id` already ships in the OSS base
-schema — every per-tenant table carries `tenant_id TEXT NOT NULL DEFAULT
+schema, every per-tenant table carries `tenant_id TEXT NOT NULL DEFAULT
 'default'`, and `api_tokens` gains it through an idempotent `ALTER TABLE`.
 OSS runs a single implicit `default` tenant; enterprise activates the *same
 rows* for real multi-tenancy. You point the enterprise binary at your existing
@@ -32,7 +32,7 @@ controls on.
 ## Before you switch
 
 - **Back up the data directory** (`/app/data`, or the Helm PVC). This is
-  reversible in principle — the schema is shared — but always snapshot first.
+  reversible in principle, the schema is shared, but always snapshot first.
 - **Have your enterprise build or image ready.** The enterprise binary is
   produced by the private enterprise pack (`make build-enterprise`); the OSS
   image is not the enterprise image.
@@ -44,14 +44,14 @@ controls on.
 ## Configuration deltas
 
 Everything below is additive to a working OSS config. The strict-isolation
-flags are enforced by the enterprise wire itself (no config knob) — they turn
+flags are enforced by the enterprise wire itself (no config knob), they turn
 on automatically when you run the enterprise build.
 
 | Area | What you add | Notes |
 |---|---|---|
 | **Auth** | `auth.enabled: true` | RBAC and tenant isolation only bite once auth is on. |
-| **OTLP tenancy** | `ingest.otlp.tenant_id: default` (or a real tenant) | **Required** under enterprise strict when the OTLP receiver is enabled — unset is a startup fatal. |
-| **Tenants** | `POST /api/v1/tenants/` per tenant; bind tokens via `POST /api/v1/tenants/<id>/tokens` | Trailing slash matters — bare `/tenants` 307-redirects. |
+| **OTLP tenancy** | `ingest.otlp.tenant_id: default` (or a real tenant) | **Required** under enterprise strict when the OTLP receiver is enabled, unset is a startup fatal. |
+| **Tenants** | `POST /api/v1/tenants/` per tenant; bind tokens via `POST /api/v1/tenants/<id>/tokens` | Trailing slash matters, bare `/tenants` 307-redirects. |
 | **RBAC** | roles via `POST /api/v1/rbac/roles`, bindings via `/rbac/bindings` | Deny-by-default once any role exists. `SQUADRON_RBAC_BOOTSTRAP_LABELS` (default `bootstrap`) grants break-glass admin. |
 | **SSO / OIDC** | connection rows in the enterprise `oidc_connections` table (`issuer`, `client_id`, sealed `client_secret`, per-connection `redirect_uri`, `tenant_id`, `default_role`) | Stored in the DB, not YAML; one IdP maps to one tenant. Needs `SQUADRON_SECRETS_KEY`. |
 | **SCIM** | provision a service token with the reserved `scim:` label and `scim:write` scope, tenant-bound | For directory sync. |
@@ -62,10 +62,10 @@ on automatically when you run the enterprise build.
 
 The enterprise wire turns these on with no config knob:
 
-- **Strict tenant scoping** — every per-tenant query is tenant-filtered.
-- **Reject untenanted connections** — a header-less OpAMP connection is
+- **Strict tenant scoping**, every per-tenant query is tenant-filtered.
+- **Reject untenanted connections**, a header-less OpAMP connection is
   rejected (401) instead of falling back to `default`.
-- **Strict identity source** — raw operator tokens are rejected; only
+- **Strict identity source**, raw operator tokens are rejected; only
   `oidc:`, `scim:`, and `bootstrap`-labelled identities pass.
 
 Plan for these: any collector or client that worked against OSS by relying on
@@ -78,7 +78,7 @@ labelled token before it will connect to the enterprise build.
 - `/metrics` exposes `squadron_build_info{edition="squadron-enterprise"} 1`.
 - A request with no tenant context is rejected rather than served the
   `default` tenant.
-- Your existing agents and configs are still present — same database, same
+- Your existing agents and configs are still present, same database, same
   rows.
 
 ## Rolling back
@@ -86,12 +86,12 @@ labelled token before it will connect to the enterprise build.
 Because the schema is shared, rolling back is symmetric: stop the enterprise
 binary, start the OSS binary against the same data directory. The enterprise
 controls (multi-tenant rows, RBAC bindings, OIDC connections) simply go
-dormant — OSS reads the data as the single `default` tenant and ignores the
+dormant, OSS reads the data as the single `default` tenant and ignores the
 enterprise-only tables. Keep your `SQUADRON_SECRETS_KEY` if you intend to
 switch back to enterprise later, so the sealed OIDC secrets remain readable.
 
 ## See also
 
-- [Deployment](./deployment.md) — install shapes, Helm, OpenShift, prod checklist
-- [Editions & build model](./build.md) — the OSS/enterprise seam and its locking tests
-- [OSS vs Enterprise](./oss-vs-enterprise.md) — the feature boundary
+- [Deployment](./deployment.md), install shapes, Helm, OpenShift, prod checklist
+- [Editions & build model](./build.md), the OSS/enterprise seam and its locking tests
+- [OSS vs Enterprise](./oss-vs-enterprise.md), the feature boundary

@@ -1,15 +1,15 @@
-# Serverless tier — operator guide
+# Serverless tier, operator guide
 
 This is the operator-facing runbook for the v0.89.89 through
 v0.89.93 serverless tier slice 1 arc. Squadron now scans five
-serverless surfaces across all four clouds — AWS Lambda, GCP
-Cloud Run, GCP Cloud Functions, Azure Functions, OCI Functions
-— for the observability primitives the trace integration arc
+serverless surfaces across all four clouds, AWS Lambda, GCP
+Cloud Run, GCP Cloud Functions, Azure Functions, OCI Functions,
+for the observability primitives the trace integration arc
 already verifies + the span quality arc already validates.
 
 The strategic frame: Squadron previously covered three tiers
 (compute / database / kubernetes) across four clouds. Serverless
-is the fourth tier — the canonical "where did my trace go?"
+is the fourth tier, the canonical "where did my trace go?"
 surface where ephemeral execution makes trace-emission
 guarantees most fragile. Squadron now reads the cloud
 control plane's serverless surface, detects which functions /
@@ -17,14 +17,14 @@ services have observability enabled, and surfaces the
 last-seen-span signal per-function for reconciliation.
 
 For a first test, the walkthrough takes about 20 minutes
-total — most of it spent confirming your cloud connections
+total, most of it spent confirming your cloud connections
 have the additional read permissions for the serverless API.
 
 ## What this is good for
 
 - A team running Lambda heavily for event handlers and wanting
   to confirm every function actually emits OTel spans (X-Ray
-  alone doesn't satisfy Squadron — see §3 of the design doc).
+  alone doesn't satisfy Squadron, see §3 of the design doc).
 - A Cloud Run / Cloud Functions deployment with mixed OTel
   adoption: some services have the sidecar, some don't.
   Squadron lists both populations and flags the gaps.
@@ -51,13 +51,13 @@ intentionally narrow:
   Misconfigured concurrency mixing spans across requests is
   real but requires span-content inspection that doesn't
   fit slice 1's read-only discovery posture.
-- **Knative on bare-metal, Lambda on OCI** — non-native
+- **Knative on bare-metal, Lambda on OCI**, non-native
   serverless deployments are slice 3+. Slice 1 scans what
   each cloud's native control plane lists as serverless.
 - **Step Functions / Workflows / Logic Apps / OCI Resource
-  Manager** — orchestration tier. Slice 2+.
+  Manager**, orchestration tier. Slice 2+.
 - **EventBridge / Cloud Tasks / Azure Service Bus / OCI
-  Streams** — event source tier. Slice 2+.
+  Streams**, event source tier. Slice 2+.
 - **Per-language SDK depth.** Slice 1 ships the cloud-native
   generic auto-instrumentation paths. Per-language deep
   customization (Python asyncio, Node.js async_hooks, JVM
@@ -83,7 +83,7 @@ per-provider Discovery page.
 
 This catches first-time operators. A Lambda function with
 `tracing_config.mode = "Active"` shows X-Ray segments in the
-AWS X-Ray console — operators sometimes assume that satisfies
+AWS X-Ray console, operators sometimes assume that satisfies
 "telemetry is flowing." It does not satisfy Squadron's
 traceindex.
 
@@ -126,9 +126,9 @@ the PR; the operator reviews and merges or declines.
 
 ### AWS Lambda
 
-- **`lambda-xray-active`** — `aws_lambda_function tracing_config { mode = "Active" }`
-- **`lambda-otel-layer`** — `aws_lambda_function layers = [...existing, "arn:aws:lambda:<region>:901920570463:layer:aws-otel-{lang}-{ver}"]`
-- **`lambda-otel-wrapper`** — `aws_lambda_function environment { variables { AWS_LAMBDA_EXEC_WRAPPER = "/opt/otel-instrument" } }`
+- **`lambda-xray-active`**, `aws_lambda_function tracing_config { mode = "Active" }`
+- **`lambda-otel-layer`**, `aws_lambda_function layers = [...existing, "arn:aws:lambda:<region>:901920570463:layer:aws-otel-{lang}-{ver}"]`
+- **`lambda-otel-wrapper`**, `aws_lambda_function environment { variables { AWS_LAMBDA_EXEC_WRAPPER = "/opt/otel-instrument" } }`
 
 The ADOT layer ARN format embeds region (e.g.
 `arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-25-0:1`).
@@ -138,39 +138,39 @@ latest available version on review.
 
 ### GCP Cloud Run
 
-- **`cloudrun-trace-enable`** — `google_cloud_run_service metadata { annotations = { "run.googleapis.com/trace" = "true" } }`
-- **`cloudrun-otel-sidecar`** — adds a containers block with
+- **`cloudrun-trace-enable`**, `google_cloud_run_service metadata { annotations = { "run.googleapis.com/trace" = "true" } }`
+- **`cloudrun-otel-sidecar`**, adds a containers block with
   name = "otel-collector" pointing at the upstream collector
   image.
-- **`cloudrun-otel-export-endpoint`** — adds
+- **`cloudrun-otel-export-endpoint`**, adds
   `env { name = "OTEL_EXPORTER_OTLP_ENDPOINT" value = "http://localhost:4318" }`
   on the user's container pointing at the sidecar.
 
 ### GCP Cloud Functions
 
-- **`cloudfunc-trace-enable`** — `google_cloudfunctions_function environment_variables { GOOGLE_CLOUD_TRACE = "true" }`
-- **`cloudfunc-otel-layer`** — same block adding
+- **`cloudfunc-trace-enable`**, `google_cloudfunctions_function environment_variables { GOOGLE_CLOUD_TRACE = "true" }`
+- **`cloudfunc-otel-layer`**, same block adding
   `OTEL_INSTRUMENTATION_AUTO_ENABLED = "true"`.
 
 The supported runtimes for Cloud Functions OTel auto-instrumentation:
 `python310`+, `nodejs18`+, `java17`+, `go121`+. Functions on
 older runtimes get a `cloudfunc-trace-enable` recommendation
-but NOT a `cloudfunc-otel-layer` — the proposer respects the
+but NOT a `cloudfunc-otel-layer`, the proposer respects the
 runtime constraint.
 
 ### Azure Functions
 
-- **`azfunc-appinsights-enable`** —
+- **`azfunc-appinsights-enable`**,
   `azurerm_linux_function_app app_settings = { APPLICATIONINSIGHTS_CONNECTION_STRING = "..." }`
-- **`azfunc-otel-distro`** — same app_settings block adding
+- **`azfunc-otel-distro`**, same app_settings block adding
   `OTEL_DOTNET_AUTO_HOME` for .NET function apps OR
   `OTEL_PYTHON_DISTRO` for Python function apps. The proposer
   picks based on the function's runtime.
 
 ### OCI Functions
 
-- **`ocifunc-apm-enable`** — `oci_functions_function config = { OCI_APM_ENABLED = "true" }`
-- **`ocifunc-otel-distro`** — same config block adding
+- **`ocifunc-apm-enable`**, `oci_functions_function config = { OCI_APM_ENABLED = "true" }`
+- **`ocifunc-otel-distro`**, same config block adding
   `OTEL_DISTRO = "auto"`.
 
 ## The Serverless Inventory sub-tab
@@ -197,7 +197,7 @@ The Serverless table shows:
 Implementation note: only DiscoveryAWS uses inventory
 *sections* today; GCP/Azure/OCI added the Serverless tab via
 Radix Tabs (4th sub-tab). The QualityDot column ships on AWS
-only in slice 1 — GCP/Azure/OCI pages don't render the dot
+only in slice 1, GCP/Azure/OCI pages don't render the dot
 component elsewhere yet, so adding it on Serverless alone
 would be inconsistent. Slice 2 unifies the column across
 all 4 providers.
@@ -215,7 +215,7 @@ card.
 ### Trace coverage endpoint extension
 
 `GET /api/v1/discovery/trace_coverage` per-provider response
-gains a `serverless_pct` field — % of inventoried serverless
+gains a `serverless_pct` field, % of inventoried serverless
 functions that have emitted a span in the last 24h.
 
 The TRACE COVERAGE dashboard panel chip breakdown now reads:
@@ -248,7 +248,7 @@ provider's audit scope. SIEM consumers can filter on:
 recommendation_kind ~= "^(lambda-|cloudrun-|cloudfunc-|azfunc-|ocifunc-)"
 ```
 
-## Workflow — first serverless scan
+## Workflow, first serverless scan
 
 1. Open the per-provider Discovery page (e.g.
    `/discovery/aws`). Note your existing AWS connection.
@@ -256,7 +256,7 @@ recommendation_kind ~= "^(lambda-|cloudrun-|cloudfunc-|azfunc-|ocifunc-)"
    need to upgrade the IAM policy to include the new
    serverless action: `lambda:ListFunctions`. The in-product
    IAM upgrade path (#590) shows the diff.
-3. Click "Run scan" — the default tier list now includes
+3. Click "Run scan", the default tier list now includes
    `serverless`. The scan walks Lambda functions in addition
    to compute / db / k8s.
 4. Click the Serverless Inventory sub-tab. Each function row
@@ -271,7 +271,7 @@ recommendation_kind ~= "^(lambda-|cloudrun-|cloudfunc-|azfunc-|ocifunc-)"
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new event
+Slice 1 reuses the existing audit event types, no new event
 constants. The discovery scan emits the existing
 `discovery.{provider}.scan_completed` event with the
 `serverless_count` field now included in the payload.
@@ -283,21 +283,21 @@ The recommendation lifecycle (`recommendation.created`,
 ## Troubleshooting
 
 - **Lambda functions don't appear in the Serverless sub-tab.**
-  Check the IAM policy — `lambda:ListFunctions` is required.
+  Check the IAM policy, `lambda:ListFunctions` is required.
   The in-product IAM upgrade documentation shows the action
   to add. If the policy is correct but functions still don't
-  appear, check the scan audit for `partial_reason` —
+  appear, check the scan audit for `partial_reason`,
   Lambda's API may have rate-limited the scan, in which case
   the next scan should pick up the remaining functions.
 - **A function with X-Ray active shows `last_seen_at = null`.**
-  This is expected — see the X-Ray-without-ADOT caveat above.
+  This is expected, see the X-Ray-without-ADOT caveat above.
   Merge the `lambda-otel-layer` recommendation.
 - **Cloud Run scanner reports `has_otel_distro = false` but
   I have the sidecar.** Slice 1 detects the sidecar by
   container name prefix (`otel-*`). If your sidecar is named
   differently (e.g. `obs-agent`, `telemetry-relay`), the
   scanner misses it. The `cloudrun-otel-sidecar`
-  recommendation that fires is a false positive — decline it
+  recommendation that fires is a false positive, decline it
   and the verdict learning loop records the decline. Slice 2
   ships a configurable matcher list.
 - **Cloud Functions runtime field is empty for an older
@@ -309,11 +309,11 @@ The recommendation lifecycle (`recommendation.created`,
   settings sometimes don't read back immediately after a
   config change. Re-scan after waiting 60s for Azure to
   propagate. If the issue persists, check the function app's
-  authentication — the scanner may have hit an older
+  authentication, the scanner may have hit an older
   configuration revision.
 - **OCI function with APM enabled shows
   `has_trace_axis = false`.** The config map value comparison
-  is case-sensitive — `"true"` matches, `"True"` or `"TRUE"`
+  is case-sensitive, `"true"` matches, `"True"` or `"TRUE"`
   doesn't. Slice 2 may relax this. For now, normalize the
   value in your Terraform to lowercase `"true"`.
 
@@ -325,7 +325,7 @@ Per §13 of the design doc:
   correlation.
 - Concurrent execution analysis on Cloud Run / Cloud Functions.
 - Per-language SDK customization (Python asyncio, Node.js
-  async_hooks, JVM agent variants, .NET profiler).
+  async_hooks, JVM agent variants.NET profiler).
 - Knative-on-bare-metal / non-native serverless patterns.
 - Step Functions / Workflows / Logic Apps orchestration tier.
 - EventBridge / Cloud Tasks / Service Bus / Streams event
@@ -348,7 +348,7 @@ After serverless slice 1, Squadron's positioning reads:
 Four clouds. Four tiers. Four verbs. One control plane.
 Seventeen scanner surfaces (4 clouds × 3 prior tiers + 5
 serverless surfaces). Serverless is the canonical "where
-did my trace go?" surface — the trace integration arc + span
+did my trace go?" surface, the trace integration arc + span
 quality arc together close the loop the slice promises:
 Squadron sees what your cloud control plane lists as
 serverless, verifies whether OTel spans actually arrive from
@@ -357,15 +357,15 @@ primitive on.
 
 ## Cross-references
 
-- [Serverless tier slice 1 design doc](./proposals/serverless-tier-slice1.md) —
+- [Serverless tier slice 1 design doc](./proposals/serverless-tier-slice1.md),
   the locked spec this runbook operationalizes.
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   the trace integration arc this composes with.
-- [Span quality — operator guide](./span-quality-operator-guide.md) —
+- [Span quality, operator guide](./span-quality-operator-guide.md),
   the span quality arc that validates the spans Squadron
   receives.
-- [Database tier slice 2](./proposals/database-tier-slice2.md) —
+- [Database tier slice 2](./proposals/database-tier-slice2.md),
   the prior tier-expansion arc this mirrors structurally.
-- [Kubernetes tier slice 2](./proposals/kubernetes-tier-slice2.md) —
+- [Kubernetes tier slice 2](./proposals/kubernetes-tier-slice2.md),
   same pattern, prior tier.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.

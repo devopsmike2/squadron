@@ -1,4 +1,4 @@
-# Span quality slice 1 — detect misconfigured spans
+# Span quality slice 1, detect misconfigured spans
 
 **Status:** design doc, locked for slice 1 implementation. Builds
 directly on trace integration slice 2 (v0.89.79 through
@@ -14,7 +14,7 @@ kinds that draft Terraform PRs for the SDK-not-deployed case.
 ## 1. Problem
 
 Trace integration slice 2 ships recommendations that ALWAYS
-target case (a) — SDK not deployed. The reasoning text on every
+target case (a), SDK not deployed. The reasoning text on every
 `trace-emission-*` recommendation explicitly tells the
 operator: "if your case is actually (b) exporter misconfigured
 or (c) attribute mismatch, decline the PR and the verdict
@@ -24,13 +24,13 @@ That's fine signal flow but it's not great UX. Two failure
 modes Squadron could detect directly from the span content
 get deferred to operator review:
 
-- Case (b) — **Exporter misconfigured.** The SDK is deployed
+- Case (b), **Exporter misconfigured.** The SDK is deployed
   and running, but spans are arriving with broken context
   propagation (parent_span_id values that don't resolve to
   any span in the same trace), or with sampling rates that
   drop most traffic, or with batch sizes that drop spans on
   shutdown.
-- Case (c) — **Attribute mismatch.** Spans are arriving, but
+- Case (c), **Attribute mismatch.** Spans are arriving, but
   with resource attributes that don't match Squadron's
   expectation. Common pathologies:
   - `host.name=localhost` (the SDK never ran a host detector,
@@ -48,7 +48,7 @@ surfaces them on a new SPAN QUALITY panel on the Discovery
 dashboard. Slice 1 also drafts 3 new recommendation kinds that
 turn the most common pathologies into proposer-drafted IaC PRs.
 
-This is not a new substrate — span content is already passing
+This is not a new substrate, span content is already passing
 through the OTLP receivers. Slice 1 is read-only on top of the
 existing traceindex hot path.
 
@@ -100,7 +100,7 @@ The detection is windowed: a small in-memory LRU map from
 incoming span, the receiver looks up the parent_span_id; if
 not present after the window expires, the span is counted as
 orphan. The counter increments per-resource (keyed the same
-way traceindex keys observations — by `cloud.resource_id` /
+way traceindex keys observations, by `cloud.resource_id` /
 `host.id+account` / etc.).
 
 The orphan counter is exposed via a new
@@ -148,7 +148,7 @@ one of the placeholder values for that attribute.
 
 A resource with > 5% of its spans matching a placeholder in
 the last hour fires a `span-quality-attribute-mismatch`
-recommendation. The 5% threshold is intentionally low — even
+recommendation. The 5% threshold is intentionally low, even
 small fractions of placeholders indicate the SDK is doing
 something wrong.
 
@@ -209,7 +209,7 @@ Per-kind reasoning template + Terraform pattern:
 this resource in the last hour with parent_span_id values
 that don't resolve to any span in the same trace. The most
 common cause is broken context propagation across an HTTP or
-queue boundary — the calling service emitted a span, but the
+queue boundary, the calling service emitted a span, but the
 called service's library didn't read the W3C traceparent
 header. This Terraform PR enables the cloud-native context
 propagator on the resource's SDK config."
@@ -412,30 +412,30 @@ chunks 2-4.
 
 ## 10. Acceptance tests
 
-1. **Orphan span detection — span with unknown parent.** Feed
+1. **Orphan span detection, span with unknown parent.** Feed
    a span with parent_span_id=X where no span_id=X was
    previously observed. Wait 5min. Assert: orphan count
    increments.
-2. **Orphan span detection — span with known parent.** Feed
+2. **Orphan span detection, span with known parent.** Feed
    parent first, then child within 5min. Assert: orphan count
    does NOT increment.
-3. **Missing attrs — compute span without service.name.**
+3. **Missing attrs, compute span without service.name.**
    Feed a compute span omitting service.name. Assert:
    missing_attr count increments.
-4. **Missing attrs — compute span with all required.** Feed
+4. **Missing attrs, compute span with all required.** Feed
    a compute span with all §3.2 attributes. Assert: count
    does NOT increment.
-5. **Attribute mismatch — host.name=localhost.** Feed a span
+5. **Attribute mismatch, host.name=localhost.** Feed a span
    with host.name=localhost. Assert: attr_mismatch
    increments.
-6. **Attribute mismatch — host.name=actual-hostname.** Feed
+6. **Attribute mismatch, host.name=actual-hostname.** Feed
    a span with host.name=ip-10-0-1-23. Assert: count does
    NOT increment.
-7. **Recommendation fires at threshold — 11% orphan.** Seed
+7. **Recommendation fires at threshold, 11% orphan.** Seed
    the counter such that orphan_pct=11. Run discovery
    proposer. Assert: span-quality-orphan-trace recommendation
    emitted.
-8. **Recommendation does NOT fire below threshold — 9%
+8. **Recommendation does NOT fire below threshold, 9%
    orphan.** Same as 7 but orphan_pct=9. Assert: no
    recommendation.
 9. **Rolling window resets per-resource.** Seed counter,
@@ -520,7 +520,7 @@ After this arc, the universal claim:
 
 Four verbs. One control plane. Span quality slice 1 closes
 the loop slice 2 left half-open: cases (b) and (c) are no
-longer "decline and tell us why" — they're "Squadron detects
+longer "decline and tell us why", they're "Squadron detects
 it, Squadron drafts the PR." The Tuesday LinkedIn drumbeat
 narrative compounds another iteration: "Squadron used to tell
 you what to enable. Now it tells you whether your spans are

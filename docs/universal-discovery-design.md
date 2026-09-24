@@ -1,4 +1,4 @@
-# Universal discovery — design
+# Universal discovery, design
 
 Last revised: drafting against v0.84.0 + post-thesis decisions.
 
@@ -47,7 +47,7 @@ implementation is sliced incrementally on top.
 9. **Multi-tenancy: held.** Single-tenant in OSS. Tenant
    isolation arrives when the managed offering is real.
 10. **Connector workflows are foolproof or release-blocked.**
-    See the "Connector workflow design" section below — the
+    See the "Connector workflow design" section below, the
     eleven principles are non-negotiable.
 
 This is the architecture document for Squadron's universal discovery
@@ -60,11 +60,11 @@ When a code change fights this design, the change either restructures
 to fit or the design doc gets updated with a written rationale.
 
 Companion reading:
-- `docs/thesis.md` — the strategic foundation. The "we do not" list
+- `docs/thesis.md`, the strategic foundation. The "we do not" list
   there is load-bearing for every choice here.
-- `docs/ai-features.md` — the existing proposer architecture this
+- `docs/ai-features.md`, the existing proposer architecture this
   reuses.
-- `docs/proposer-bench.md` — the calibration discipline pattern this
+- `docs/proposer-bench.md`, the calibration discipline pattern this
   inherits.
 
 ## Slice 1 scope contract
@@ -75,7 +75,7 @@ so scope creep is visible and refusable.
 **In scope:**
 - Connect ONE AWS account via IAM assume-role
 - Scan EC2 instances and Lambda functions in ONE region per scan
-- Read-only discovery — `ec2:Describe*`, `lambda:List*`,
+- Read-only discovery, `ec2:Describe*`, `lambda:List*`,
   `lambda:GetFunction*`. No write actions in the trust policy.
 - Persist inventory to a new `inventory_aws` store
 - Emit AI recommendations as Terraform snippets per step
@@ -85,17 +85,17 @@ so scope creep is visible and refusable.
 **Explicitly out of scope for slice 1:**
 - Multi-account connections (single account at MVP; slice 3)
 - Multi-region per scan (single region at MVP; slice 3)
-- Other AWS service types — RDS (slice 2, shipped v0.87), S3 + ALB
-  (slice 3a, shipped v0.88.0 — paired because ALB access logs target
+- Other AWS service types, RDS (slice 2, shipped v0.87), S3 + ALB
+  (slice 3a, shipped v0.88.0, paired because ALB access logs target
   S3 buckets, so the proposer's cross-reference value of recommending
   an ALB enable logs to a bucket Squadron already sees in the
   inventory justified the paired ship), EKS (slice 3b, planned
-  v0.89.0 — ships standalone because of the cluster-shape snapshot,
+  v0.89.0, ships standalone because of the cluster-shape snapshot,
   the composite instrumented rule, and the dedicated LinkedIn
   narrative beat), ECS / Fargate (later slice, parked)
 - GCP, Azure, on-prem (slice 4, 5, 6)
-- Multi-format IaC — CDK, Pulumi, CloudFormation (slice 7)
-- Remediation posture — anything where Squadron has write permissions
+- Multi-format IaC, CDK, Pulumi, CloudFormation (slice 7)
+- Remediation posture, anything where Squadron has write permissions
   to the customer's cloud (post-slice-6, behind Compliance Pack).
   Specifically: Squadron does NOT execute `rds:ModifyDBInstance`
   even though slice 2 RDS recommendations propose enabling PI / EM;
@@ -164,8 +164,8 @@ and stored in Squadron's encrypted credential substrate (see below).
 
 The `ExternalId` condition is non-negotiable. Without it, the
 customer's trust policy is vulnerable to the
-[confused deputy problem](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html)
-— another Squadron customer could potentially assume into this
+[confused deputy problem](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html),
+another Squadron customer could potentially assume into this
 role if they discovered the role ARN. The `ExternalId` is the
 shared secret that proves the assume-role request originated from
 the specific Squadron deployment the customer authorized.
@@ -234,12 +234,12 @@ escalate to write actions.
 Slice 2's `rds:DescribeDBInstances` returns the per-instance
 Performance Insights flag and the Enhanced Monitoring interval that
 drive the proposer's RDS recommendations. The proposer surfaces
-ENABLEMENT recommendations as plan steps — Terraform that calls
+ENABLEMENT recommendations as plan steps, Terraform that calls
 `aws_db_instance.performance_insights_enabled = true` /
 `aws_db_instance.monitoring_interval = 60`. **Squadron does NOT
 execute the `rds:ModifyDBInstance` call**; the operator runs the
 Terraform through their own IaC pipeline. The discovery role's
-permissions policy never grants `rds:ModifyDBInstance` — the
+permissions policy never grants `rds:ModifyDBInstance`, the
 read-only invariant holds.
 
 Slice 3a's S3 actions return per-bucket Server Access Logging state
@@ -249,7 +249,7 @@ configuration (`s3:GetBucketRequestPayment`). `s3:ListAllMyBuckets`
 returns BUCKET NAMES (metadata, not contents). No action in the
 slice 3a policy returns object data, object metadata, ACL entries,
 or any data inside a bucket. The proposer surfaces enablement
-recommendations as plan steps — Terraform that calls
+recommendations as plan steps, Terraform that calls
 `aws_s3_bucket_logging.target_bucket` / `target_prefix` with an
 operator-chosen bucket. **Squadron does NOT execute
 `s3:PutBucketLogging`**.
@@ -259,9 +259,9 @@ Slice 3a's ELBv2 actions return per-LB type / scheme
 attribute (`elasticloadbalancing:DescribeLoadBalancerAttributes`),
 and per-LB tags (`elasticloadbalancing:DescribeTags`). The
 `access_logs.s3.bucket` attribute is operator-chosen CONFIG, not
-the log contents — Squadron never reads the actual access-log
+the log contents, Squadron never reads the actual access-log
 files. The proposer surfaces enablement recommendations as plan
-steps — Terraform that calls `aws_lb.access_logs.bucket` /
+steps, Terraform that calls `aws_lb.access_logs.bucket` /
 `enabled = true` with an operator-chosen target bucket (preferring
 an existing instrumented bucket from the same scan when possible,
 per the ALB→S3 cross-reference rule documented in the proposer
@@ -285,24 +285,24 @@ Slice 3b's EKS actions return cluster metadata only:
 `eks:ListClusters` returns cluster NAMES (one identifier per
 cluster, no contents); `eks:DescribeCluster` returns the
 control-plane logging config + Kubernetes version + status + ARN
-+ tags + endpoint URL (the URL is metadata, not access — Squadron
++ tags + endpoint URL (the URL is metadata, not access, Squadron
 never connects to the K8s API); `eks:ListAddons` returns add-on
 NAMES; `eks:DescribeAddon` returns add-on version + status;
 `eks:ListNodegroups` returns nodegroup NAMES (informational count
-only — Squadron does not read instance details, pod state, or any
+only, Squadron does not read instance details, pod state, or any
 in-cluster runtime data). The discovery role does NOT get
 Kubernetes RBAC, does NOT use `aws-auth` ConfigMap mappings, does
 NOT call any K8s API, and does NOT see pod data, K8s secrets, or
 any in-cluster runtime state. The threat surface is strictly the
 AWS-side cluster metadata. The proposer surfaces enablement
-recommendations as plan steps — Terraform that calls
+recommendations as plan steps, Terraform that calls
 `aws_eks_cluster.enabled_cluster_log_types` and
 `aws_eks_addon`. **Squadron does NOT execute `eks:UpdateCluster`
 or `eks:CreateAddon`**.
 
 Slice 4's DynamoDB actions return per-table metadata only:
 `dynamodb:ListTables` returns table NAMES (one identifier per
-table, no contents — the API has no separate "list with detail"
+table, no contents, the API has no separate "list with detail"
 endpoint); `dynamodb:DescribeTable` returns the table ARN +
 status + billing mode + key schema + provisioned-throughput
 metadata; `dynamodb:DescribeContributorInsights` returns the
@@ -314,14 +314,14 @@ top-key / throttled-key data those rules surface in CloudWatch);
 action in the slice 4 policy returns item data, the table's
 attribute values, the Streams contents, or any data stored
 inside DynamoDB. The proposer surfaces enablement
-recommendations as plan steps — Terraform that calls
+recommendations as plan steps, Terraform that calls
 `aws_dynamodb_contributor_insights` (the Terraform AWS provider
 supports this resource since 4.x). **Squadron does NOT execute
 `dynamodb:UpdateContributorInsights`**.
 
 The slice 4 instrumented rule for DynamoDB is SINGLE-axis:
 ContributorInsightsStatus == "ENABLED". This is a deliberate
-downgrade from EKS slice 3b's composite rule — DynamoDB has
+downgrade from EKS slice 3b's composite rule, DynamoDB has
 exactly one cloud-API-visible observability signal per table
 that the operator must explicitly enable. Pretending the rule
 is composite would either invent a fake second axis or pull in
@@ -332,10 +332,10 @@ actually observability.
 resource-side Contributor Insights; Squadron does not detect
 SDK-side OpenTelemetry or X-Ray instrumentation in your
 application code. If your DynamoDB SDK is OTel-wrapped on the
-client side, Squadron will report the table as uninstrumented —
+client side, Squadron will report the table as uninstrumented,
 this is a known limitation of cloud-API-only scanning.** This is
 the same honest-tradeoff posture the design doc takes for the
-slice 1 EC2 / Lambda OTel detection (also resource-side only —
+slice 1 EC2 / Lambda OTel detection (also resource-side only,
 Squadron sees Lambda layers and EC2 tags but not in-application
 SDK instrumentation). An operator whose DynamoDB SDK is already
 OTel-wrapped can decline the recommendation and re-tag the
@@ -357,7 +357,7 @@ Insights state lives in
 `settings[name=containerInsights].value`), task / service
 counts, registered-container-instance count, status, ARN, and
 tags (when the SETTINGS / STATISTICS / TAGS include hints are
-honored — Squadron passes all three on every DescribeClusters
+honored, Squadron passes all three on every DescribeClusters
 call); `ecs:ListTagsForResource` is the defensive fallback when
 DescribeClusters did not surface tags. No action in the slice 5
 policy returns task-definition contents, container image
@@ -367,7 +367,7 @@ in-task application data. Squadron never reads CloudWatch Logs
 groups, never calls `ecs:DescribeTaskDefinition`, and never
 calls `ecs:DescribeTasks` / `ecs:DescribeServices`. The threat
 surface is strictly the AWS-side cluster metadata. The proposer
-surfaces enablement recommendations as plan steps — Terraform
+surfaces enablement recommendations as plan steps, Terraform
 that calls `aws_ecs_cluster` with the `setting` block setting
 `containerInsights = "enabled"`. **Squadron does NOT execute
 `ecs:UpdateClusterSettings`**.
@@ -375,28 +375,28 @@ that calls `aws_ecs_cluster` with the `setting` block setting
 The slice 5 instrumented rule for ECS clusters is SINGLE-axis:
 the cluster's `settings[name=containerInsights].value` must be
 `"enabled"` (case-insensitive). Same posture as the slice 4
-DynamoDB single-axis downgrade — cluster-level Container
+DynamoDB single-axis downgrade, cluster-level Container
 Insights is the one strong cloud-API-visible observability
 signal for ECS, so the rule is honest single-axis rather than
 inventing fake axes from task-definition sidecars or FireLens
 routing.
 
 Both Fargate and EC2 launch types are covered by the same
-per-cluster rule — Container Insights is a per-cluster setting,
+per-cluster rule, Container Insights is a per-cluster setting,
 not a per-launch-type one.
 
 **Task-definition-level limitation (honestly stated): Squadron
 detects cluster-level CloudWatch Container Insights. Squadron
-does not detect task-definition-level instrumentation — X-Ray
+does not detect task-definition-level instrumentation, X-Ray
 daemon sidecars, ADOT collector sidecars, or FireLens log
 routing in your task definitions. If your task defs include
 those sidecars but the cluster does not have Container Insights
-enabled, Squadron will report the cluster as uninstrumented —
+enabled, Squadron will report the cluster as uninstrumented,
 this is a known limitation of cluster-level scanning. A future
 slice can extend the rule to inspect task definitions if
 operators request it.** This is the same honest-tradeoff posture
 the design doc takes for the slice 1 EC2 / Lambda OTel detection
-(also resource-side only — Squadron sees Lambda layers and EC2
+(also resource-side only, Squadron sees Lambda layers and EC2
 tags but not in-application SDK instrumentation) and for the
 slice 4 DynamoDB SDK-side limitation. An operator whose task
 defs already include those sidecars can decline the
@@ -446,7 +446,7 @@ them, the contribution is rejected.
 The encrypted-at-rest substrate Squadron uses to store:
 - The customer's AWS role ARN (not a secret per se, but identifies
   the target account)
-- The deployment's ExternalId (effectively a secret — must not leak)
+- The deployment's ExternalId (effectively a secret, must not leak)
 - Per-account metadata (display name, region, opt-in service types)
 
 What it stores: Trust-policy metadata. Not credentials.
@@ -460,7 +460,7 @@ deployments where the operator controls both the Squadron host and
 the secrets key, this is sufficient. For managed deployments (out
 of slice 1 scope), the substrate plugs into the customer's
 preferred secrets manager (Vault, AWS Secrets Manager, GCP Secret
-Manager) — that's its own design decision (see "Decision points"
+Manager), that's its own design decision (see "Decision points"
 below).
 
 Audit log: every read of the substrate (when Squadron assumes a
@@ -483,7 +483,7 @@ Compliance Pack adds enterprise hardening:
 
 The hooks for these hardenings exist in the OSS code; the
 implementations live in the Compliance Pack private repo. The OSS
-edition is fully functional without the Compliance Pack — the
+edition is fully functional without the Compliance Pack, the
 hardenings are policy enforcement, not features.
 
 ## Threat model
@@ -503,7 +503,7 @@ role connected is the discovery role:
   region(s) of the connected account
 - Read instance metadata, security group references, tags
 - Read Lambda function configuration including environment variable
-  KEYS (not values — `lambda:GetFunctionConfiguration` returns
+  KEYS (not values, `lambda:GetFunctionConfiguration` returns
   variable names but redacts values for sensitive content)
 - Read RDS DB instance metadata: engine + version, instance class,
   Performance Insights / Enhanced Monitoring enablement flags, tags.
@@ -517,11 +517,11 @@ role connected is the discovery role:
   configuration (`s3:GetBucketRequestPayment`). The slice 3a S3
   permissions never return object data, object metadata, ACL
   entries, or any data inside a bucket.
-- Read load balancer metadata (name, ARN, type, scheme, region —
+- Read load balancer metadata (name, ARN, type, scheme, region,
   `elasticloadbalancing:DescribeLoadBalancers`), per-LB attributes
   including the access-logs configuration
   (`elasticloadbalancing:DescribeLoadBalancerAttributes` returns
-  the operator-chosen target S3 bucket for the access logs — this
+  the operator-chosen target S3 bucket for the access logs, this
   is CONFIG, not the log contents themselves), and per-LB tags
   (`elasticloadbalancing:DescribeTags`).
 
@@ -529,11 +529,11 @@ role connected is the discovery role:
 - Modify anything in the customer's AWS account (no
   `rds:ModifyDBInstance`, no `s3:PutBucketLogging`, no
   `elasticloadbalancing:ModifyLoadBalancerAttributes`, no
-  `ec2:RunInstances`, no `lambda:UpdateFunctionConfiguration` —
+  `ec2:RunInstances`, no `lambda:UpdateFunctionConfiguration`,
   the policy is strictly Describe/List/Get)
 - Read EC2 instance memory, disk, or network traffic
 - Read Lambda function code (would require `lambda:GetFunction` to
-  fetch the deployment package — included in slice 1 because the
+  fetch the deployment package, included in slice 1 because the
   proposer reasons about runtime versions, but the package itself
   is not exfiltrated; only the package URL is read)
 - Escalate to other AWS accounts (ExternalId is deployment-specific)
@@ -541,10 +541,10 @@ role connected is the discovery role:
 - Persist access beyond the STS token TTL
 
 **The honest data leakage:**
-- Resource names (instance tags, function names) — can be
+- Resource names (instance tags, function names), can be
   PHI/PII in regulated environments (e.g., "patient-records-db")
-- Resource counts and shapes — competitive intelligence value
-- Region presence — reveals customer's geographic footprint
+- Resource counts and shapes, competitive intelligence value
+- Region presence, reveals customer's geographic footprint
 
 **Mitigation:** Compliance Pack adds (1) HSM-backed substrate so a
 host compromise doesn't leak the ExternalId, and (2) per-region
@@ -572,7 +572,7 @@ process level. This is enforced by:
 
 - Separate credential substrates (separate encryption keys)
 - Separate code modules (`internal/discovery/aws` vs
-  `internal/remediation/aws` — different packages, no import
+  `internal/remediation/aws`, different packages, no import
   arrow between them)
 - Separate audit categories (`discovery.*` vs `remediation.*`)
 - Separate API surfaces (`/api/v1/discovery/*` vs
@@ -645,7 +645,7 @@ infrastructure-as-code workflow" and gets approved.
 ## The CloudDiscoveryContext shape
 
 Mirrors `ai.CostSpikeContext`. The proposer pattern carries with
-minimal new code — same shape, new entry point. Provider-typed
+minimal new code, same shape, new entry point. Provider-typed
 at the top level; resources are category-typed underneath so the
 same prompt reasons about compute / function / database
 regardless of which cloud emitted them.
@@ -659,7 +659,7 @@ type CloudDiscoveryContext struct {
     AccountID     string    // account (aws), project (gcp), subscription (azure), site (onprem)
     Regions       []string  // multi-region native; slice 1 emits one entry
 
-    // Inventory snapshot — category-typed, not provider-typed
+    // Inventory snapshot, category-typed, not provider-typed
     ComputeInstances []ComputeInstanceSnapshot   // ec2 / gce / azure vm / vmware vm
     FunctionRuntimes []FunctionRuntimeSnapshot   // lambda / cloud functions / azure functions
     Databases        []DatabaseSnapshot          // rds / cloud sql / azure sql  (slice 2+)
@@ -694,7 +694,7 @@ type FunctionRuntimeSnapshot struct {
 
 Provider-specific scanners populate the snapshot structs from their
 native APIs. The proposer prompt reasons about categories, not
-provider-specific resource types — same plan-kind output, IaC
+provider-specific resource types, same plan-kind output, IaC
 snippets targeted to the source provider.
 
 The proposer takes this and emits a `ProposalResult` with `Kind:
@@ -729,7 +729,7 @@ IaC snippet panels. Each recommendation step has:
 - Title and reasoning (mirrors the proposer playground v0.84
   result-panel patterns)
 - Affected resources (linked from the inventory tab)
-- IaC snippet — Terraform code block with syntax highlighting
+- IaC snippet, Terraform code block with syntax highlighting
 - "Copy snippet" button
 - "Mark as applied" button (records audit event; does NOT execute)
 - "Reject" button (records audit event; recommendation is dismissed)
@@ -742,7 +742,7 @@ in the proposer playground. The operator's mental model is
 
 The connector setup experience is the first ten minutes an SRE
 spends with Squadron. Get it wrong and the universal-observation
-thesis stalls at the front door — no amount of downstream feature
+thesis stalls at the front door, no amount of downstream feature
 quality recovers a bad first impression. Get it right and the
 LinkedIn drumbeat writes itself.
 
@@ -751,7 +751,7 @@ step-by-step with one action per step, copy-to-clipboard for every
 Squadron-generated value, real-time validation, a test-before-commit
 step, and humanized error messages naming recovery actions. If a
 user can misconfigure a connector by following the wizard, the
-wizard is broken — treat it as a release-blocking bug, not a polish
+wizard is broken, treat it as a release-blocking bug, not a polish
 issue.
 
 ### The eleven principles
@@ -759,12 +759,12 @@ issue.
 1. **Guided multi-step wizard with explicit progress.** One action
    per step. Visual progress bar. User always knows where they are.
 2. **Copy-to-clipboard for every Squadron-generated value.** Trust
-   policy JSON, ExternalId, role ARN format — all one-click.
+   policy JSON, ExternalId, role ARN format, all one-click.
 3. **Pre-filled values wherever possible.** The trust policy JSON
    ships with the customer's AWS account ID and the deployment's
    ExternalId already inserted. User pastes verbatim.
 4. **Inline deep-links to the exact provider console page.** Not
-   the IAM home — the role creation flow itself.
+   the IAM home, the role creation flow itself.
 5. **Real-time client-side validation.** Role ARN format, region
    list, ExternalId length. Errors appear inline, not after submit.
 6. **Test-before-commit step.** A "Validate connection" button runs
@@ -774,11 +774,11 @@ issue.
    provider error code. `AccessDenied` becomes "the role exists but
    doesn't trust Squadron's principal; did you paste the trust
    policy from Step 2?" Each error names the recoverable step.
-8. **Idempotent retry at any step.** Fix one field and retry — no
+8. **Idempotent retry at any step.** Fix one field and retry, no
    duplicate records, no orphaned half-configured connections.
 9. **"What just happened" confirmation panel.** Concrete evidence
-   on success: "Trust policy validated. EC2 test scan succeeded —
-   47 instances visible in us-east-1. Lambda test scan succeeded —
+   on success: "Trust policy validated. EC2 test scan succeeded,
+   47 instances visible in us-east-1. Lambda test scan succeeded,
    12 functions visible." Shareable with the security reviewer.
 10. **Inline "why this step?" docs panel.** Every step has a
     collapsible explainer answering the question the SRE's security
@@ -860,7 +860,7 @@ type HumanizedError struct {
 
 AWS errors live in `internal/discovery/aws/errors.go`. GCP in
 `internal/discovery/gcp/errors.go`. The UI renders the humanized
-error verbatim — no client-side error parsing.
+error verbatim, no client-side error parsing.
 
 ### Release-blocking criteria
 
@@ -875,23 +875,23 @@ A connector ships only when:
   evidence the operator can show to their security reviewer.
 
 If any of these fails, the slice does not ship. Polish later is
-not an option — connector setup is the first impression, and first
+not an option, connector setup is the first impression, and first
 impressions don't get a v0.X.1 hotfix to fix them.
 
 ## Audit trail invariants
 
 New event types:
 
-- `discovery.account_connected` — operator approves a new AWS account
-- `discovery.role_assumed` — Squadron successfully assumed the role
+- `discovery.account_connected`, operator approves a new AWS account
+- `discovery.role_assumed`, Squadron successfully assumed the role
   for a scan (creds remain in memory)
-- `discovery.scan_started` — scan begins
-- `discovery.scan_completed` — scan ends, includes resource counts
-- `discovery.scan_failed` — scan failed, includes error
-- `discovery.recommendation_generated` — AI emitted a recommendation
-- `discovery.recommendation_marked_applied` — operator says they ran
+- `discovery.scan_started`, scan begins
+- `discovery.scan_completed`, scan ends, includes resource counts
+- `discovery.scan_failed`, scan failed, includes error
+- `discovery.recommendation_generated`, AI emitted a recommendation
+- `discovery.recommendation_marked_applied`, operator says they ran
   the IaC
-- `discovery.recommendation_rejected` — operator dismissed a
+- `discovery.recommendation_rejected`, operator dismissed a
   recommendation
 
 Each has a humanized rendering in v0.81.4's timeline humanizer.
@@ -913,7 +913,7 @@ POST /api/v1/discovery/aws/scan-all
 
 No request body. The endpoint iterates every `CloudConnection`
 where `provider=aws` in the credstore and invokes the existing
-per-account scan path once per connection — bounded by the
+per-account scan path once per connection, bounded by the
 concurrency knob so an org with 30 connected accounts doesn't
 trip AWS-account-wide STS throttles.
 
@@ -938,7 +938,7 @@ one UUID at the top of the fan-out and passes it to every
 per-account scan. The per-account `discovery.aws.scan_started`
 and `discovery.aws.scan_completed` events carry this value as
 the `scan_all_id` payload field (omitted when single-account
-endpoint is called directly — the field is conditional, not
+endpoint is called directly, the field is conditional, not
 unconditional, so existing per-account event consumers see no
 shape change unless they opt in). One aggregate event,
 `discovery.aws.scan_all_completed`, fires after the fan-out
@@ -959,7 +959,7 @@ failure.
 
 - **Squadron crashes mid-scan.** `scan_started` exists with no
   `scan_completed`. UI shows "scan in progress" until a 10-minute
-  timeout, then "scan failed (squadron unavailable)" — auto-retry
+  timeout, then "scan failed (squadron unavailable)", auto-retry
   scheduled.
 - **Customer revokes the IAM role mid-scan.** AWS calls fail with
   `AccessDenied`. Scan emits `scan_failed` audit event with the
@@ -979,7 +979,7 @@ failure.
 - **Recommendation rejected.** Nothing happens beyond the audit
   event. Re-running the scan may re-generate the same
   recommendation (the proposer doesn't remember rejections in
-  slice 1 — that's Arc B / proposer memory loop).
+  slice 1, that's Arc B / proposer memory loop).
 - **Recommendation accepted but customer's IaC pipeline fails.**
   Squadron has no way to know directly. Operator can un-mark the
   recommendation; the audit event becomes
@@ -997,8 +997,8 @@ independently useful and ships separately.
 | 1 | AWS, EC2 + Lambda, read-only, Terraform | "Squadron tells me which Lambdas I'm not observing" |
 | 2 | AWS adds RDS, S3, ALB | "Same, for managed services" |
 | 3 | AWS multi-region + multi-account | "Org-wide AWS coverage" |
-| 4 | GCP — Compute Engine + Cloud Functions | "Multi-cloud" |
-| 5 | Azure — VMs + Functions | "Three clouds" |
+| 4 | GCP, Compute Engine + Cloud Functions | "Multi-cloud" |
+| 5 | Azure, VMs + Functions | "Three clouds" |
 | 6 | On-prem connector | "Hybrid" |
 | 7 | Multi-format IaC: CDK, Pulumi, CloudFormation | "Vendor flexibility" |
 | 8 | Remediation posture (opt-in, Compliance Pack gated) | "Squadron also applies" |
@@ -1036,14 +1036,14 @@ its own arc. Three slices:
   by `<resource_type>.<name>`, applies the patch (one of five
   locked ops: `scalar_set` / `list_append_dedupe` /
   `nested_block_set` / `nested_block_find_or_create` /
-  `map_merge`), and ships a clean drop-in PR — no
+  `map_merge`), and ships a clean drop-in PR, no
   `[needs manual merge]` title prefix, no
   `squadron/needs-manual-merge` label. Any merge precondition
   failure (parse error, unknown resource address, etc.) falls
   back cleanly to the slice-1.5 append-only behavior so the
   operator never loses a recommendation. The detection of
   `lifecycle.ignore_changes` on a patched attribute is a
-  warn-only signal in the PR body — the file change is real but
+  warn-only signal in the PR body, the file change is real but
   `terraform apply` no-ops the corresponding attribute.
 
 ## Decision points
@@ -1076,7 +1076,7 @@ Terraform + CDK + Pulumi from day one?
 *Design proposal:* Terraform-only. Highest adoption in the target
 audience (SREs at series B-D). CDK and Pulumi come in slice 7. The
 proposer prompt is designed so the IaC format is a parameter, not
-a structural assumption — adding formats later is additive.
+a structural assumption, adding formats later is additive.
 
 These three defaults all bias toward "ship slice 1 sooner; expand
 later." If the strategic call is "we want to land enterprise from
@@ -1087,7 +1087,7 @@ day one," all three defaults flip and slice 1 takes ~2x longer.
 Section for the orchestrator (Stream 1 main session) to use when
 fanning out work to sub-agents.
 
-**Stream 2A — Credential substrate (post-design-doc, sub-agent).**
+**Stream 2A, Credential substrate (post-design-doc, sub-agent).**
 - New package `internal/discovery/credstore`
 - Encrypted-at-rest storage for AWS role ARN + ExternalId
 - Audit-event emission on every read
@@ -1095,7 +1095,7 @@ fanning out work to sub-agents.
 - Spec: this design section "Credential substrate" + "Decision
   point #1 default"
 
-**Stream 2B — Recommendation surface generalization (post-design-doc,
+**Stream 2B, Recommendation surface generalization (post-design-doc,
 sub-agent).**
 - Extend `internal/services/recommendations.go` to accept an
   optional `IaCSnippet` field per recommendation step
@@ -1104,16 +1104,16 @@ sub-agent).**
 - Tests for the new field's marshal/unmarshal
 - Spec: this design section "Recommendation surface"
 
-**Stream 2C — AWS SDK integration scaffold (post-credential
+**Stream 2C, AWS SDK integration scaffold (post-credential
 substrate, sub-agent).**
 - New package `internal/discovery/aws`
 - `sts:AssumeRole` wrapper that uses the credential substrate
 - EC2 + Lambda Describe/List wrappers with pagination + backoff
-- No proposer logic yet — just inventory fetch
+- No proposer logic yet, just inventory fetch
 - Spec: this design section "STS token lifecycle" +
   "Permissions policy (slice 1)"
 
-**Stream 2D — Connector wizard framework (post-2C validation
+**Stream 2D, Connector wizard framework (post-2C validation
 endpoint, sub-agent).**
 - New package `internal/discovery/wizard` with the declarative
   `ConnectorWizard` + `WizardStep` types
@@ -1126,10 +1126,10 @@ endpoint, sub-agent).**
   error-path scenario
 - Spec: this design section "Connector workflow design"
 
-**Stream 3 — Independent track (any time, sub-agents).**
+**Stream 3, Independent track (any time, sub-agents).**
 - LinkedIn Phase 1 drafting (docs only, no code)
 - LinkedIn Phase 1 posts 4-8 (Bench, Playground, Audit timeline,
-  Two-person rule, E2E sweep recap — agent surfaced these candidates)
+  Two-person rule, E2E sweep recap, agent surfaced these candidates)
 - #547 agent citations investigation
 - #554 server-side plans-list endpoint
 - Canonical demo scenario sync (update v0.79 prompt example,
@@ -1156,7 +1156,7 @@ Until this document is rewritten, the following are non-negotiable:
   or `iam:*` actions. Equivalent restrictions apply to GCP
   (no `*.update`, `*.delete`, `*.create`) and Azure (no
   write actions).
-- The ExternalId condition (or provider equivalent — GCP
+- The ExternalId condition (or provider equivalent, GCP
   workload identity audience, Azure principal scope) on the
   trust relationship is required. Connections without it are
   rejected at connect time.

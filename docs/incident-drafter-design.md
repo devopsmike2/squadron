@@ -122,7 +122,7 @@ The drafter pulls from sources Squadron already has:
   the proposer's drafted rollout (RolloutInput, including the
     proposal_reasoning and evidence_refs from SQ-1.1)
   the audit events for that rollout (rollout.created,
-    rollout.approved, rollout.stage_advanced, ...)
+    rollout.approved, rollout.stage_advanced...)
   the action request (parameters, phase, dispatched_at)
   the action result (status, started_at, completed_at, stdout)
   the audit events for that action (action.dispatched,

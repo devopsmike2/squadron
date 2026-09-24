@@ -37,7 +37,7 @@ operator can trust to merge blind:
 
 ## Token-cost note
 
-Reading the repo is **free** (GitHub API + local HCL parsing — no AI). Cost
+Reading the repo is **free** (GitHub API + local HCL parsing, no AI). Cost
 accrues only for repo content placed *into* the proposer prompt. Reference: the
 PR #2 run used ~29.7K input / 2.6K output tokens. A 100-300 line placement file
 adds ~1-4K input tokens (fractions of a cent/run at Sonnet pricing). Mitigations:
@@ -47,7 +47,7 @@ size with a byte budget.
 
 ## Slices
 
-### Slice 1 — Comment-exclusion option (this PR)
+### Slice 1, Comment-exclusion option (this PR)
 Add `exclude_comments` to the open-PR request. A `stripHCLComments` helper using
 `hclwrite` token scanning (drops comment tokens; safe against `#`/`//` inside
 string literals; handles `#`, `//`, `/* */`). When set: suppress the
@@ -60,20 +60,20 @@ committed `.tf` (both Squadron's banner and the model's inline explanations),
 yielding clean code. The rationale still lives in the PR body, which is never
 stripped.
 
-### Slice 2 — Repo context to proposer
+### Slice 2, Repo context to proposer
 Fetch the placement file(s) via the connection PAT, parse HCL locally to extract
 resource addresses/names, declared variables, provider blocks, and any existing
 OTel/observability config. Inject a token-bounded summary + the relevant file
 into the discovery proposer prompt so it generates against real config and can
 emit accurate `hcl_patch` addresses.
 
-### Slice 3 — terraform validate gate
+### Slice 3, terraform validate gate
 Run `terraform init -backend=false && terraform validate` (ideally a plan) on the
-PR branch — sandboxed in Squadron or as a required GitHub Action check. Surface
+PR branch, sandboxed in Squadron or as a required GitHub Action check. Surface
 the result as the check-run signal; mark the PR ready only on pass; annotate
 failures so the operator sees *why*.
 
-### Slice 4 — HCL-aware merge coverage + dedup
+### Slice 4, HCL-aware merge coverage + dedup
 Resolve real resource addresses from the parsed file; extend HCL-aware merge
 beyond the 5 current patch_existing kinds; dedup so Squadron never re-adds
 instrumentation already present.

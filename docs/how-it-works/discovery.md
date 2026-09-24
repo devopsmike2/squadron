@@ -10,9 +10,9 @@ unified view of gaps and drift across every connected account.
 
 Inputs and outputs, nothing in between:
 
-- **Input** — the read-only view of your cloud accounts, plus your Terraform as
+- **Input**, the read-only view of your cloud accounts, plus your Terraform as
   the intended state.
-- **Output** — an inventory with two things surfaced on top of it:
+- **Output**, an inventory with two things surfaced on top of it:
   *instrumentation gaps* (resources with missing or faulty telemetry) and
   *drift* (live infrastructure that no longer matches your code).
 
@@ -53,7 +53,7 @@ flowchart LR
 
 !!! note "Coverage varies by cloud and signal"
     What Squadron can detect depends on which cloud and which signal you're
-    looking at — some detections need native metrics, and some need an add-on
+    looking at, some detections need native metrics, and some need an add-on
     you enable. For the authoritative, per-cloud statement of what works where,
     see [Detection coverage & requirements](../detection-coverage.md).
 

@@ -9,7 +9,7 @@ results, and the regression bar future PRs are evaluated against.
 ## TL;DR
 
 50 of 50 iterations classified cleanly. Zero "refused incorrectly"
-outcomes — every refusal was either an LLM refusal (correct for the
+outcomes, every refusal was either an LLM refusal (correct for the
 seed), a bridge level refusal (correct for the input shape), or an
 opted in LLM / dispatcher error. Latency p99 across the whole corpus
 was 153µs on the engineer's laptop. Heap delta across the whole run
@@ -196,7 +196,7 @@ ANTHROPIC_API_KEY=sk-ant-... go test -tags=live -v \
     -run TestProposerStress_Live ./internal/proposer/...
 ```
 
-## Corpus growth — v0.79 + v0.80
+## Corpus growth, v0.79 + v0.80
 
 The corpus grew twice after v0.58 shipped:
 
@@ -206,7 +206,7 @@ The corpus grew twice after v0.58 shipped:
   `plan_progressive_attribute_drop`, `plan_sample_rate_ratchet`,
   `plan_pipeline_split_for_high_volume`,
   `plan_dual_write_then_cut_destination`. Each is a multi step
-  rollout sequence with inline config snippets — the v0.78 plan
+  rollout sequence with inline config snippets, the v0.78 plan
   create path materializes them server side.
 - **v0.80 (+10 seeds, 54 → 64):** two new categories.
   `adversarial_extended` (5) covers cases where the model has to
@@ -223,7 +223,7 @@ The corpus grew twice after v0.58 shipped:
   dispatch paths exercise.
 
 Live mode (v0.81+ work) is where the new categories actually earn
-their keep — the fake LLM dispatches cleanly but doesn't score
+their keep, the fake LLM dispatches cleanly but doesn't score
 prompt reasoning quality. Real Anthropic against these seeds
 catches prompt regressions on the decision framework + hallucination
 suppression as the prompt evolves.

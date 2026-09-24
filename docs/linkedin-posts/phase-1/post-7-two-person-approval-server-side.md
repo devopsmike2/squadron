@@ -4,7 +4,7 @@
 **Tag at publish:** v0.81.3
 **Visual evidence:** A screenshot of the in-app Approve dialog on
 the Rollouts page at the v0.81.3 tag, captured during a real
-attempt where the requester and approver are the same actor — the
+attempt where the requester and approver are the same actor, the
 dialog shows the inline red 409 error message returned by the
 server when `requested_by == approved_by`. Two surfaces in one
 frame: the Radix dialog UX and the rule made concrete.
@@ -26,7 +26,7 @@ by `operator-alice`.
 
 The rule predates the AI proposer by 18 versions. It exists
 because the same separation makes sense for human-to-human
-change management — a developer who proposes a config change to
+change management, a developer who proposes a config change to
 their own production fleet shouldn't be the one who clicks
 Approve on it. The AI is just one more requester whose work
 flows through the same gate.
@@ -37,7 +37,7 @@ string. Native browser prompts block the JS event loop, look
 nothing like the rest of the Radix-styled UI, can be disabled by
 browser settings (silent failure mode), and cannot be driven by
 Playwright or Chrome-MCP automation. The third failure mode bit
-during an E2E sweep — the test harness clicked Approve, the
+during an E2E sweep, the test harness clicked Approve, the
 prompt opened invisibly, and the renderer wedged waiting for a
 dismissal that no automation could send.
 
@@ -51,7 +51,7 @@ the same dialog. No page reload. No silent failure. The mechanism
 is visible.
 
 Server-side enforcement plus a dialog that surfaces the
-enforcement message is the right shape for a guard rail — the
+enforcement message is the right shape for a guard rail, the
 operator finds out at the point of action, not three steps later
 in an audit review.
 
@@ -65,7 +65,7 @@ Repo at the v0.81.3 tag.
 - **Surface:** The Rollouts page on the live deployment at the
   v0.81.3 tag. Trigger the screenshot scenario by attempting to
   approve a rollout where the same actor is recorded as
-  `requested_by` — for the demo, use the bundled
+  `requested_by`, for the demo, use the bundled
   `squadron-demo-seed` operator account on a rollout that
   account proposed.
 - **What must be visible in the crop:** the in-app Radix Approve
@@ -78,7 +78,7 @@ Repo at the v0.81.3 tag.
 - **Annotations:** one small marker on the inline red error box
   with the caption "v0.61 rule, surfaced at the point of
   action", added in post-processing. The dialog itself does not
-  need additional annotation — the UX speaks.
+  need additional annotation, the UX speaks.
 - **Crop:** include the route in the browser address bar
   (`/rollouts`). Drop OS chrome.
 
@@ -87,9 +87,9 @@ Repo at the v0.81.3 tag.
 Resists **the competitor takedown** from linkedin-rollout.md
 "Anti-patterns to avoid". The pull is to frame this as "unlike
 $competitor, Squadron actually enforces approval rules." The post
-instead names the structural mechanism — a server-side check, a
+instead names the structural mechanism, a server-side check, a
 specific HTTP status code, a Radix dialog that surfaces the
-enforcement at the point of action — and trusts the reader to
+enforcement at the point of action, and trusts the reader to
 notice that this is not how most tools handle it. The framing is
 structural ("the AI is one more requester whose work flows
 through the same gate"), not competitive. The rule's age (shipped

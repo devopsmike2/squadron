@@ -1,11 +1,11 @@
 # Squadron documentation
 
 Welcome to the Squadron docs. Squadron is an open-source control plane for
-OpenTelemetry fleets — agent management over OpAMP, a built-in telemetry
+OpenTelemetry fleets, agent management over OpAMP, a built-in telemetry
 backend, safe staged rollouts, and an operator UI, all in a single self-hosted
 binary.
 
-> **Detection-metric accuracy (v0.89.229–232).** Some historical slice entries
+> **Detection-metric accuracy (v0.89.229-232).** Some historical slice entries
 > below describe metrics that were later corrected (AWS SQS poison-rate reverted;
 > Azure Function metrics need Application Insights; OCI metric names fixed; OCI
 > cold-start is now duration-regression). For the authoritative, current status
@@ -18,25 +18,25 @@ jump straight to that page.
 
 ## Table of contents
 
-- [Getting started](./getting-started.md) — install Squadron, connect your
+- [Getting started](./getting-started.md), install Squadron, connect your
   first collector, push your first config.
-- [Deployment guide](./deployment.md) — the four supported deployment
+- [Deployment guide](./deployment.md), the four supported deployment
   shapes (single VM, Docker Compose, Kubernetes, OpenShift), the
   required and optional components, and the production checklist.
-- [Concepts](./concepts.md) — agents, groups, configs, and the drift model.
-- [Rollouts](./rollouts.md) — safe staged deploys with canary selection,
+- [Concepts](./concepts.md), agents, groups, configs, and the drift model.
+- [Rollouts](./rollouts.md), safe staged deploys with canary selection,
   auto-abort criteria, preview/diff, and the recipe + template cookbook.
-- [Action runner steps in plans](./action-runner-steps-in-plans.md) —
+- [Action runner steps in plans](./action-runner-steps-in-plans.md),
   v0.89.14 operator runbook for embedding signed runner verbs (restart
   a service, rotate a secret, drain a pool member) as steps inside a
   multi-step plan, with shared approval and audit.
-- [Proposer learning loop](./proposer-learning-loop.md) — v0.89.17 +
+- [Proposer learning loop](./proposer-learning-loop.md), v0.89.17 +
   v0.89.18 operator runbook for the per-group feedback loop that
   feeds prior approved/rejected AI proposals back into the next
   proposal as in-context few-shot examples. Covers the per-group
   toggle, the selection policy, the audit field, and the worked
   example.
-- [Discovery proposer feedback loop](./discovery-proposer-learning.md) —
+- [Discovery proposer feedback loop](./discovery-proposer-learning.md),
   v0.89.28 operator runbook for the discovery-side feedback loop
   (#643 slice 1) that reads `recommendation.pr_merged` events and
   stops the proposer from re-proposing recommendations the
@@ -44,7 +44,7 @@ jump straight to that page.
   the connection × account × region scope tuple, the new
   `discovery_proposal.created` audit event, the branch-name
   backward-compat note, and the worked example.
-- [GCP discovery — first-time setup](./discovery-gcp-first-time-setup.md) —
+- [GCP discovery, first-time setup](./discovery-gcp-first-time-setup.md),
   v0.89.45 through v0.89.49 operator runbook for the GCP arc
   (design at [proposals/gcp-discovery-slice1.md](./proposals/gcp-discovery-slice1.md)).
   First non-AWS discovery arc. Adds GCP Compute Engine scanning
@@ -52,11 +52,11 @@ jump straight to that page.
   Mirrors AWS slice 1's wizard / inventory / recommendations
   structure at `/discovery/gcp`. Same proposer feedback loop,
   same Checks API integration, same Don't propose this again
-  affordance — just on a different cloud. **Slice 1 SHIPPED in
+  affordance, just on a different cloud. **Slice 1 SHIPPED in
   v0.89.49.** Squadron's positioning shifts to "the universal
   observability control plane that scans your AWS AND GCP
   fleets."
-- [Azure discovery — first-time setup](./discovery-azure-first-time-setup.md) —
+- [Azure discovery, first-time setup](./discovery-azure-first-time-setup.md),
   v0.89.50 through v0.89.54 operator runbook for the Azure arc
   (design at [proposals/azure-discovery-slice1.md](./proposals/azure-discovery-slice1.md)).
   Second non-AWS discovery arc. Adds Azure Virtual Machines
@@ -67,8 +67,8 @@ jump straight to that page.
   same Don't propose this again affordance. **Slice 1 SHIPPED
   in v0.89.54.** Squadron's positioning is now "the universal
   observability control plane that scans AWS, GCP, AND Azure
-  fleets" — the three-cloud claim is concretely defensible.
-- [OCI (Oracle Cloud) discovery — first-time setup](./discovery-oci-first-time-setup.md) —
+  fleets", the three-cloud claim is concretely defensible.
+- [OCI (Oracle Cloud) discovery, first-time setup](./discovery-oci-first-time-setup.md),
   v0.89.55 through v0.89.59 operator runbook for the OCI arc
   (design at [proposals/oci-discovery-slice1.md](./proposals/oci-discovery-slice1.md)).
   Third non-AWS discovery arc. Adds Oracle Cloud Compute
@@ -78,10 +78,10 @@ jump straight to that page.
   at `/discovery/oci`. Same proposer feedback loop, same Checks
   API integration, same Don't propose this again affordance.
   **Slice 1 SHIPPED in v0.89.59.** Squadron now covers 4
-  clouds — the strongest universal observability claim a
+  clouds, the strongest universal observability claim a
   single OSS control plane can defensibly support: "scans
   AWS, GCP, Azure, AND Oracle Cloud fleets."
-- [Unified Discovery dashboard](./proposals/unified-discovery-dashboard-slice1.md) —
+- [Unified Discovery dashboard](./proposals/unified-discovery-dashboard-slice1.md),
   v0.89.60 through v0.89.62 design + delivery for the
   cross-cloud aggregate view at `/discovery`. Aggregates
   connection / instance / coverage counts + the 10 most
@@ -96,13 +96,13 @@ jump straight to that page.
   **Slice 1 SHIPPED in v0.89.62.** The four-cloud claim is
   now operator-visible in one glance; per-provider pages
   remain for wizards / deep-dive surfaces.
-- [GitHub webhook listener](./webhook-listener.md) — v0.89.23 +
+- [GitHub webhook listener](./webhook-listener.md), v0.89.23 +
   v0.89.24 operator runbook for the PR-merged webhook that closes
   the recommendation lifecycle in audit. Covers generating the
   secret, configuring the GitHub repo webhook, verifying the
   loop end-to-end, reading the audit signal, and the
   troubleshooting matrix.
-- [Event source tier — operator guide](./event-source-tier-operator-guide.md) —
+- [Event source tier, operator guide](./event-source-tier-operator-guide.md),
   v0.89.99 through v0.89.107 operator runbook for the event
   source tier arc (slice 1 design at
   [proposals/event-source-tier-slice1.md](./proposals/event-source-tier-slice1.md),
@@ -122,7 +122,7 @@ jump straight to that page.
   `event_source_pct`; dashboard TRACE COVERAGE chip
   breakdown adds EVT column. **Slice 2
   (v0.89.104-v0.89.107)** ships per-message propagation
-  detection — does the source's CONFIG preserve trace
+  detection, does the source's CONFIG preserve trace
   context end-to-end? 5 new recommendation kinds reusing
   the slice 1 webhook prefixes:
   `eventbridge-rule-preserves-trace`,
@@ -137,7 +137,7 @@ jump straight to that page.
   widens AWS event source coverage by adding SNS as a
   second AWS surface alongside EventBridge. 2 new
   recommendation kinds: sns-subscriptions-attach
-  (audit-only — fires on orphan topics with zero confirmed
+  (audit-only, fires on orphan topics with zero confirmed
   subscriptions) + sns-delivery-logging-enable (Terraform:
   per-protocol IAM delivery feedback role attachment).
   1 new webhook prefix: sns- → aws. ScanEventSources
@@ -151,7 +151,7 @@ jump straight to that page.
   recommendation kinds: sqs-redrive-policy-enable (Terraform:
   DLQ + redrive policy targeting it) catches the single most
   common AWS messaging production failure; +
-  sqs-deadletter-queue-attach (audit-only — fires on queues
+  sqs-deadletter-queue-attach (audit-only, fires on queues
   with dangling DLQ ARN references). 1 new webhook prefix:
   sqs- → aws. ScanEventSources dispatcher extends from
   two-way (EB+SNS) to three-way (EB+SNS+SQS) with partial-scan
@@ -159,7 +159,7 @@ jump straight to that page.
   **Slice 5 (v0.89.143-v0.89.145)** continues the widening pass
   by adding GCP Cloud Tasks as the second GCP event source
   surface. Architectural parity with the slice 4 AWS SQS
-  pattern — both serve guaranteed delivery with retry
+  pattern, both serve guaranteed delivery with retry
   semantics. 2 new recommendation kinds:
   cloudtasks-retry-policy-enable (Terraform: retry_config block
   with exponential backoff) catches the canonical Cloud Tasks
@@ -181,19 +181,19 @@ jump straight to that page.
   categories) mirrors the Service Bus pattern; +
   eventgrid-cloudevent-schema-enforce (Terraform: input_schema
   = "CloudEventSchemaV1_0") is a BREAKING CHANGE for existing
-  subscribers — the reasoning text emphasizes coordination
+  subscribers, the reasoning text emphasizes coordination
   before merging. 1 new webhook prefix: eventgrid- → azure.
   ScanEventSources dispatcher extends from one-way (Service Bus
   only) to two-way (Service Bus + Event Grid) with partial-scan
   posture both directions. NO IAM extension (existing Reader
   role covers). **Slice 6 SHIPPED in v0.89.148.** AWS: 3 event
-  source surfaces; GCP: 2; Azure: 2; OCI: 1 — slice 7 closes
+  source surfaces; GCP: 2; Azure: 2; OCI: 1, slice 7 closes
   the widening pass at 3-2-2-2.
   **Slice 7 (v0.89.149-v0.89.151)** closes the cross-cloud
   event source widening pass by adding OCI Notification
   Service (ONS) as the second OCI event source surface
-  alongside Streaming. ONS serves the pub/sub fan-out pattern
-  — the analog of AWS SNS + GCP Pub/Sub on the alert
+  alongside Streaming. ONS serves the pub/sub fan-out pattern,
+the analog of AWS SNS + GCP Pub/Sub on the alert
   distribution side. 1 new recommendation kind:
   `ons-logging-enable` (Terraform: `oci_logging_log` routing
   topic delivery events to a log group, parameterized via
@@ -207,7 +207,7 @@ jump straight to that page.
   policy template; existing slice 1 Logging read policy covers
   the per-topic detection call. **Slice 7 SHIPPED in
   v0.89.151.** The cross-cloud widening pass closes at
-  **3-2-2-2 / 9 surfaces across 4 clouds** — AWS 3
+  **3-2-2-2 / 9 surfaces across 4 clouds**, AWS 3
   (EventBridge + SNS + SQS), GCP 2 (Pub/Sub + Cloud Tasks),
   Azure 2 (Service Bus + Event Grid), OCI 2 (Streaming +
   Notification Service).
@@ -215,17 +215,17 @@ jump straight to that page.
   with AWS on the event source tier by adding Event Hubs as
   the third Azure surface alongside Service Bus and Event
   Grid. Event Hubs is Azure's big-data event ingestion
-  primitive — a partitioned log analogous to Kafka,
+  primitive, a partitioned log analogous to Kafka,
   distinct from the messaging primitives. 2 new
   recommendation kinds: `eventhubs-diagnostics-enable`
   (Terraform: `azurerm_monitor_diagnostic_setting` with the
-  5 Event Hubs log categories — ArchiveLogs,
+  5 Event Hubs log categories, ArchiveLogs,
   OperationalLogs, AutoScaleLogs, KafkaCoordinatorLogs,
   KafkaUserErrorLogs) mirrors the Service Bus + Event Grid
   diagnostic settings pattern; +
   `eventhubs-capture-enable` (Terraform: `azurerm_eventhub`
   with `capture_description` block enabling Capture on ONE
-  hub) is operator-prescriptive — the operator picks WHICH
+  hub) is operator-prescriptive, the operator picks WHICH
   hub to enable Capture on during PR review based on
   durability-critical streams. 1 new webhook prefix:
   `eventhubs-` → azure. `ScanEventSources` dispatcher
@@ -235,14 +235,14 @@ jump straight to that page.
   AWS three-way pattern. NO IAM extension beyond what slice
   1 + slice 6 already covered. **Slice 8 SHIPPED in
   v0.89.154.** Cross-cloud count after slice 8: **3-2-3-2 /
-  10 surfaces across 4 clouds** — Azure now matches AWS at
+  10 surfaces across 4 clouds**, Azure now matches AWS at
   3 surfaces.
   **Slice 9 (v0.89.155-v0.89.157)** brings OCI to parity
   with AWS + Azure on the event source tier by adding Queue
   Service as the third OCI surface alongside Streaming and
   Notification Service. OCI Queue Service is the
   transactional FIFO message queue primitive analogous to
-  AWS SQS — distinct from ONS pub/sub fan-out (one consumer
+  AWS SQS, distinct from ONS pub/sub fan-out (one consumer
   per message vs. many-consumer fan-out) and from Streaming
   partitioned log analytics intake. 1 new recommendation
   kind: `queues-logging-enable` (Terraform: `oci_logging_log`
@@ -259,17 +259,17 @@ jump straight to that page.
   to the OCI scanner policy template; existing slice 1
   Logging read policy covers the per-queue detection call.
   **Slice 9 SHIPPED in v0.89.157.** Cross-cloud count after
-  slice 9: **3-2-3-3 / 11 surfaces across 4 clouds** — only
+  slice 9: **3-2-3-3 / 11 surfaces across 4 clouds**, only
   GCP at 2 surfaces remains for slice 10+ to close the
   widening pass at 3-3-3-3 / 12 surfaces.
   **Slice 10 (v0.89.158-v0.89.160) CLOSES THE
   CROSS-CLOUD EVENT SOURCE WIDENING PASS** by adding GCP
   Pub/Sub Lite as the third GCP surface alongside Pub/Sub
   and Cloud Tasks. Pub/Sub Lite is GCP's partitioned-log
-  primitive — the structural analog of AWS Kinesis Data
+  primitive, the structural analog of AWS Kinesis Data
   Streams and Azure Event Hubs. Distinct from full Pub/Sub
   in that Lite trades managed routing + global delivery for
-  cost efficiency at high volume — operators self-manage
+  cost efficiency at high volume, operators self-manage
   partition capacity via reservations. Zone-pinned by
   design. 2 new recommendation kinds:
   `pubsublite-logging-enable` (Terraform:
@@ -280,7 +280,7 @@ jump straight to that page.
   creates a NEW `google_pubsub_lite_reservation` resource
   AND updates the topic's `reservation_config` reference)
   is the FIRST event source tier recommendation that
-  creates a billable resource — reasoning text emphasizes
+  creates a billable resource, reasoning text emphasizes
   the cost implication so PR reviewers see it explicitly;
   default sizing is conservative (4 publish + subscribe
   units) but operators MUST validate against ACTUAL peak
@@ -294,14 +294,14 @@ jump straight to that page.
   `pubsublite.reservations.list` added to the GCP scanner
   role. **Slice 10 SHIPPED in v0.89.160. THE CROSS-CLOUD
   EVENT SOURCE WIDENING PASS IS COMPLETE** at **3-3-3-3 /
-  12 surfaces across 4 clouds** — AWS 3 (EventBridge + SNS
+  12 surfaces across 4 clouds**, AWS 3 (EventBridge + SNS
   + SQS), GCP 3 (Pub/Sub + Cloud Tasks + Pub/Sub Lite),
   Azure 3 (Service Bus + Event Grid + Event Hubs), OCI 3
   (Streaming + Notification Service + Queue Service). Every
   cloud carries every primitive pattern (queue, pub/sub
   fan-out, partitioned-log intake). Future event source
   work shifts from per-cloud breadth (3-3-3-3 complete) to
-  per-axis depth — consumer lag detection, cross-surface
+  per-axis depth, consumer lag detection, cross-surface
   correlation, substrate-level cost modeling.
 
   **DLQ Configuration Analysis slice 1 (v0.89.162-v0.89.166)
@@ -327,7 +327,7 @@ jump straight to that page.
   ships the SECOND per-axis depth slice** with identical
   shape to DLQ slice 1 (4 chunks + design doc). Two
   detection rules: backlog depth ≥ 1000 + consumer
-  silence ≥ 300s (combined signal — both together is the
+  silence ≥ 300s (combined signal, both together is the
   firing condition). 6 recommendation kinds across all 4
   clouds; AWS SQS reads
   `ApproximateNumberOfMessages` +
@@ -338,11 +338,11 @@ jump straight to that page.
   queue list response, GCP Cloud Tasks reuses §3.1 honest
   framing, Azure Service Bus reuses §3.2 inherited scanner-
   coverage-gap. The honest-framing patterns are now applied
-  ACROSS two per-axis-depth slices — the per-axis-depth
+  ACROSS two per-axis-depth slices, the per-axis-depth
   horizon's predictable shape is established: AWS + OCI
   ship real detection; GCP + Azure ship honest framing.
   All recommendation kinds route via existing per-cloud
-  webhook prefixes — NO new prefix routing. NO new API
+  webhook prefixes, NO new prefix routing. NO new API
   calls, NO IAM extension, NO storage migration; additive
   Detail bag keys only preserve cold-start parity. Design
   doc at
@@ -369,11 +369,11 @@ jump straight to that page.
   substrate-metric-dependence honest framing because every
   per-queue poison rate needs a time-series metric delta the
   single-pass scanner does not query. §3.3 is therefore the
-  cleanest deferral to close — a future substrate
+  cleanest deferral to close, a future substrate
   MetricQuerier slice retires all four clouds at once
   (recommended next arc, mirroring the cold-start latency
   slice 1 -> slice 2 MetricQuerier build). All kinds route
-  via existing per-cloud webhook prefixes — NO new prefix
+  via existing per-cloud webhook prefixes, NO new prefix
   routing. NO new API calls, NO IAM extension, NO storage
   migration; additive Detail bag keys only preserve
   cold-start parity. Design doc at
@@ -432,7 +432,7 @@ jump straight to that page.
   NOT §3.2 (scanner-coverage-gap): the reading is
   namespace-aggregated across all queues/topics. Per-queue
   attribution (the `EntityName`-dimension per-queue walk) is
-  split into **chunk 3b** — real metric now, per-queue
+  split into **chunk 3b**, real metric now, per-queue
   attribution next, so neither release is stretched across both
   a metric path and a scanner extension. Same real-zero (`0`)
   versus absent (`-1`) contract. OCI Queue Service stays on
@@ -442,18 +442,18 @@ jump straight to that page.
   Same design doc
   ([proposals/poison-rate-substrate-slice4.md](./proposals/poison-rate-substrate-slice4.md)).
 
-  **Chunk 4 (v0.89.181) makes OCI Queue Service real — CLOSING
+  **Chunk 4 (v0.89.181) makes OCI Queue Service real, CLOSING
   the substrate arc.** Squadron reads each queue's dead-letter
   depth gauge (`MessagesInDlq`) via OCI Monitoring
   `summarizeMetricsData` and derives the rate as the `max-min`
   delta (net accumulation) over a trailing 1-hour window (the
   same gauge-delta shape as Azure). With this release every cloud
-  reads a real poison-rate metric — §3.3 substrate-metric-
+  reads a real poison-rate metric, §3.3 substrate-metric-
   dependence honest framing is fully retired (AWS DLQ
   `NumberOfMessagesSent` sum, GCP failed `task_attempt_count`
   sum, Azure per-queue `DeadletteredMessages` delta, OCI
   `MessagesInDlq` delta). Honest caveat: the exact OCI metric
-  name should be confirmed against OCI's Monitoring reference — a
+  name should be confirmed against OCI's Monitoring reference, a
   mismatch degrades SAFELY to the absent sentinel (`-1`), never
   false data. NO new IAM across the entire arc, NO new webhook
   prefixes; every chunk preserves cold-start parity. Design doc
@@ -465,8 +465,8 @@ jump straight to that page.
   §3.2) by reading the backlog metric from the same MetricQuerier
   substrate. **Chunk 1 (v0.89.182) makes the GCP Cloud Tasks backlog
   real:** Squadron reads `cloudtasks.googleapis.com/queue/depth` (a
-  gauge) via Cloud Monitoring with the `ALIGN_MAX` aligner — the
-  peak backlog over a trailing 1-hour window — and overwrites
+  gauge) via Cloud Monitoring with the `ALIGN_MAX` aligner, the
+  peak backlog over a trailing 1-hour window, and overwrites
   `lag_backlog_depth` + `lag_backlog_depth_high` (threshold 1000,
   matching AWS + OCI). The consumer-silence half stays honest-framed
   (no clean Cloud Tasks oldest-task-age metric). Azure Service Bus
@@ -478,13 +478,13 @@ jump straight to that page.
   **Cost-Correlation Substrate slice 6 (v0.89.183+)** begins the
   cost-correlation work under explicit read-only guardrails.
   **Chunk 1 (v0.89.183) ships the money-touching plumbing in
-  isolation** — a read-only `CostQuerier` interface, a `CostResult`
+  isolation**, a read-only `CostQuerier` interface, a `CostResult`
   shape (integer micro-USD money, never float), and a thread-safe
   `CostBudgetGovernor` that caps per-account spend on charged
   cost-reporting APIs at a default $1/30-day-window ceiling and
   rejects calls that would exceed it (`ErrCostBudgetExceeded`,
   treated as a graceful skip). NO per-cloud billing integration in
-  this chunk — per-cloud `QueryCost` bodies fan out from the
+  this chunk, per-cloud `QueryCost` bodies fan out from the
   substrate in later chunks, AWS Cost Explorer (~$0.01/call, the
   one surface that materially charges) first. The per-call-cost
   surface is documented upfront in the design doc; cost data will
@@ -494,7 +494,7 @@ jump straight to that page.
   [proposals/cost-correlation-substrate-slice6.md](./proposals/cost-correlation-substrate-slice6.md).
 
   **Chunk 2 (v0.89.184) ships the AWS Cost Explorer `QueryCost`
-  body** — the first per-cloud cost reader, and the one surface
+  body**, the first per-cloud cost reader, and the one surface
   that materially charges (~$0.01/call), so the surface that most
   exercises the governor. It reads `UnblendedCost` for a SERVICE
   dimension via `GetCostAndUsage`, gated through the
@@ -503,12 +503,12 @@ jump straight to that page.
   can escape spend accounting). Over-budget returns
   `ErrCostBudgetExceeded` as a graceful skip. Amounts are parsed
   to integer micro-USD (no float drift). It is NOT wired into any
-  scan in this chunk — no charged Cost Explorer request fires
+  scan in this chunk, no charged Cost Explorer request fires
   during a scan until the cost-correlation enrichment chunk
   enables it. Same design doc.
 
   **Chunk 3 (v0.89.185) ships the AWS SQS cost-correlation
-  enrichment** — joins SQS service cost onto DLQ-bearing queue
+  enrichment**, joins SQS service cost onto DLQ-bearing queue
   snapshots (`service_cost_monthly_micro_usd` + currency + a
   `service_cost_scope="service"` honest label) so a DLQ /
   poison-rate recommendation can carry "Amazon SQS is costing
@@ -519,7 +519,7 @@ jump straight to that page.
   otherwise). The proposer prompt enforces service-level,
   non-editorializing reporting. Same design doc.
 
-  **Chunk 4 (v0.89.186) adds the Azure Service Bus cost reader** —
+  **Chunk 4 (v0.89.186) adds the Azure Service Bus cost reader**,
   Azure Cost Management `/query` (free per call), governor-gated as
   the opt-in signal, reusing the Azure bearer-token ARM plumbing
   (no new SDK). One read-only POST per scan filtered to the Service
@@ -530,7 +530,7 @@ jump straight to that page.
   now cover AWS SQS + Azure Service Bus; GCP (BigQuery export,
   heavier) and OCI land later. Same design doc.
 
-  **Chunk 3b (v0.89.180) closes §3.2 for Azure — per-queue
+  **Chunk 3b (v0.89.180) closes §3.2 for Azure, per-queue
   attribution.** The `DeadletteredMessages` metric is split by
   the `EntityName` dimension (one Azure Monitor call,
   `$filter="EntityName eq '*'"`), so `poison_rate_per_hour` now
@@ -553,7 +553,7 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
-- [Orchestration tier — operator guide](./orchestration-tier-operator-guide.md) —
+- [Orchestration tier, operator guide](./orchestration-tier-operator-guide.md),
   v0.89.94 through v0.89.136 operator runbook for the
   orchestration tier arc. Slice 1 (design at
   [proposals/orchestration-tier-slice1.md](./proposals/orchestration-tier-slice1.md))
@@ -572,8 +572,8 @@ jump straight to that page.
   resmgr-logging-enable; 1 new webhook prefix: resmgr- → oci.
   **Slice 1 SHIPPED in v0.89.98. Slice 2 SHIPPED in
   v0.89.136.** Universal claim's orchestration tier is now
-  cleanly 4-cloud — no asterisks.
-- [Serverless tier — operator guide](./serverless-tier-operator-guide.md) —
+  cleanly 4-cloud, no asterisks.
+- [Serverless tier, operator guide](./serverless-tier-operator-guide.md),
   v0.89.89 through v0.89.93 operator runbook for the
   serverless tier slice 1 arc (design at
   [proposals/serverless-tier-slice1.md](./proposals/serverless-tier-slice1.md)).
@@ -596,7 +596,7 @@ jump straight to that page.
   verifies telemetry is actually flowing, validates the
   spans Squadron receives are healthy, AND drafts the IaC
   PRs that close the gaps it finds."
-- [Workload Health panel — operator guide](./workload-health-panel-operator-guide.md) —
+- [Workload Health panel, operator guide](./workload-health-panel-operator-guide.md),
   v0.89.131 through v0.89.133 operator runbook for the
   Workload Health dashboard panel arc (design at
   [proposals/workload-health-panel-slice1.md](./proposals/workload-health-panel-slice1.md)).
@@ -620,7 +620,7 @@ jump straight to that page.
   v0.89.133.** The dashboard's primary entrypoint now
   reads top-to-bottom: coverage → workload health →
   span quality.
-- [Error rate correlation — operator guide](./error-rate-correlation-operator-guide.md) —
+- [Error rate correlation, operator guide](./error-rate-correlation-operator-guide.md),
   v0.89.126 through v0.89.130 operator runbook for the error
   rate correlation slice 1 arc (design at
   [proposals/error-rate-correlation-slice1.md](./proposals/error-rate-correlation-slice1.md)).
@@ -637,7 +637,7 @@ jump straight to that page.
   Per-cloud error metrics: AWS `Errors`, GCP Cloud Run
   `request_count{5xx}` + Cloud Functions
   `execution_count{status!=ok}`, Azure `FunctionErrors`,
-  OCI `function_invocation_count{result=error}` — all reuse
+  OCI `function_invocation_count{result=error}`, all reuse
   existing cold-start IAM via the same `MetricQuerier`
   interface from v0.89.113. Storage v14 → v15 migration adds
   `error_rate_observation` table mirroring
@@ -655,7 +655,7 @@ jump straight to that page.
   the natural serverless health diagnostic suite. **Slice 1
   SHIPPED in v0.89.130.** Universal claim's MEASURES verb
   gains a third sub-diagnostic.
-- [Sampling rate analysis — operator guide](./sampling-rate-operator-guide.md) —
+- [Sampling rate analysis, operator guide](./sampling-rate-operator-guide.md),
   v0.89.121 through v0.89.125 operator runbook for the
   sampling rate analysis slice 1 arc (design at
   [proposals/sampling-rate-analysis-slice1.md](./proposals/sampling-rate-analysis-slice1.md)).
@@ -671,7 +671,7 @@ jump straight to that page.
   invocations >= 1000. Per-cloud invocation metrics: AWS
   `Invocations`, GCP Cloud Run `request_count` + Cloud
   Functions `execution_count`, Azure `FunctionInvocations`,
-  OCI `function_invocation_count` — all reuse the existing
+  OCI `function_invocation_count`, all reuse the existing
   cold-start IAM. 24h-window counter added to the Quality
   observer (parallel to slice 1's 1h window). New
   per-resource endpoint at `GET /api/v1/discovery/{provider}/inventory/serverless/{id}/sampling`
@@ -686,12 +686,12 @@ jump straight to that page.
   has 5 layers (event source primitive → event source
   config → W3C trace context → cold-start latency →
   sampling rate).
-- [**Detection coverage & requirements**](./detection-coverage.md) — honest
+- [**Detection coverage & requirements**](./detection-coverage.md), honest
   per-cloud matrix of what each metric-based detection (cold-start, error-rate,
   poison-rate) reads, requires, and whether it works on native metrics or needs
   Lambda Insights / Application Insights. **Read this before relying on a
   metric-based detection on AWS, Azure, or OCI.**
-- [Cold-start latency — operator guide](./cold-start-latency-operator-guide.md) —
+- [Cold-start latency, operator guide](./cold-start-latency-operator-guide.md),
   v0.89.112 through v0.89.120 operator runbook for the
   cold-start latency analysis arc. Slice 2 (design at
   [proposals/cold-start-latency-slice2.md](./proposals/cold-start-latency-slice2.md))
@@ -718,12 +718,12 @@ jump straight to that page.
   Functions), `WARMUP_DELAY` (OCI Functions). All 4
   DiscoveryX Serverless tables now show the Cold-start P95
   (24h) column with the same amber state. Per-cloud rate
-  limiters: GCP 60 RPM, Azure 12000 RPH, OCI 10 TPS — all
+  limiters: GCP 60 RPM, Azure 12000 RPH, OCI 10 TPS, all
   well under per-cloud quotas. Cost surface for the new 3
   clouds: essentially \$0 for typical fleets. **Slice 1
   SHIPPED in v0.89.116. Slice 2 SHIPPED in v0.89.120.**
   Universal claim's fifth verb drops the qualification
-  asterisk — MEASURES is now uniformly 4-cloud, matching
+  asterisk, MEASURES is now uniformly 4-cloud, matching
   the other four verbs. Slice 1 (design at
   [proposals/cold-start-latency-slice1.md](./proposals/cold-start-latency-slice1.md))
   introduced the `MetricQuerier` interface + AWS CloudWatch
@@ -734,7 +734,7 @@ jump straight to that page.
   + the proposer prompt + the AWS-side iacpicker for
   `aws_lambda_provisioned_concurrency_config` all shipped in
   slice 1.
-- [Span quality — operator guide](./span-quality-operator-guide.md) —
+- [Span quality, operator guide](./span-quality-operator-guide.md),
   v0.89.84 through v0.89.111 operator runbook for the span
   quality arc. Slice 1 (design at
   [proposals/span-quality-slice1.md](./proposals/span-quality-slice1.md))
@@ -757,17 +757,17 @@ jump straight to that page.
   reusing the slice 1 webhook prefix:
   `span-quality-traceparent-{missing,malformed}`. SPAN
   QUALITY panel grows from 3-column to 5-column grid; QualityDot
-  tooltip shows all 5 percentages. Honest denominators —
+  tooltip shows all 5 percentages. Honest denominators,
   malformed_pct uses spans_with_traceparent; missing-on-child
   uses child_spans. Per-span hot-path overhead measured at
   ~30ns marginal (under the 100ns budget). **Slice 1 SHIPPED
   in v0.89.88. Slice 2 SHIPPED in v0.89.111.** Universal
-  claim doesn't grow with slice 2 — it makes the existing
+  claim doesn't grow with slice 2, it makes the existing
   span quality claim more rigorous by completing the
   three-layer "where did my trace go?" diagnostic
   (event source primitive → event source config → W3C
   trace context).
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   v0.89.73 through v0.89.83 operator runbook for the trace
   integration arc. Slice 1 (design at
   [proposals/trace-integration-slice1.md](./proposals/trace-integration-slice1.md))
@@ -791,31 +791,31 @@ jump straight to that page.
   DATABASE, AND KUBERNETES for observability gaps, verifies
   telemetry is actually flowing, AND drafts the IaC PRs that
   close the gaps it finds."
-- [GitHub Checks API back-signal](./checks-api.md) — v0.89.42
+- [GitHub Checks API back-signal](./checks-api.md), v0.89.42
   through v0.89.44 operator runbook for the inverse of the
   webhook listener: Squadron writes check run state to
   Squadron-opened PRs so operators see "what Squadron is
   seeing" inside GitHub's PR review surface. Status lifecycle
   ties to existing webhook events (in_progress on PR open,
   success on merge, failure on close-without-merge, neutral on
-  operator exclude). **Slice 1 SHIPPED in v0.89.44** — covers
+  operator exclude). **Slice 1 SHIPPED in v0.89.44**, covers
   the PAT scope upgrade, verifying the loop end-to-end,
   reading the three new audit event types, and the
   troubleshooting matrix. Design doc is at
   [proposals/checks-api-back-signal.md](./proposals/checks-api-back-signal.md).
-- [Alerts](./alerts.md) — rule-based alerts on telemetry, fleet state, and
+- [Alerts](./alerts.md), rule-based alerts on telemetry, fleet state, and
   rollout health.
-- [Audit log](./audit-log.md) — every state change in Squadron is recorded.
+- [Audit log](./audit-log.md), every state change in Squadron is recorded.
   How to filter, what's in the payload, how to use it for post-mortems.
-- [Authentication](./auth.md) — opt-in Bearer-token auth, bootstrap
+- [Authentication](./auth.md), opt-in Bearer-token auth, bootstrap
   flow, token management, recovery path.
-- [Self-monitoring](./self-monitoring.md) — emit Squadron's own state
+- [Self-monitoring](./self-monitoring.md), emit Squadron's own state
   changes as OTel traces into your existing observability stack.
-- [squadronctl CLI](./squadronctl.md) — command-line client for
+- [squadronctl CLI](./squadronctl.md), command-line client for
   scripting Squadron from CI pipelines and terminals.
-- [Operating Squadron](./operating.md) — environment variables, the
+- [Operating Squadron](./operating.md), environment variables, the
   production checklist, backup considerations, upgrade notes.
-- [API reference](./api-reference.md) — REST endpoints with curl examples.
+- [API reference](./api-reference.md), REST endpoints with curl examples.
 
 ## What Squadron is good at
 
@@ -838,7 +838,7 @@ jump straight to that page.
 - **SSO.** Squadron ships Bearer-token auth with a scope
   vocabulary so tokens can be narrowed to read only or to a
   specific surface (see [Authentication](./auth.md) for the full
-  scope list — agents:read, rollouts:write, rollouts:approve,
+  scope list, agents:read, rollouts:write, rollouts:approve,
   incidents:write, etc.). What's not built in is SSO/OIDC; that's
   best handled by a reverse proxy in front of Squadron today.
 - **A Kubernetes operator.** OpAMP works fine with collectors deployed
@@ -850,7 +850,7 @@ jump straight to that page.
 ## Getting help
 
 - File issues at <https://github.com/devopsmike2/squadron/issues>.
-- Read the source — it's small and the comments explain why, not just what.
+- Read the source, it's small and the comments explain why, not just what.
 - Inspect Squadron's own audit log (`/api/v1/audit/events`) when something
   unexpected happens; most state transitions are recorded with enough
   context to reconstruct what occurred.

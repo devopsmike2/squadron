@@ -1,9 +1,9 @@
-# Squadron OSS — Working-Features Audit
+# Squadron OSS, Working-Features Audit
 
 _Audit date: 2026-06-29 · Against `main` @ v0.89.289 (running stack confirmed at this rev)._
 
 Purpose: an honest, confidence-tiered map of what works in the OSS build so we can point
-engineers at the parts that give a good first impression — and set expectations on the
+engineers at the parts that give a good first impression, and set expectations on the
 parts that are partial or opt-in.
 
 Tiers: **Verified live** = exercised end-to-end against real infrastructure in recent
@@ -13,7 +13,7 @@ in the latest pass. **Partial / honest limits** = runs but has documented gaps.
 
 ---
 
-## TL;DR — what to tell engineers
+## TL;DR, what to tell engineers
 
 Two strong, demoable stories:
 
@@ -33,10 +33,10 @@ the real thing.
 
 ## 1) Verified live (high confidence)
 
-- **Multi-cloud discovery scan — AWS, GCP, Azure, OCI.** All four connectors validated,
+- **Multi-cloud discovery scan, AWS, GCP, Azure, OCI.** All four connectors validated,
   scanned real accounts, inventory checked against an independent oracle. Tiers: compute,
   databases, Kubernetes, serverless, object stores, load balancers, event sources,
-  orchestration (coverage varies per cloud — see section 3).
+  orchestration (coverage varies per cloud, see section 3).
 - **AI recommendations via the real LLM.** Ranked, plain-English recs with merge-ready
   Terraform (e.g. EC2 Graviton, OCI Object Storage access-logging). Async; needs key.
 - **IaC GitHub remediation loop.** Connect a repo, Squadron opens a real merge-ready
@@ -48,28 +48,28 @@ the real thing.
   online in Fleet; config injection wired.
 - **OCI object-store + load-balancer observability detection** verified against a real
   tenancy (covered vs uncovered correct).
-- **Demo mode** — seeds inventory + short-circuits scan/recs so the full Discovery ->
+- **Demo mode**, seeds inventory + short-circuits scan/recs so the full Discovery ->
   Recommendations flow demos with no cloud account (all four clouds).
-- **First-run onboarding** — prod-like single-port image (:8080) serving UI + API; new-
+- **First-run onboarding**, prod-like single-port image (:8080) serving UI + API; new-
   user happy path validated, early friction fixed.
 
 ## 2) Works (test-covered / previously verified live)
 
 Worth a quick smoke test before a high-stakes demo.
 
-- **Quickstart wizard** — start-fresh + adopt-existing paths; bulk per-host one-liners.
-- **Config editor** — Monaco + AI Assist (Explain / Merge snippet), Squadron Lint, diff
+- **Quickstart wizard**, start-fresh + adopt-existing paths; bulk per-host one-liners.
+- **Config editor**, Monaco + AI Assist (Explain / Merge snippet), Squadron Lint, diff
   preview, live pipeline view.
-- **Staged rollouts** — percent/label stages, dwell, abort criteria, auto-abort.
-- **Fleet map / Agents / Groups** — agent overview, grouping, group config + restart.
-- **Savings + Cost Insights** — $/month projection from ingest x backend rates; Quick
+- **Staged rollouts**, percent/label stages, dwell, abort criteria, auto-abort.
+- **Fleet map / Agents / Groups**, agent overview, grouping, group config + restart.
+- **Savings + Cost Insights**, $/month projection from ingest x backend rates; Quick
   Wins ranked by $ saved with one-click Apply.
-- **Alerts** — rule CRUD + evaluator loop.
-- **Audit log + AI explain** — per-event narration (opt-in AI).
-- **Incidents drafter** — AI-drafted summaries (opt-in AI).
-- **Continuous discovery** — scan persistence, history, scheduled re-scans, drift (opt-in).
+- **Alerts**, rule CRUD + evaluator loop.
+- **Audit log + AI explain**, per-event narration (opt-in AI).
+- **Incidents drafter**, AI-drafted summaries (opt-in AI).
+- **Continuous discovery**, scan persistence, history, scheduled re-scans, drift (opt-in).
 - **Cross-cloud verdict learning** (opt-in flag).
-- **Recommendations exclusion + placement-map** — placement now covers AWS + GCP/Azure/OCI
+- **Recommendations exclusion + placement-map**, placement now covers AWS + GCP/Azure/OCI
   core tiers + the four event-source surfaces + SQS (as of v0.89.289).
 
 ## 3) Partial / honest limitations
@@ -82,14 +82,14 @@ Worth a quick smoke test before a high-stakes demo.
   Pub/Sub, Service Bus, OCI Streaming, SQS. The longer tail (SNS-with-TF, Cloud Tasks,
   Event Grid, Event Hubs, Pub/Sub Lite, ONS, Queues) + serverless/orchestration kinds are
   incremental adds.
-- **Cost projection accuracy depends on configured backend rates** — directional.
+- **Cost projection accuracy depends on configured backend rates**, directional.
 - **Recommendation quality is LLM-dependent.** Deterministic Terraform snippets are
-  audited; free-form LLM reasoning should be reviewed before merge (by design — every fix
+  audited; free-form LLM reasoning should be reviewed before merge (by design, every fix
   is a PR gated by your review + CI).
 
 ## 4) Opt-in / setup-gated
 
-- **AI features off by default** — set `ANTHROPIC_API_KEY` for Explain / Merge / recs /
+- **AI features off by default**, set `ANTHROPIC_API_KEY` for Explain / Merge / recs /
   incident drafting.
 - **Cloud discovery needs read-only creds** per cloud (`docs/discovery-*-first-time-setup.md`).
   OCI object-store/LB detection also needs `read log-groups`.
@@ -112,7 +112,7 @@ Worth a quick smoke test before a high-stakes demo.
 
 ## Honesty notes for the pitch
 
-- Lead with the discovery -> AI PR loop and the fleet/rollout control plane — the verified,
+- Lead with the discovery -> AI PR loop and the fleet/rollout control plane, the verified,
   differentiated stories.
 - Don't claim uniform detection depth across every tier/cloud; cite the coverage matrix.
 - Frame Squadron as orchestrator, not executor: it opens PRs and stages rollouts; it never
@@ -120,7 +120,7 @@ Worth a quick smoke test before a high-stakes demo.
 
 ---
 
-## Addendum — "Works" tier live smoke-test (2026-06-29, v0.89.290)
+## Addendum, "Works" tier live smoke-test (2026-06-29, v0.89.290)
 
 API-level smoke test of every "Works"-tier surface against the running stack
 (~1000 agents, 21h uptime). All endpoints returned 200 with sane payloads:
@@ -131,34 +131,34 @@ savings/realized, alerts/cost-spikes, incidents/drafts, quickstart
 (backends/opamp-snippet), pipeline-health (fleet + per-agent).
 
 **One real bug found and fixed (v0.89.290): `pipeline-health/fleet` hung
-~18s and returned nothing** on a long-running fleet — its window-function
+~18s and returned nothing** on a long-running fleet, its window-function
 scanned the entire (GC-less, ever-growing) `pipeline_health_samples` table.
 Now time-bounded to a 1h freshness window (constant cost w.r.t. uptime);
 verified 18s -> 0.14s, 200. With that fix, the fleet/agents/pipeline-health
 surfaces move from **Works** to **Verified live**.
 
 Remaining check for pixel-level demo confidence: a browser pass of the headline
-visual pages (Savings, Fleet/Pipeline Health, Config editor) — the APIs behind
+visual pages (Savings, Fleet/Pipeline Health, Config editor), the APIs behind
 them are green; the rendering itself was not re-walked in this pass.
 
 Follow-up (not demo-blocking): `pipeline_health_samples` has no retention GC,
 so it grows on disk; add a sweep loop like the webhook dedupe GC.
 
-### Browser pass — three headline pages (2026-06-29)
+### Browser pass, three headline pages (2026-06-29)
 
 Visually verified rendering against the running dev UI:
 
-- **Savings** (`/savings`) — estimated monthly spend, potential savings, "saved
+- **Savings** (`/savings`), estimated monthly spend, potential savings, "saved
   this month," a forecasted-spend progress bar (Day N of 30), and Quick Wins
   ranked by $ saved with Apply buttons + CRITICAL/WARN badges. Loads fast with
-  no hanging pipeline-health panel (it hosts that panel — the v0.89.290 fix is
+  no hanging pipeline-health panel (it hosts that panel, the v0.89.290 fix is
   confirmed indirectly).
-- **Fleet Map** (`/fleet-map`) — "Collector Pipelines" grid; the real
+- **Fleet Map** (`/fleet-map`), "Collector Pipelines" grid; the real
   otelcol-contrib agents show online with TRACES/LOGS/METRICS signal badges,
   Pipeline/Data-Flow/Fleet view toggles, Resources sidebar (Agent Groups +
   Agents with online/offline state).
-- **Config editor** (`/configs/:id/edit`) — Monaco YAML editor with syntax
-  highlighting, Templates + AI Assist controls, Squadron Lint panel ("Clean —
+- **Config editor** (`/configs/:id/edit`), Monaco YAML editor with syntax
+  highlighting, Templates + AI Assist controls, Squadron Lint panel ("Clean,
   no issues found"), and a live pipeline DAG (otlp receiver -> batch processor
   -> otlp exporter) with a "Valid" badge.
 

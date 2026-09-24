@@ -1,4 +1,4 @@
-# Kubernetes tier slice 2 — GCP GKE + Azure AKS + OCI OKE
+# Kubernetes tier slice 2, GCP GKE + Azure AKS + OCI OKE
 
 **Status:** design doc, locked for slice 2 implementation across
 three clouds in a fan-out arc, mirroring the database tier slice
@@ -114,7 +114,7 @@ AKS exposes managed observability via two related addons:
 `addonProfiles.omsagent.enabled == true` OR
 `azureMonitorProfile.metrics.enabled == true` OR
 `azureMonitorProfile.containerInsights.enabled == true`. Mirrors
-EKS's "ADOT OR CloudWatch observability" disjunction — operators
+EKS's "ADOT OR CloudWatch observability" disjunction, operators
 on the older addon get credit; operators on the newer Managed
 Prometheus also get credit.
 
@@ -141,7 +141,7 @@ boolean as cleanly as GCP/Azure).
 a tag key matching `operations-insights-enabled` (case-
 insensitive) with value `true`. Slice 2 uses this convention
 because OCI's Operations Insights API does not return a single
-"cluster enrolled" boolean — operators tag the cluster when
+"cluster enrolled" boolean, operators tag the cluster when
 they enroll. Slice 3 may move to a direct Operations Insights
 API call.
 
@@ -293,10 +293,10 @@ default:
 Reuses the existing `discovery.<provider>.scan_completed` audit
 event types. Payload gains `cluster_count`,
 `instrumented_cluster_count`, `uninstrumented_cluster_count`
-fields per scan (same shape as the database tier extension —
+fields per scan (same shape as the database tier extension,
 one extra category counted per scan).
 
-No new event types — keeps the audit timeline coherent.
+No new event types, keeps the audit timeline coherent.
 
 ## 8. UI updates
 
@@ -315,7 +315,7 @@ recommendation kinds (rendering is generic over kind).
 
 The unified Discovery dashboard (v0.89.62) automatically sums
 compute + database + kubernetes counts into per-provider totals
-via the existing scan_completed aggregation — no dashboard code
+via the existing scan_completed aggregation, no dashboard code
 changes.
 
 ## 9. Slice 2 contract

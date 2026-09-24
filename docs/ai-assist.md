@@ -3,10 +3,10 @@
 Squadron's v0.26+ AI assist is a thin wrapper around the Anthropic
 Messages API. It powers two operator-facing affordances:
 
-- **Explain** on any v0.25 cost recommendation — translates the
+- **Explain** on any v0.25 cost recommendation, translates the
   generated YAML snippet into 2-3 sentences of plain English so
   the operator understands what the fix actually does.
-- **AI Assist** in the config editor — either summarizes the
+- **AI Assist** in the config editor, either summarizes the
   current YAML pipeline-by-pipeline, or merges a snippet (e.g. a
   processor block from a recommendation) into the editor's
   contents for review.
@@ -69,7 +69,7 @@ action. Per action:
 
 The system prompts are versioned with the Squadron binary; you
 can read them in `internal/ai/ai.go`. They don't ask the model to
-take any action — every response is text that flows back to the UI
+take any action, every response is text that flows back to the UI
 for the operator to read or paste into the editor.
 
 **What's NOT sent:** API tokens, agent labels, telemetry data,
@@ -77,11 +77,11 @@ audit log, or anything outside the explicit per-action payload.
 
 ## Model defaults
 
-- `explain_model` = **claude-haiku-4-5-20251001** — cheap, fast,
+- `explain_model` = **claude-haiku-4-5-20251001**, cheap, fast,
   fine for 2-3 sentence summaries. Used by the recommendation
   Explain button and the config editor's "Explain this config"
   action.
-- `merge_model` = **claude-sonnet-4-6** — stronger reasoning,
+- `merge_model` = **claude-sonnet-4-6**, stronger reasoning,
   used for the "Merge in a snippet" action where the output has
   to be syntactically and structurally correct YAML.
 
@@ -97,13 +97,13 @@ The AI is one step in a longer chain. For a merge:
 1. Operator clicks "Merge in a snippet" in the config editor.
 2. Sonnet produces the merged YAML + a 1-sentence summary.
 3. The merged YAML replaces the editor contents.
-4. **Squadron Lint runs immediately** — flags structural issues
+4. **Squadron Lint runs immediately**, flags structural issues
    (missing exporters, undefined components, references to
    processors that aren't defined, etc.).
 5. The operator reviews the diff in the side-by-side editor,
    fixes anything the lint flagged, and saves the new config.
 6. Rollout goes through the existing staged rollout flow with
-   abort criteria — bad merges that pass lint get caught by
+   abort criteria, bad merges that pass lint get caught by
    drop-rate or error-log thresholds during the canary stage.
 
 The LLM is never trusted as the final authority. If a step in
@@ -123,7 +123,7 @@ Anthropic bills per input + output token. For the v0.26 surfaces:
 
 Costs are bounded per-call by the `ai.max_tokens` config (default
 1024 output tokens). There's no per-minute rate limit in Squadron
-itself — Anthropic's own rate limits apply.
+itself, Anthropic's own rate limits apply.
 
 ## Endpoints (for tooling)
 
@@ -147,14 +147,14 @@ once at app load and hides the affordances accordingly.
 
 - Settings UI for the API key (env var only; settings page is
   v0.26.x).
-- Streaming responses — every call blocks until the full response
+- Streaming responses, every call blocks until the full response
   is back.
-- Multi-turn chat — every call is stateless.
-- Per-tenant cost dashboards — operators see token counts per
+- Multi-turn chat, every call is stateless.
+- Per-tenant cost dashboards, operators see token counts per
   response but there's no aggregate view yet.
 - Automatic snippet generation (the recommendation engine
   generates the snippets; the LLM only explains/merges them).
-- Redaction of secrets in configs sent to the model — operators
+- Redaction of secrets in configs sent to the model, operators
   should ensure their configs don't contain secrets they're not
   comfortable sending to Anthropic. Use env-var references in
   your collector configs rather than literal credentials.

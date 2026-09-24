@@ -1,16 +1,16 @@
-# Orchestration tier — operator guide
+# Orchestration tier, operator guide
 
 This is the operator-facing runbook for the v0.89.94 through
-v0.89.136 orchestration tier arc — slice 1 (v0.89.94-98) +
+v0.89.136 orchestration tier arc, slice 1 (v0.89.94-98) +
 slice 2 (v0.89.134-136). Squadron now scans four
-orchestration surfaces across four clouds — AWS Step
+orchestration surfaces across four clouds, AWS Step
 Functions, GCP Workflows, Azure Logic Apps, and OCI
-Resource Manager — for the observability primitives
+Resource Manager, for the observability primitives
 operators sequence business logic through.
 
 The strategic frame: Squadron previously covered four tiers
 (compute / database / kubernetes / serverless) across four
-clouds. Orchestration is the fifth tier — the layer where
+clouds. Orchestration is the fifth tier, the layer where
 state transitions happen and trace context propagation breaks
 most often. A Step Function with 12 states where state 7
 silently swallows the traceparent header is a real production
@@ -18,7 +18,7 @@ failure mode; operators see "the orchestration ran successfully"
 in the cloud console but Squadron's traceindex sees nothing
 past state 6.
 
-For a first test, the walkthrough takes about 25 minutes —
+For a first test, the walkthrough takes about 25 minutes,
 most of it spent confirming your cloud connections have the
 additional read permissions for the orchestration APIs.
 
@@ -94,7 +94,7 @@ type values: STANDARD and EXPRESS.
 - **STANDARD** state machines emit X-Ray segments for the
   orchestration runtime itself when `tracingConfiguration.enabled = true`.
 - **EXPRESS** state machines do NOT emit X-Ray segments for
-  the orchestration runtime — only for per-state Lambda
+  the orchestration runtime, only for per-state Lambda
   invocations the state machine triggers. The
   `tracingConfiguration.enabled` flag still applies (it enables
   X-Ray for those per-state Lambda invocations), but you won't
@@ -168,19 +168,19 @@ stepfunc-logging-enable         workflows-logging-enable        logicapps-diagno
 
 ### AWS Step Functions
 
-- **`stepfunc-xray-active`** — `aws_sfn_state_machine tracing_configuration { enabled = true }`
-- **`stepfunc-logging-enable`** — `aws_sfn_state_machine logging_configuration { level = "ALL" log_destination = aws_cloudwatch_log_group.sfn.arn }` (requires an existing log group resource; the PR body includes the dependency note)
+- **`stepfunc-xray-active`**, `aws_sfn_state_machine tracing_configuration { enabled = true }`
+- **`stepfunc-logging-enable`**, `aws_sfn_state_machine logging_configuration { level = "ALL" log_destination = aws_cloudwatch_log_group.sfn.arn }` (requires an existing log group resource; the PR body includes the dependency note)
 
 ### GCP Workflows
 
-- **`workflows-trace-enable`** — `google_workflows_workflow call_log_level = "LOG_ALL_CALLS"`
-- **`workflows-logging-enable`** — same block with `call_log_level = "LOG_ERRORS_ONLY"` minimum
+- **`workflows-trace-enable`**, `google_workflows_workflow call_log_level = "LOG_ALL_CALLS"`
+- **`workflows-logging-enable`**, same block with `call_log_level = "LOG_ERRORS_ONLY"` minimum
 
 ### Azure Logic Apps
 
-- **`logicapps-appinsights-enable`** (Standard tier) —
+- **`logicapps-appinsights-enable`** (Standard tier),
   `azurerm_logic_app_standard app_settings = { APPLICATIONINSIGHTS_CONNECTION_STRING = "..." }`
-- **`logicapps-diagnostics-enable`** (Consumption tier) —
+- **`logicapps-diagnostics-enable`** (Consumption tier),
   `azurerm_monitor_diagnostic_setting` resource attached to
   the `azurerm_logic_app_workflow`, routing to an existing
   Application Insights resource OR Log Analytics workspace.
@@ -210,7 +210,7 @@ The Orchestration table shows:
 | Last seen     | relative time (per v0.89.77)          |
 | Quality       | dot indicator (AWS only; per v0.89.92 pattern) |
 
-QualityDot ships on AWS only in slice 1 — GCP/Azure pages
+QualityDot ships on AWS only in slice 1, GCP/Azure pages
 don't render the dot elsewhere yet, so adding it on
 Orchestration alone would be inconsistent. Slice 2 unifies.
 
@@ -225,7 +225,7 @@ Orchestration alone would be inconsistent. Slice 2 unifies.
 ### Trace coverage endpoint extension
 
 `GET /api/v1/discovery/trace_coverage` per-provider response
-gains `orchestration_pct` — % of inventoried orchestrations
+gains `orchestration_pct`, % of inventoried orchestrations
 emitting a span within 24h. OCI returns 0.
 
 The Discovery dashboard TRACE COVERAGE chip breakdown adds an
@@ -236,7 +236,7 @@ COMPUTE 67% | DB 42% | K8S 89% | SERVERLESS 33% | ORCH 12%
 ```
 
 When `orchestration_pct` is zero across all 4 providers, the
-ORCH column hides — same pattern as the SERVERLESS column
+ORCH column hides, same pattern as the SERVERLESS column
 behavior the chunk-4 ships alongside.
 
 ## Webhook routing
@@ -257,7 +257,7 @@ audit scope. SIEM consumers can filter on:
 recommendation_kind ~= "^(stepfunc-|workflows-|logicapps-)"
 ```
 
-## Workflow — first orchestration scan
+## Workflow, first orchestration scan
 
 1. Open the per-provider Discovery page (e.g.
    `/discovery/aws`). Note your existing AWS connection.
@@ -265,7 +265,7 @@ recommendation_kind ~= "^(stepfunc-|workflows-|logicapps-)"
    need to upgrade the IAM policy to include
    `states:ListStateMachines` and `states:DescribeStateMachine`.
    The in-product IAM upgrade path (#590) shows the diff.
-3. Click "Run scan" — the default tier list now includes
+3. Click "Run scan", the default tier list now includes
    `orchestration`. The scan walks Step Functions in addition
    to the existing four tiers.
 4. Click the Orchestration Inventory sub-tab. Each state
@@ -274,7 +274,7 @@ recommendation_kind ~= "^(stepfunc-|workflows-|logicapps-)"
    an axis fires the corresponding `stepfunc-*` recommendation.
 6. Review the Terraform PR. For STANDARD machines the PR is
    straightforward. For EXPRESS machines the Reasoning text
-   notes the per-state Lambda caveat — decide whether the
+   notes the per-state Lambda caveat, decide whether the
    semantics match your intent.
 7. After merge + apply + first execution, wait ~5 minutes.
    Re-load the Orchestration sub-tab; the Last seen column
@@ -282,7 +282,7 @@ recommendation_kind ~= "^(stepfunc-|workflows-|logicapps-)"
 
 ## Reading the audit
 
-Slice 1 reuses the existing audit event types — no new
+Slice 1 reuses the existing audit event types, no new
 constants. The discovery scan emits the existing
 `discovery.{provider}.scan_completed` event with the
 `orchestration_count` field included in the payload.
@@ -294,10 +294,10 @@ The recommendation lifecycle (`recommendation.created`,
 ## Troubleshooting
 
 - **Step Functions don't appear in the Orchestration sub-tab.**
-  Check the IAM policy — `states:ListStateMachines` and
+  Check the IAM policy, `states:ListStateMachines` and
   `states:DescribeStateMachine` are required. If the policy
   is correct but state machines still don't appear, check
-  the scan audit for `partial_reason` — the Describe call may
+  the scan audit for `partial_reason`, the Describe call may
   have been rate-limited.
 - **A STANDARD state machine has X-Ray on but shows
   `last_seen_at = null`.** The OTel collector receiving spans
@@ -338,7 +338,7 @@ The recommendation lifecycle (`recommendation.created`,
 
 Slice 2 closes the qualified 5-tier orchestration claim by
 adding OCI Resource Manager coverage. After slice 2, the
-universal claim's orchestration tier is cleanly 4-cloud —
+universal claim's orchestration tier is cleanly 4-cloud,
 no asterisks.
 
 Honest framing: OCI's primitives are shape-different from
@@ -362,7 +362,7 @@ inspection.
 
 ### What's NOT in slice 2
 
-- **OCI Process Automation** — the BPMN-based workflow
+- **OCI Process Automation**, the BPMN-based workflow
   orchestration product. Semantically closer to Step
   Functions / Workflows / Logic Apps but with smaller
   adoption + different API surface. Slice 3 candidate
@@ -469,10 +469,10 @@ reads:
 Four clouds. Five tiers. Four verbs. One control plane.
 Twenty-one scanner surfaces (4 clouds × 4 prior tiers + 3
 slice 1 orchestration surfaces + 1 slice 2 OCI Resource
-Manager surface). The 5th tier is now cleanly 4-cloud — no
+Manager surface). The 5th tier is now cleanly 4-cloud, no
 asterisks.
 
-Orchestration is where business logic gets sequenced — the
+Orchestration is where business logic gets sequenced, the
 trace integration arc + span quality arc together close the
 loop: Squadron sees the orchestrations your cloud control
 plane lists, checks whether spans arrive from each, and
@@ -480,13 +480,13 @@ drafts the PR that enables the missing primitive.
 
 ## Cross-references
 
-- [Orchestration tier slice 1 design doc](./proposals/orchestration-tier-slice1.md) —
+- [Orchestration tier slice 1 design doc](./proposals/orchestration-tier-slice1.md),
   the locked spec this runbook operationalizes.
-- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md) —
+- [Serverless tier slice 1](./proposals/serverless-tier-slice1.md),
   the prior tier-expansion arc this mirrors structurally.
-- [Trace coverage — operator guide](./trace-coverage-operator-guide.md) —
+- [Trace coverage, operator guide](./trace-coverage-operator-guide.md),
   the trace integration arc this composes with.
-- [Span quality — operator guide](./span-quality-operator-guide.md) —
+- [Span quality, operator guide](./span-quality-operator-guide.md),
   the span quality arc that validates the spans Squadron
   receives.
-- [Audit log](./audit-log.md) — full catalog of event types.
+- [Audit log](./audit-log.md), full catalog of event types.

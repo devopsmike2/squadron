@@ -1,4 +1,4 @@
-# Squadron — OSS GA bar + OSS-vs-Enterprise boundary (proposal)
+# Squadron, OSS GA bar + OSS-vs-Enterprise boundary (proposal)
 
 _Drafted 2026-06-29 against `main` @ v0.89.291. A decision-support doc, not a
 mandate: it proposes a finite "OSS is marketing-ready" checklist and a
@@ -9,7 +9,7 @@ yours to make._
 
 Run the proven OSS-led playbook (Grafana / GitLab / dbt): give away a genuinely
 useful OSS that creates the "wow," drive adoption + community, and monetize the
-**organization-readiness** around it — scale, governance, compliance, support —
+**organization-readiness** around it, scale, governance, compliance, support,
 not the core value. The trap to avoid is "finish all gaps then start
 enterprise": it's unbounded and tends to leak differentiators into OSS. Instead,
 hit a *finite* GA bar, launch marketing, and scope enterprise in parallel.
@@ -28,7 +28,7 @@ flowchart LR
 
 ---
 
-## Part 1 — OSS GA / "marketing-ready" checklist (finite)
+## Part 1, OSS GA / "marketing-ready" checklist (finite)
 
 The bar is "a skeptical SRE can self-serve a great first hour, and we're not
 overclaiming." Most of this is already done.
@@ -66,20 +66,20 @@ flowchart LR
   fleet query time-bound + retention GC).
 
 **Remaining (the actual GA gating items)**
-- [ ] **Public demo asset** — a hosted sandbox OR a polished 2–3 min recorded
+- [ ] **Public demo asset**, a hosted sandbox OR a polished 2-3 min recorded
   walkthrough of discovery -> AI rec -> PR. This is the #1 conversion asset and
   the biggest gap; the README marketing scenes are static.
-- [ ] **"What's OSS vs paid" page** — set expectations up front (and tease
+- [ ] **"What's OSS vs paid" page**, set expectations up front (and tease
   enterprise). Prevents community surprise/backlash later. (Part 2 feeds this.)
-- [ ] **README "known limitations"** — link the coverage matrix + the honest
+- [ ] **README "known limitations"**, link the coverage matrix + the honest
   caveats (detection isn't uniform; cost projections are directional; AI is
   BYO-key). Lead-with-honesty earns SRE trust.
-- [ ] **Security-posture one-pager for self-hosters** — "turn auth on before you
+- [ ] **Security-posture one-pager for self-hosters**, "turn auth on before you
   expose it," network expectations, what data leaves the box (only the LLM call,
   only if you set the key). Mostly assembled from `docs/auth.md`.
-- [ ] **Community plumbing** — CONTRIBUTING, issue/PR templates, a support
+- [ ] **Community plumbing**, CONTRIBUTING, issue/PR templates, a support
   channel (Discussions/Slack/Discord), and a clear "report a bug" path.
-- [ ] **Headline-endpoint smoke gate in CI** — a thin check that the demo
+- [ ] **Headline-endpoint smoke gate in CI**, a thin check that the demo
   surfaces (savings, fleet, pipeline-health, discovery list) return 200 and a
   scan completes, so a regression like the 18s pipeline-health hang can't ship.
 
@@ -89,7 +89,7 @@ flowchart LR
 
 ---
 
-## Part 2 — Recommended OSS-vs-Enterprise boundary (open-core)
+## Part 2, Recommended OSS-vs-Enterprise boundary (open-core)
 
 Principle: **breadth + the core loop = OSS; depth + scale + governance +
 support = Enterprise.**
@@ -121,12 +121,12 @@ flowchart TB
     OSS ==>|"adopt, then hit scale / governance needs"| ENT
 ```
 
-### Stays OSS (adoption engine — keep free)
-- Multi-cloud discovery across **all four** clouds (AWS/GCP/Azure/OCI) —
+### Stays OSS (adoption engine, keep free)
+- Multi-cloud discovery across **all four** clouds (AWS/GCP/Azure/OCI),
   inventory + scanning. (Breadth is the wow; don't paywall a cloud.)
-- AI recommendations (BYO `ANTHROPIC_API_KEY` — the user pays LLM cost).
+- AI recommendations (BYO `ANTHROPIC_API_KEY`, the user pays LLM cost).
 - IaC GitHub remediation: merge-ready Terraform PRs, HCL-aware merge,
-  `terraform validate` gate, verdict learning. (Marquee — keep free.)
+  `terraform validate` gate, verdict learning. (Marquee, keep free.)
 - env -> Terraform import blocks.
 - OTel fleet control plane: OpAMP, agents, groups, **staged rollouts with
   auto-abort**.
@@ -136,7 +136,7 @@ flowchart TB
 - Single instance, embedded store (DuckDB/SQLite), single team, Bearer-token
   auth + scopes.
 
-### Reserved / teased as Enterprise (org-readiness — monetize)
+### Reserved / teased as Enterprise (org-readiness, monetize)
 - **Identity & access**: SSO (SAML/OIDC), SCIM provisioning, full RBAC,
   multiple teams/projects, multi-tenancy. (OSS stops at bearer tokens + scopes.)
 - **Governance**: rollout approval chains, change windows, mandatory-review
@@ -164,18 +164,18 @@ air-gapped / BYO-LLM · managed SaaS with SLAs.
 
 ---
 
-## Part 3 — Decisions that are genuinely yours
+## Part 3, Decisions that are genuinely yours
 
 1. **How much of the marquee loop stays free?** Recommendation: keep
    discovery -> AI -> PR fully free (uncapped clouds/PRs). Alternative: a soft
-   cap (e.g., N connections or PRs/month) to create an upgrade trigger — but
+   cap (e.g., N connections or PRs/month) to create an upgrade trigger, but
    caps on the wow blunt adoption. Lean uncapped.
 2. **Hosted SaaS now or later?** A hosted *demo* is a GA asset regardless; a
    paid hosted *product* is an enterprise lane you can stage after self-hosted
    adoption proves demand.
 3. **LLM model**: BYO-key in OSS vs managed/BYO-on-prem model routing as
    enterprise. Recommendation: BYO-key OSS, managed/air-gapped LLM enterprise.
-4. **Multi-cloud as a paywall?** Recommendation: no — all clouds free; depth and
+4. **Multi-cloud as a paywall?** Recommendation: no, all clouds free; depth and
    scale paid.
 
 ---

@@ -1,27 +1,27 @@
 # Savings Dashboard
 
 The Savings dashboard is Squadron's answer to "how much is this
-costing me, and what can I do about it?" — in dollars, not bytes.
+costing me, and what can I do about it?", in dollars, not bytes.
 It's built on the v0.24 Cost Insights byte numbers, the v0.25
 recommendation engine, and a small v0.27 pricing layer that maps
 bytes to $/month using configurable per-destination rules.
 
 ## What you'll see
 
-- **Estimated monthly spend** — projected from the last 1h or 24h
+- **Estimated monthly spend**, projected from the last 1h or 24h
   of ingest at your configured pricing rules. This is your "what
   Squadron sees us spending today" number.
-- **Potential monthly savings** — the sum of $/month savings
+- **Potential monthly savings**, the sum of $/month savings
   across all active recommendations. The "if you apply these,
   here's what you'd save" number.
-- **Quick Wins** — recommendations ranked by $/month, each with an
+- **Quick Wins**, recommendations ranked by $/month, each with an
   Apply button that deep-links to the config editor with the
   recommended snippet pre-filled. Operator reviews, saves, rolls
   out via the existing staged-rollout flow.
-- **Destination spend** — $/month broken down by configured
+- **Destination spend**, $/month broken down by configured
   exporter destination (Datadog, Honeycomb, etc.). Pro-rated from
   the v0.24 destination attribution.
-- **Pricing assumptions** — every rate Squadron is using, visible
+- **Pricing assumptions**, every rate Squadron is using, visible
   at the bottom of the page. Operators see what feeds their
   numbers and can edit the rules in `squadron.yaml`.
 
@@ -30,7 +30,7 @@ bytes to $/month using configurable per-destination rules.
 Pricing ships **enabled by default** with a conservative starter
 rule set. The defaults bias high so projected savings don't
 overpromise. To turn pricing off entirely, set
-`pricing.enabled: false` — the Savings page will collapse to a
+`pricing.enabled: false`, the Savings page will collapse to a
 single-line nudge and the $ figures will disappear from the
 recommendation cards.
 
@@ -132,14 +132,14 @@ savings is `(baseline - observed) bytes/hour × $/GB`.
 
 Outcome states:
 
-- **pending** — applied less than an hour ago, byte rate hasn't
+- **pending**, applied less than an hour ago, byte rate hasn't
   settled yet.
-- **realized** — current byte rate is below the baseline. We're
+- **realized**, current byte rate is below the baseline. We're
   counting the delta toward "Saved this month."
-- **not_observed** — more than an hour after Apply and the byte
+- **not_observed**, more than an hour after Apply and the byte
   rate hasn't dropped. Either the rollout didn't land or the fix
   didn't move the needle.
-- **reverted** — placeholder for future un-apply tooling.
+- **reverted**, placeholder for future un-apply tooling.
 
 The full audit-trail panel on the Savings page lists every
 applied recommendation with baseline / observed bytes, the
@@ -147,7 +147,7 @@ operator who clicked Apply, and the post-apply status. This is
 the v0.28 ground truth for "did we actually save anything?"
 
 Only `noisy_attribute` recommendations get re-observed against
-live data today — they have a clean affected scope (one attribute
+live data today, they have a clean affected scope (one attribute
 key on one signal). `outlier_agent` and `drop_hotspot` outcomes
 fall through to a coarser "settled after 1 hour → assume realized
 at the apply-time estimate" rule. High-cardinality outcomes show
@@ -172,7 +172,7 @@ The realized response shape:
 }
 ```
 
-Re-observation happens lazily on the GET — there's no background
+Re-observation happens lazily on the GET, there's no background
 goroutine. At v0.28 scale (small outcome rows; cached
 TopAttributes call) this is plenty.
 
@@ -198,9 +198,9 @@ Tracked for v0.27.x / v0.28.
 
 ## See also
 
-- `docs/scale-testing.md` — Cost Insights endpoint perf at 1000
+- `docs/scale-testing.md`, Cost Insights endpoint perf at 1000
   agents (the same endpoints power Savings).
-- `docs/recommendations.md` — the recipe set the Quick Wins panel
+- `docs/recommendations.md`, the recipe set the Quick Wins panel
   is ranking.
-- `docs/ai-assist.md` — the Explain button on each recommendation
+- `docs/ai-assist.md`, the Explain button on each recommendation
   comes from the v0.26 AI layer.

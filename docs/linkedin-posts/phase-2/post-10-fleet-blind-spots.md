@@ -28,8 +28,8 @@ v0.85.0 answers the question natively for AWS.
 Connect an account via read-only IAM assume-role. Pick a region.
 Click Scan. The scanner paginates `ec2:DescribeInstances` and
 `lambda:ListFunctions`, applies an OTel detection heuristic per
-resource — any EC2 tag key beginning with `otel`, any Lambda
-layer ARN containing `otel` or `opentelemetry` — and renders the
+resource, any EC2 tag key beginning with `otel`, any Lambda
+layer ARN containing `otel` or `opentelemetry`, and renders the
 result on the Inventory tab grouped by service. The instrumented
 and uninstrumented counts are right there in the page header.
 
@@ -40,8 +40,8 @@ walks past the desk on Monday morning, opens the laptop, clicks
 scan can give a number to their manager by lunch. The number was
 not knowable without an audit project a month ago. It is now.
 
-The detection heuristic is intentionally conservative — a tag
-check and a layer ARN check, both case-insensitive — because
+The detection heuristic is intentionally conservative, a tag
+check and a layer ARN check, both case-insensitive, because
 slice 1 is the answer for the resources Squadron can see, not the
 last word on whether a process is emitting telemetry. False
 positives are the failure mode the operator can verify by hand
@@ -64,7 +64,7 @@ Repo at the v0.85.0 tag. The inventory tab is at
   deployment at the v0.85.0 tag. Run a scan against a demo
   account that has a deliberate mix of OTel-tagged and
   untagged EC2 instances and a mix of Lambda functions with and
-  without an `otel` layer ARN. The mix is the point — a 100%
+  without an `otel` layer ARN. The mix is the point, a 100%
   instrumented fleet is the boring screenshot.
 - **What must be visible in the crop:** the tab header with the
   instrumented and uninstrumented count chips; both the EC2 and
@@ -73,7 +73,7 @@ Repo at the v0.85.0 tag. The inventory tab is at
   gray X badges. The last-scan timestamp at the top is the proof
   the data is fresh.
 - **Annotations:** one small marker on a row showing a gray X
-  badge, with the caption "uninstrumented — feeds the
+  badge, with the caption "uninstrumented, feeds the
   Recommendations tab" added in post-processing. One marker on
   the green-check side with the caption "OTel layer detected on
   ARN". The two markers make the heuristic visible without

@@ -1,11 +1,11 @@
-# Database tier slice 2 — GCP Cloud SQL + Azure SQL + OCI DB Systems
+# Database tier slice 2, GCP Cloud SQL + Azure SQL + OCI DB Systems
 
 **Status:** design doc, locked for slice 2 implementation across
 three clouds in a fan-out arc. This is the first **depth** arc
 across the universal observability surface (the prior arcs were
 breadth across clouds at slice 1). AWS already shipped database
 scanning in v0.87.0 (RDS with the two-axis
-PerformanceInsightsEnabled + EnhancedMonitoringEnabled rule —
+PerformanceInsightsEnabled + EnhancedMonitoringEnabled rule,
 #573). The remaining three clouds (GCP, Azure, OCI) each have a
 slice-2 database scanner gap. This arc closes all three in one
 coordinated implementation rather than three separate single-
@@ -16,7 +16,7 @@ in v0.89.62 with the unified dashboard, the next move is depth.
 Telling operators "Squadron scans four clouds for compute
 instrumentation gaps" is concrete. Telling them "Squadron scans
 four clouds for compute AND database instrumentation gaps" is
-materially stronger — because database observability gaps are
+materially stronger, because database observability gaps are
 where the highest-value incidents land (slow queries, query
 plans drifting, replica lag). The recommendation surface
 doubles in dimension after this arc closes.
@@ -39,7 +39,7 @@ database is AWS-only.
 
 For an enterprise running cross-cloud database workloads, the
 asymmetry is a credibility problem. An evaluation conversation
-that goes "Squadron handles AWS RDS Performance Insights gaps —
+that goes "Squadron handles AWS RDS Performance Insights gaps,
 oh, but for Cloud SQL or Azure SQL, you'd need a different tool"
 loses the universal claim. The four-cloud breadth becomes
 "four-cloud compute breadth + one-cloud database depth," which is
@@ -99,7 +99,7 @@ top-query lists, and end-to-end traces for slow queries.
 uninstrumented.
 
 **Recommendation kind:** `cloudsql-pi-enable` (mnemonic: Cloud SQL
-Performance Insights enable — parallels AWS's
+Performance Insights enable, parallels AWS's
 `rds-pi-em` naming).
 
 **Terraform target:** `google_sql_database_instance.settings[0].insights_config[0].query_insights_enabled = true`.
@@ -316,12 +316,12 @@ default:
 
 ## 7. Audit events
 
-Six new constants — one scan_completed extension per cloud (the
+Six new constants, one scan_completed extension per cloud (the
 existing audit event keys are reused; the payload gains
 `database_instance_count`, `database_instrumented_count`,
 `database_uninstrumented_count` fields).
 
-No new event types — keeps the audit timeline coherent (one
+No new event types, keeps the audit timeline coherent (one
 "scan_completed" per provider regardless of how many service
 categories the scan walked).
 
@@ -338,7 +338,7 @@ Columns: Resource ID, Engine, Engine Version, Size, Provider-axis
 boolean (instrumented?), Region, Tags.
 
 The Recommendations tab automatically surfaces the new
-recommendation kinds without UI changes — the rendering is
+recommendation kinds without UI changes, the rendering is
 generic over kind.
 
 The unified Discovery dashboard (v0.89.62) sums compute +
@@ -440,7 +440,7 @@ Inherits per-cloud threat models from slice 1. New surface area:
 - **OCI database read permission requires the new policy
   statement.** Runbook documents.
 
-No new credential domains — the slice 2 scanners reuse the slice
+No new credential domains, the slice 2 scanners reuse the slice
 1 credential model (GCP SA JSON, Azure SP secret, OCI signing
 key) sealed via credstore.
 
@@ -461,7 +461,7 @@ slice-1+2 version of the claim a single OSS control plane can
 make.
 
 Slice 3 candidates: Kubernetes tier (EKS / GKE / AKS / OKE all
-have slice 1 only — extend to slice 2/3 with workload-level
+have slice 1 only, extend to slice 2/3 with workload-level
 detection). Or trace integration (start consuming OTel traces
 from the connectors so Squadron can spot missing-span gaps).
 Or cost-spike + drift correlation across providers.

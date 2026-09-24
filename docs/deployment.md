@@ -5,7 +5,7 @@ components you need to wire up, and the operational concerns that come up
 between "running" and "running in production."
 
 If you just want to see Squadron move data, read
-[Getting started](./getting-started.md) first — it'll have you at a
+[Getting started](./getting-started.md) first, it'll have you at a
 running instance with one connected collector in five minutes. This page
 picks up from there.
 
@@ -38,7 +38,7 @@ pipeline, not inside it. The picture:
 ```
 
 The collectors are the workhorses; Squadron tells them what to do. Your
-telemetry data itself never flows through Squadron — only configs,
+telemetry data itself never flows through Squadron, only configs,
 status, and a small slice of pipeline health metrics for the cost
 insights surfaces.
 
@@ -75,7 +75,7 @@ What Squadron actually needs to function, in three tiers.
 
 ### Mandatory
 
-The floor — with these three, you can register collectors, push configs,
+The floor, with these three, you can register collectors, push configs,
 run rollouts, see audit events, and use the UI.
 
 1. **A place to run the binary.** One VM, container, or pod. Modest
@@ -89,7 +89,7 @@ run rollouts, see audit events, and use the UI.
    the [adoption snippet](./inventory.md) covers the case where you're
    adopting an existing fleet without reconfiguring everything. To push
    config (closed-loop) rather than only observe, run the OpAMP
-   supervisor — including alongside a credential-injecting launcher — per
+   supervisor, including alongside a credential-injecting launcher, per
    [Supervisor integration](./supervisor-integration.md).
 
 ### Strongly recommended for real use
@@ -403,7 +403,7 @@ spec:
                   name: http
 ```
 
-The long proxy timeouts are important — OpAMP holds connections open
+The long proxy timeouts are important, OpAMP holds connections open
 indefinitely and an Ingress that closes them after the default 60
 seconds will cause collectors to thrash reconnecting. If your Ingress
 controller doesn't handle WebSocket upgrades well, expose port 4320
@@ -412,7 +412,7 @@ separately via a LoadBalancer service.
 ### Postgres for HA
 
 For high availability and fleets past 500 collectors, swap SQLite for
-Postgres in the config (ADR 0033 — an OSS-selectable backend):
+Postgres in the config (ADR 0033, an OSS-selectable backend):
 
 ```yaml
 storage:
@@ -553,15 +553,15 @@ days, an enterprise grade rollout in weeks.
 
 ## See also
 
-- [Getting started](./getting-started.md) — the 5 minute path to a
+- [Getting started](./getting-started.md), the 5 minute path to a
   running instance.
-- [OSS to Enterprise migration](./oss-to-enterprise-migration.md) — the
+- [OSS to Enterprise migration](./oss-to-enterprise-migration.md), the
   build overlay, the config deltas, and why there is no schema migration.
-- [Operating Squadron](./operating.md) — environment variables,
+- [Operating Squadron](./operating.md), environment variables,
   upgrades, backup, restore.
-- [Authentication](./auth.md) — tokens, scopes, expiry, rotation.
-- [OpenShift](./openshift.md) — the enterprise path in detail.
-- [Self monitoring](./self-monitoring.md) — Squadron's own telemetry
+- [Authentication](./auth.md), tokens, scopes, expiry, rotation.
+- [OpenShift](./openshift.md), the enterprise path in detail.
+- [Self monitoring](./self-monitoring.md), Squadron's own telemetry
   into your existing observability stack.
-- [testing.md](./testing.md) — the docker compose harness for local
+- [testing.md](./testing.md), the docker compose harness for local
   evaluation.

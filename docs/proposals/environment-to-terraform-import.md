@@ -9,7 +9,7 @@ from the context-aware-merge-ready-prs arc.
 ## Problem
 
 Squadron discovers live cloud resources. Some are already managed by the
-operator's Terraform (instrument those — the merge-ready arc). Many are
+operator's Terraform (instrument those, the merge-ready arc). Many are
 NOT in any Terraform at all. For those, the operator wants Squadron to
 "see the environment and produce the matching Terraform" so the resource
 comes under IaC management.
@@ -17,11 +17,11 @@ comes under IaC management.
 ## Approach: import blocks (not from-scratch codegen)
 
 Squadron's scan captures a *summary* (resource IDs, type, region,
-instrumentation flags) — not the full resource configuration. Apply-able
+instrumentation flags), not the full resource configuration. Apply-able
 Terraform needs the full config. Rather than reinvent every provider's
 attribute mapping (terraformer-style, brittle, 4 clouds, perpetually
-incomplete), Squadron emits Terraform `import {}` blocks — which it CAN
-produce accurately from the scan (it has the resource type + cloud ID) —
+incomplete), Squadron emits Terraform `import {}` blocks, which it CAN
+produce accurately from the scan (it has the resource type + cloud ID),
 and the operator runs:
 
     terraform plan -generate-config-out=generated.tf
@@ -52,7 +52,7 @@ guessed import ID that would fail).
 
 ## Slices
 
-### Slice 1 — Deterministic AWS import-block generation + preview
+### Slice 1, Deterministic AWS import-block generation + preview
 `internal/iac/tfimport`: a pure package mapping scanned resources
 (Category, Provider, ResourceID, Name, Region) → ImportBlock
 {TFType, TFAddress, ImportID, Region} with per-type AWS mappers; Render
@@ -61,12 +61,12 @@ emits valid HCL `import {}` blocks + a header explaining the
 preview endpoint returns the rendered HCL for a scan_result (no PR yet).
 Tests: per-type mapping + render + skip-unsupported + address sanitising.
 
-### Slice 2 — Dedup vs existing TF + PR delivery
+### Slice 2, Dedup vs existing TF + PR delivery
 Use the repo-context summariser to skip resources already managed (by
 resource address heuristic) and open a PR adding `squadron_imports.tf`
 via the existing IaC-PR client. Idempotent + comment-exclusion aware.
 
-### Slice 3 — GCP / Azure / OCI coverage + UI + docs
+### Slice 3, GCP / Azure / OCI coverage + UI + docs
 Add per-cloud mappers (google_compute_instance: project/zone/name;
 azurerm_*: full resource ID; oci_*: OCID). UI button on the inventory
 ("Generate Terraform to adopt"). Operator docs.

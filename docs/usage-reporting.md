@@ -8,7 +8,7 @@ instance's own operational metrics to *your own* OTLP backend, not to us).
 
 ## What is sent
 
-Only low-cardinality **counts and labels** — you can see the exact bytes in
+Only low-cardinality **counts and labels**, you can see the exact bytes in
 `internal/usage` (`Snapshot` + `BuildPayload`) and in the `usage.v1` schema:
 
 | field | example | meaning |
@@ -24,7 +24,7 @@ Only low-cardinality **counts and labels** — you can see the exact bytes in
 
 No tenant, host, account, or agent identifiers. No IP addresses. No config
 content, no resource names/ARNs, no telemetry data, no cloud credentials. The
-payload is a flat map of the fields above — a test (`TestBuildPayload_ShapeAndAnonymity`)
+payload is a flat map of the fields above, a test (`TestBuildPayload_ShapeAndAnonymity`)
 fails the build if any other key is ever added.
 
 ## Enabling it
@@ -50,4 +50,4 @@ SQUADRON_USAGE_ENDPOINT=https://usage.example.com/report
 Best-effort and non-blocking: the first report is sent ~30s after start (so a
 crash-looping instance doesn't hammer the endpoint), then every `interval_hours`.
 Each POST has a hard 10s timeout; any collection or delivery error is logged at
-debug and dropped — usage reporting can never slow or crash the server.
+debug and dropped, usage reporting can never slow or crash the server.

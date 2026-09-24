@@ -1,4 +1,4 @@
-# GitHub Checks API back-signal — slice 1 design
+# GitHub Checks API back-signal, slice 1 design
 
 **Status:** design doc, locked for slice 1 implementation. Builds on
 the v0.89.23 / 24 / 30 / 31 / 32 webhook listener arc that closed
@@ -63,7 +63,7 @@ Squadron's reasoning right where they're already looking.
 - **Annotations on specific files / lines.** The Checks API
   supports per-annotation positioning that surfaces as inline
   PR comments. Slice 1 ships the check run with summary + text
-  only (no annotations). Annotations are a slice 2 candidate —
+  only (no annotations). Annotations are a slice 2 candidate,
   the discovery proposer's `affected_resources` field already
   carries enough information to draft them, but the UX of inline
   annotations needs its own scoping pass.
@@ -105,7 +105,7 @@ Squadron's reasoning right where they're already looking.
 Three architectural options surfaced during scoping. Picking one
 materially shapes slice 2 and beyond.
 
-### Option A — PAT-backed Checks API calls from existing iac_github client
+### Option A, PAT-backed Checks API calls from existing iac_github client
 
 Reuse the existing PAT credential. Add Checks API methods to the
 existing `internal/iacrepo/githubclient.go`. Same auth, same
@@ -116,7 +116,7 @@ upgrade (`checks:write`) is documented as a one-line edit in the
 runbook; existing PATs auto-fail with a clear error if scope is
 missing.
 
-### Option B — Dedicated Squadron GitHub App
+### Option B, Dedicated Squadron GitHub App
 
 Install Squadron as a GitHub App per repo. App-level credential
 isolation, per-repo permission scoping, separate rate-limit
@@ -131,7 +131,7 @@ two managed repos see no daylight between options A and B for
 the first six months of usage. Building the App-level path
 prematurely adds complexity without immediate operator value.
 
-### Option C — Hybrid: PAT for opens, App for checks
+### Option C, Hybrid: PAT for opens, App for checks
 
 Use the PAT for the existing Open PR path, then switch to an
 App credential exclusively for Checks API writes. Avoids
@@ -157,7 +157,7 @@ The signal carried in each direction:
 - `recommendation.pr_merged` event with merge metadata
 - `recommendation.pr_closed_not_merged` event (slice 2 chunk 3)
 - `discovery_recommendation.excluded` event (slice 2 chunk 4,
-  not directly observable from GitHub — operator-set)
+  not directly observable from GitHub, operator-set)
 
 **Outbound (slice 1 of this arc):**
 - Check run created on Squadron-opened PR's head commit at the
@@ -168,7 +168,7 @@ The signal carried in each direction:
   `recommendation.pr_closed_not_merged` event fires
 - Check run UPDATED with new summary when the operator clicks
   Don't propose this again in the Recommendations tab (slice 2
-  chunk 5, the new affordance shipped today) — the check run
+  chunk 5, the new affordance shipped today), the check run
   for the open PR gets a "Squadron now excluding this kind"
   banner in summary
 
@@ -181,7 +181,7 @@ The existing v0.89.23 webhook integration documents the PAT
 scope as `repo` (full repo read + write). For check runs to work,
 the PAT also needs:
 
-- `repo:status` (alias for `checks:write` in most contexts — verify
+- `repo:status` (alias for `checks:write` in most contexts, verify
   against GitHub's current scope docs at implementation time)
 
 For a fine-grained PAT, the scope is `Checks: Read and write` on
@@ -302,7 +302,7 @@ Every check run mutation includes the `head_sha` in the URL
 path, which GitHub uses as part of the addressable identity.
 If a force-push changes the head_sha mid-review, the check run
 is orphaned on the old SHA. Slice 1 does NOT chase head_sha
-changes — the check run stays on the original commit. Slice 2
+changes, the check run stays on the original commit. Slice 2
 candidate: subscribe to `pull_request.synchronize` webhook
 events and re-create the check run on the new head SHA.
 
@@ -336,16 +336,16 @@ AuditEventIaCCheckRunFailed   = "iac.check_run.failed"
 `iac.check_run.failed` payload: connection_id, pr_url, head_sha,
 plus an `error_kind` discriminator. Error kinds slice 1 handles:
 
-- `scope_missing` — PAT lacks `checks:write`. Operator sees a
+- `scope_missing`, PAT lacks `checks:write`. Operator sees a
   humanized banner: "Squadron couldn't post a check run because
   your IaC PAT is missing the checks:write scope."
-- `rate_limit` — GitHub API rate limit exceeded. Squadron logs
+- `rate_limit`, GitHub API rate limit exceeded. Squadron logs
   the reset timestamp; the check run is dropped (no retry in
   slice 1).
-- `pr_not_found` — Squadron's view of the PR diverged from
+- `pr_not_found`, Squadron's view of the PR diverged from
   GitHub's (e.g., operator deleted the PR before Squadron's
   Checks API call landed). Drop and log.
-- `network` — any other transient error.
+- `network`, any other transient error.
 
 `iac.check_run.failed` is fail-open: the existing PR opens,
 audit records `iac.pr_opened` as before, and the check run
@@ -461,7 +461,7 @@ the citation data; no duplicate query.
 When the check run conclusion is set (merged or closed):
 
 ```markdown
-**Squadron recommendation: <kind>** — <SUCCESS|FAILURE|NEUTRAL>
+**Squadron recommendation: <kind>**, <SUCCESS|FAILURE|NEUTRAL>
 
 Operator <verb> this PR on <date>.
 
@@ -539,7 +539,7 @@ Operator <verb> this PR on <date>.
    Option A: create the iac_recommendation_verdicts row
    immediately on PR open with all status fields null except
    the check_run_id. Option B: keep a separate in-memory map.
-   Pick option A — durable storage of "this recommendation has
+   Pick option A, durable storage of "this recommendation has
    a check run" is more robust to Squadron restart than a
    memory map. The row exists with exclude_from_learning=0 and
    excluded_at/excluded_by both null; only the check_run_*
@@ -599,7 +599,7 @@ Mitigation:
   they've validated the recommendation quality for their
   team's risk tolerance.
 - Squadron's check run name is namespaced (`Squadron
-  recommendation`) — a compromised PAT can't impersonate a
+  recommendation`), a compromised PAT can't impersonate a
   different tool's check.
 - Slice 2's App-based credential model addresses this more
   cleanly via per-repo permission scoping.

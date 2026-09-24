@@ -2,7 +2,7 @@
 
 The last unmeasured deferral in `docs/scale-testing.md`: does the
 rollout engine's 5s tick loop hold up when a many-stage rollout
-crosses a 1000-agent fleet? Short answer: not before this pass —
+crosses a 1000-agent fleet? Short answer: not before this pass,
 the engine pushed configs to canary agents **serially, one full
 ack round-trip at a time**, which put a single full-fleet stage at
 ~2 hours and a 100-stage rollout at ~4 days. Fixed with bounded
@@ -16,7 +16,7 @@ M-series Mac, all-in-one binary, fleetsim `--count=1000
 `dwell_seconds: 0`, so the engine advances one stage per 5s tick as
 fast as it's allowed. Tick timing observed via the new
 `rollout_engine_tick_duration_seconds` / `_slow_ticks_total`
-metrics (added in this pass — there was previously NO signal for
+metrics (added in this pass, there was previously NO signal for
 tick health).
 
 ## What the run found
@@ -38,7 +38,7 @@ tick health).
    with bounded concurrency (128), preserving per-push OTel spans,
    ack semantics, and per-agent failure tolerance.
 3. **Superset re-pushes (follow-up).** Percent-mode stage K pushes
-   to the FULL first-K% canary, not the delta — a 100-stage
+   to the FULL first-K% canary, not the delta, a 100-stage
    1000-agent rollout sends 50,500 pushes to deliver 1,000 distinct
    configs. The re-push is the implicit retry path for agents that
    failed earlier stages, so switching to delta+targeted-retry is a
@@ -46,7 +46,7 @@ tick health).
 4. **The push ack-wait ignores the tick context (follow-up).** The
    30s wait in `SendConfigToAgentWithContext` is `time.After`, not
    ctx-aware; the tick's own 30s ctx doesn't bound stage
-   application. That's why an 84s full-fleet stage *works* — but it
+   application. That's why an 84s full-fleet stage *works*, but it
    means tick latency is unbounded by design. Filed with option
    sketches (async stage application vs ctx-aware waits).
 
@@ -55,7 +55,7 @@ tick health).
 | | serial (old) | concurrent-128 (new) |
 |---|---|---|
 | Stage push, 10 agents | 70s | ~13s |
-| Stage push, ~500 agents | (extrapolated ~1h) | **~14s — flat in canary size** |
+| Stage push, ~500 agents | (extrapolated ~1h) | **~14s, flat in canary size** |
 | Stage push, full fleet (1000) | (extrapolated ~2h) | **83.8s, one tick, 0 failures** |
 | 3 stages | 254s | ~40s |
 | 50 stages (~13k pushes) | (extrapolated ~2 days) | **~700s, 0 push failures** |
@@ -90,7 +90,7 @@ launch material.
   ticks at 1000 agents (idle ticks are ~1ms; a regression here
   means someone put IO back on the scan path).
 - Watch `rollout_engine_tick_duration_seconds` in any future scale
-  run — it's the engine's primary health signal now.
+  run, it's the engine's primary health signal now.
 
 ## Reproducing
 
@@ -98,7 +98,7 @@ launch material.
 make build && ./build/squadron --config squadron.yaml   # terminal 1
 make fleetsim && ./build/fleetsim --count=1000 --group=stress-fleet --ramp=25s  # terminal 2
 # terminal 3: create a config, then a rollout with N percent stages
-# (dwell 0) via POST /api/v1/rollouts — see this repo's
+# (dwell 0) via POST /api/v1/rollouts, see this repo's
 # /tmp-style bench script in the stress-test history, or the API
 # reference. Then:
 watch -n 5 'curl -sS localhost:8080/metrics | grep rollout_engine'

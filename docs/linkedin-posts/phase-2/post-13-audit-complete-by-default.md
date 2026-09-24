@@ -34,7 +34,7 @@ Two recent changes are the receipts.
 
 v0.76 shipped the `AuditTimeline` humanizer for the rollout
 drawer. `plan.created`, `rollout.stage_applied`,
-`proposal.created`, `discovery.aws.scan_completed` —
+`proposal.created`, `discovery.aws.scan_completed`,
 raw event types stop appearing in the UI. The humanizer renders
 each as a sentence. v0.81.4 ported the humanizer server-side
 for the `/timeline` Recent Events list, which had been showing
@@ -49,11 +49,11 @@ from the auditor's chair, that one row made the chain look like
 the operator approved." Fixed in the same release that ported
 the humanizer; both surfaced in the same E2E sweep.
 
-The v0.85.0 discovery slice extends the same audit category set
-— `discovery.aws.connection_created`,
+The v0.85.0 discovery slice extends the same audit category set,
+`discovery.aws.connection_created`,
 `discovery.aws.scan_completed`,
 `discovery.aws.recommendations_generated`,
-`discovery.aws.recommendation_marked_applied` — through the
+`discovery.aws.recommendation_marked_applied`, through the
 same humanizer. The auditor reading the discovery slice never
 has to learn a second mental model.
 
@@ -74,7 +74,7 @@ discovery event categories.
   after a dogfood session that ran (a) a JARVIS cost-spike
   proposer flow and (b) a /discovery/aws connect-and-scan flow
   back to back. The two flows interleave in the recent-events
-  list — that is the point.
+  list, that is the point.
 - **What must be visible in the crop:** at least one
   `plan.created` row attributed to `ai`, one
   `rollout.approved` row attributed to an operator account,
@@ -83,9 +83,9 @@ discovery event categories.
   timestamp. The humanized titles and the actor column are
   the load-bearing elements.
 - **Annotations:** one small marker on the `plan.created` row's
-  Actor column with the caption "v0.81.4 actor wire fix —
+  Actor column with the caption "v0.81.4 actor wire fix,
   attributed to ai, not system", added in post-processing. No
-  annotation on the discovery row — the row itself, sitting in
+  annotation on the discovery row, the row itself, sitting in
   the same humanized list as the JARVIS rows, is the
   unification story.
 - **Crop:** include the page header so the reader knows they
@@ -100,6 +100,6 @@ not claim "Squadron has logged N million audit events" or
 "audit coverage hit 100%." It names specific event types, the
 v0.81.4 wire fix that made the actor attribute correctly, the
 discovery audit categories that extend the same humanizer, and
-the one operational property that matters — the operator and
+the one operational property that matters, the operator and
 the auditor read the same surface. The takeaway is the shape
 of the trail, not the size of the log file.

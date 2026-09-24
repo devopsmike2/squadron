@@ -44,7 +44,7 @@ open http://localhost:8080
 This runs the same published image plus a demo collector, so the
 dashboard lands with a live agent already connected. A separate
 `docker-compose.dev.yml` defines the development variant that builds from
-source with hot reload (Go via Air + the Vite dev server on :5173) — run
+source with hot reload (Go via Air + the Vite dev server on :5173), run
 it with `docker compose -f docker-compose.dev.yml up`. See the main
 README for the dev workflow.
 
@@ -52,7 +52,7 @@ README for the dev workflow.
 
 Squadron is a Go binary. Build from source with `make build` (requires Go
 1.24+, a C compiler, and SQLite dev libraries) and run `./squadron`. The
-default config writes data under `./data` — change `SQUADRON_DATA_DIR` to
+default config writes data under `./data`, change `SQUADRON_DATA_DIR` to
 relocate.
 
 ## Connect a collector
@@ -60,7 +60,7 @@ relocate.
 Open the in-product quickstart at <http://localhost:8080/quickstart>. It
 generates a ready-to-paste OpenTelemetry collector snippet wired to this
 Squadron's OpAMP endpoint (`:4320`) and OTLP receiver (`:4317`). The generated
-snippet is the source of truth — it includes the two settings a collector
+snippet is the source of truth, it includes the two settings a collector
 needs to connect over the plaintext dev ports:
 
 ```yaml
@@ -101,7 +101,7 @@ Within a few seconds the Squadron UI's Agents page shows it as **online**.
 ## Push your first config
 
 In the UI, open the agent detail page and click **Edit config**. The
-built-in YAML editor lints as you type — anti-patterns like a missing
+built-in YAML editor lints as you type, anti-patterns like a missing
 `batch` processor or a `memory_limiter` in the wrong position get flagged
 before you save.
 

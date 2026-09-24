@@ -22,7 +22,7 @@ everything before cloning the repo into your company environment.
 │   │  Docker compose (deploy/test/)                     │     │
 │   │   • collector-prod      (OpAMP-managed)            │     │
 │   │   • collector-staging   (OpAMP-managed)            │     │
-│   │   • collector-otlp-only (telemetry-only — v0.36.0) │     │
+│   │   • collector-otlp-only (telemetry-only, v0.36.0) │     │
 │   │   • webhook-echo        (receives test webhooks)   │     │
 │   └────────────────────────────────────────────────────┘     │
 │                                                              │
@@ -34,7 +34,7 @@ everything before cloning the repo into your company environment.
 
 - Docker Desktop (or compatible)
 - Go 1.23+
-- A free port at `9001` (the webhook receiver) — every other port
+- A free port at `9001` (the webhook receiver), every other port
   matches what your local Squadron is already using
 
 ## One-time setup
@@ -47,7 +47,7 @@ make test-env-up
 
 This builds the binary, generates a `SQUADRON_DEPLOY_KEY` for the
 session, and starts the docker fleet. Squadron itself is NOT
-containerized — you'll keep running it via your existing
+containerized, you'll keep running it via your existing
 `./bin/squadron --config /tmp/squadron-local.yaml` invocation so
 you can hot-reload code changes without rebuilding images.
 
@@ -59,9 +59,9 @@ open http://localhost:8090/agents
 
 You should see three agents:
 
-- **test-prod-01** — green status, OpAMP-managed
-- **test-staging-01** — green status, OpAMP-managed
-- **test-rogue-01** — yellow "Telemetry-only" badge (v0.36.0
+- **test-prod-01**, green status, OpAMP-managed
+- **test-staging-01**, green status, OpAMP-managed
+- **test-rogue-01**, yellow "Telemetry-only" badge (v0.36.0
   discovery picked it up via OTLP, no OpAMP)
 
 Open `/fleet-map` and you'll see the pipeline graph for the
@@ -70,7 +70,7 @@ will show real otelcol_* self-metrics flowing.
 
 ## Testing each feature
 
-### v0.31 — Pipeline health
+### v0.31, Pipeline health
 
 Open `test-prod-01` in the agents drawer. The Pipeline Health
 panel should show **healthy** with non-zero queue and throughput
@@ -82,7 +82,7 @@ with no listener). Restart with `docker compose -f deploy/test/docker-compose.ym
 Squadron will start reporting send_failed > 0 and the verdict will
 flip to **degraded** within 30 seconds.
 
-### v0.32 — Inventory reconciliation
+### v0.32, Inventory reconciliation
 
 ```bash
 curl -X PUT http://localhost:8090/api/v1/inventory/expected \
@@ -100,7 +100,7 @@ curl -X PUT http://localhost:8090/api/v1/inventory/expected \
 Open `/inventory`. You'll see the two real hosts as **healthy**
 and `ghost-host-that-does-not-exist` as **missing**.
 
-### v0.33 — Silent-agent webhooks
+### v0.33, Silent-agent webhooks
 
 Edit `squadron.yaml` and add:
 
@@ -123,10 +123,10 @@ Within ~60 seconds you'll see a webhook hit the echo server. Watch:
 docker logs -f squadron-test-webhook-echo
 ```
 
-Restart the collector — you'll get the matching `resolved` webhook
+Restart the collector, you'll get the matching `resolved` webhook
 about 30s later.
 
-### v0.34 / v0.35 — Deploy integration
+### v0.34 / v0.35, Deploy integration
 
 This needs a real GitHub repo because the integration actually
 calls the GitHub Actions API. Cheapest setup:
@@ -169,11 +169,11 @@ calls the GitHub Actions API. Cheapest setup:
    `mihea-otel-test` + `test-deploy.yml` + `main` + paste the PAT
    + set inventory path `winOtel/ansible/inventory.ini`.
 
-6. Click **Validate** — you should see all four checks pass.
+6. Click **Validate**, you should see all four checks pass.
 
-7. Click **Run deployment** — the trigger sheet will show the
+7. Click **Run deployment**, the trigger sheet will show the
    live host status of `test-prod-01` and `test-staging-01`
-   (green dots — they're checking in), inventory parsed at
+   (green dots, they're checking in), inventory parsed at
    trigger time, runs through the lint gate, fires
    `workflow_dispatch`, attaches the run ID, polls for status.
 
@@ -188,18 +188,18 @@ calls the GitHub Actions API. Cheapest setup:
    Trigger another deploy and watch the echo server for the
    payload.
 
-### v0.36.0 — Passive OTLP discovery
+### v0.36.0, Passive OTLP discovery
 
-Already exercised — `test-rogue-01` shows up as telemetry-only
+Already exercised, `test-rogue-01` shows up as telemetry-only
 on initial bringup. To validate explicitly: stop it (`docker stop
 squadron-test-collector-otlp-only`), wait a minute, see its
 last_seen freeze. Restart and watch the timestamp tick forward.
 
-### v0.36.1 — GHA history walker
+### v0.36.1, GHA history walker
 
 After triggering 2-3 deploys against your test repo, the walker
 runs every 6 hours. To run it on-demand for testing, restart
-Squadron — the walker fires immediately on startup.
+Squadron, the walker fires immediately on startup.
 
 Open `/inventory` and you'll see entries with source
 `gha-history:<target-id>` and notes referencing the actual run
@@ -216,7 +216,7 @@ make test-env-fleetsim
 This adds 50 synthetic OpAMP agents that look like real
 collectors. Combined with your 3 real ones, you'll have 53 in
 the fleet. The agents list is virtualized so scrolling stays
-smooth — if it doesn't, that's a real bug to file.
+smooth, if it doesn't, that's a real bug to file.
 
 ## Tearing down
 
@@ -225,23 +225,23 @@ make test-env-down       # stops the fleet, keeps Squadron's data
 make test-env-reset      # full reset (also wipes Squadron's data)
 ```
 
-Squadron itself stays running across `test-env-down/up` cycles —
+Squadron itself stays running across `test-env-down/up` cycles,
 kill it manually if you need to (`pkill -f bin/squadron`).
 
 ## Troubleshooting
 
-**"Squadron not reachable from containers"** — make sure Squadron
+**"Squadron not reachable from containers"**, make sure Squadron
 is bound to all interfaces (not just 127.0.0.1). The local-run
 config uses `0.0.0.0:` prefixes for OTLP endpoints, which is
 correct. If you've customized: ensure the OpAMP server listens
 on `:4330` (not `127.0.0.1:4330`).
 
-**"No agents showing up"** — check `docker logs squadron-test-collector-prod`.
+**"No agents showing up"**, check `docker logs squadron-test-collector-prod`.
 Most common issue: the OpAMP supervisor can't reach the server
 because Squadron isn't running. Start Squadron first, then run
 `docker compose -f deploy/test/docker-compose.yml restart`.
 
-**"test-rogue-01 has the wrong badge"** — v0.36.0 needs a couple
+**"test-rogue-01 has the wrong badge"**, v0.36.0 needs a couple
 of seconds after first OTLP batch to materialize the agent. If
 you see no badge at all, hard-refresh the Agents page.
 

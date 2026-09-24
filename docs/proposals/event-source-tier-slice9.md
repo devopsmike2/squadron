@@ -1,4 +1,4 @@
-# Event source tier slice 9 — OCI Queue Service (third OCI surface)
+# Event source tier slice 9, OCI Queue Service (third OCI surface)
 
 **Status:** design doc, locked for slice 9 implementation.
 Adds OCI Queue Service as the third OCI event source surface
@@ -28,7 +28,7 @@ OCI's three event source primitives serve distinct patterns:
   distribution primitive.
 - **Queue Service** (this slice): transactional FIFO message
   queues with at-least-once delivery semantics. The
-  task-queue primitive analogous to AWS SQS — distinct from
+  task-queue primitive analogous to AWS SQS, distinct from
   ONS pub/sub fan-out (one consumer per message vs.
   many-consumer fan-out).
 
@@ -36,7 +36,7 @@ The canonical OCI task-processing architecture is **Queue
 service → Functions / OKE consumers** with dead-letter
 queues for poison-message isolation. Without Queue Service
 coverage, Squadron misses the queue layer that feeds OCI
-task processors — including, frequently, the substrate of
+task processors, including, frequently, the substrate of
 batch processing pipelines on OKE.
 
 ### Why now?
@@ -45,8 +45,8 @@ batch processing pipelines on OKE.
    Azure has 3 (after slice 8); OCI has 2. Slice 9 closes
    the asymmetry. After slice 9, only GCP remains at 2.
 2. **One clean detection axis.** OCI Queue Service has a
-   single PR-able observability axis — Logging integration
-   — mirroring the slice 7 ONS pattern. Slice 9 ships with
+   single PR-able observability axis, Logging integration,
+mirroring the slice 7 ONS pattern. Slice 9 ships with
    1 recommendation kind, narrow but honest.
 3. **Pattern reuse.** The three-way dispatcher pattern is
    already shipped from slice 8 (Azure) and slice 4 (AWS);
@@ -55,7 +55,7 @@ batch processing pipelines on OKE.
 
 ### What slice 9 does NOT address
 
-- **OCI Streaming-Queue interop** — when an OCI Streaming
+- **OCI Streaming-Queue interop**, when an OCI Streaming
   pipeline routes into an OCI Queue downstream, the
   cross-surface correlation is slice 10+ candidate.
 - **Per-queue dead-letter queue (DLQ) configuration
@@ -71,17 +71,17 @@ batch processing pipelines on OKE.
 
 ## 2. Non-goals (slice 9)
 
-- **OCI Streaming-Queue interop correlation** — slice 10+.
-- **DLQ configuration inspection** — slice 10+.
-- **Per-message visibility timeout analysis** — slice 10+.
-- **Channel-level inspection** — slice 10+.
-- **Third GCP surface** — slice 10+ candidate (Cloud
+- **OCI Streaming-Queue interop correlation**, slice 10+.
+- **DLQ configuration inspection**, slice 10+.
+- **Per-message visibility timeout analysis**, slice 10+.
+- **Channel-level inspection**, slice 10+.
+- **Third GCP surface**, slice 10+ candidate (Cloud
   Pub/Sub Lite, Cloud Dataflow are candidate primitives).
-- **Per-queue CMEK / vault key rotation validation** —
+- **Per-queue CMEK / vault key rotation validation**,
   slice 10+.
 - **Auto-fix.** Squadron remains a recommender.
 
-## 3. Detection surface — OCI Queue Service
+## 3. Detection surface, OCI Queue Service
 
 API: `/20210201/queues` via the OCI Queue Service endpoint
 (`https://messaging.{region}.oci.oraclecloud.com`).
@@ -102,7 +102,7 @@ Detection axes:
 | KMS key reference       | `customEncryptionKeyId` recorded if set                                    | informational only     |
 
 The Logging axis mirrors the slice 1 Streaming + slice 7 ONS
-patterns exactly — same OCI Logging `/logs` endpoint, same
+patterns exactly, same OCI Logging `/logs` endpoint, same
 `searchTerm=<ocid>` convention, same defensive
 `Source.Resource` side-check.
 
@@ -170,7 +170,7 @@ The Queue Service API:
 
 The OCI raw-HTTP + signing pattern carries through. Queue
 Service uses a different per-service hostname
-(`messaging.{region}.oci.oraclecloud.com`) — the scanner
+(`messaging.{region}.oci.oraclecloud.com`), the scanner
 constructs the endpoint via the existing region helper.
 
 ## 6. API surface
@@ -211,7 +211,7 @@ Reasoning template for `queues-logging-enable`:
 > "This OCI Queue has no OCI Logging configuration. Without
 > a log group capturing queue delivery events, the operator
 > has no audit trail for which messages were dequeued,
-> processed, or sent to the DLQ — critical for postmortem
+> processed, or sent to the DLQ, critical for postmortem
 > analysis of consumer-side failures and poison-message
 > investigation.
 >
@@ -292,9 +292,9 @@ Total: 2 release tags. Same pattern as slices 3-8.
 
 ## 11. Acceptance tests
 
-1. **OCI ScanQueues returns queues** — paginated list
+1. **OCI ScanQueues returns queues**, paginated list
    response walked.
-2. **Queue with Logging configured → HasLogAxis = true** —
+2. **Queue with Logging configured → HasLogAxis = true**,
    shared lookup helper resolves the queue OCID against the
    Logging /logs response.
 3. **Queue without Logging configured → HasLogAxis = false**.
@@ -320,7 +320,7 @@ Total: 2 release tags. Same pattern as slices 3-8.
 13. **Webhook routes queues-logging-enable to oci**.
 14. **Discovery summary OCI event_source_count surfaces
     non-zero when queues exist**.
-15. **Cold-start parity preserved** — proposer prompts
+15. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.154 when no Queue rows trigger
     recommendations.
 
@@ -328,7 +328,7 @@ Total: 2 release tags. Same pattern as slices 3-8.
 
 **New IAM permission.** Queue Service adds
 `read queues in compartment` to the OCI scanner policy
-template. Read-only — Squadron never executes a
+template. Read-only, Squadron never executes a
 PutMessages / CreateQueue / DeleteQueue mutation. The
 slice 1 Logging read policy covers the per-queue detection
 call without extension.
@@ -337,7 +337,7 @@ call without extension.
 existing rate limiter shared across slices 1 + 7. Queue
 Service adds 1 list call per compartment + 1 Logging /logs
 call per queue. For a fleet of 200 queues across 10
-compartments, that's 210 API calls per scan — well within
+compartments, that's 210 API calls per scan, well within
 OCI's per-tenancy Queue Service rate limit.
 
 **Cost surface.** OCI Queue Service list calls are free.
@@ -364,22 +364,22 @@ PII surface stays at zero.
 
 ## 13. Slice 10+ candidates
 
-- **Third GCP surface** — Cloud Pub/Sub Lite, Cloud
+- **Third GCP surface**, Cloud Pub/Sub Lite, Cloud
   Dataflow are candidate primitives to bring GCP to 3
   surfaces (closing the widening at 3-3-3-3).
-- **DLQ configuration inspection** — per-queue
+- **DLQ configuration inspection**, per-queue
   `deadLetterQueueDeliveryCount` + redelivery policy
   analysis; flag queues with no DLQ or with DLQ count
   inappropriate for the consumer's processing profile.
-- **Per-message visibility timeout analysis** —
+- **Per-message visibility timeout analysis**,
   substrate-level analysis of consumer processing lag
   vs. visibility timeout.
-- **Channel-level inspection** — OCI Queue per-channel
+- **Channel-level inspection**, OCI Queue per-channel
   routing detection.
-- **Streaming-Queue cross-surface correlation** — when an
+- **Streaming-Queue cross-surface correlation**, when an
   OCI Streaming pipeline routes into an OCI Queue
   downstream, the cross-surface correlation view.
-- **Per-queue CMEK / vault key rotation validation** —
+- **Per-queue CMEK / vault key rotation validation**,
   deeper encryption posture.
 
 ---
@@ -405,21 +405,21 @@ visible:
 2. **ONS topic** → alert distribution (slice 7
    `ons-logging-enable`)
 3. **Queue** → task processing (this slice
-   `queues-logging-enable`) — operator has no audit of
+   `queues-logging-enable`), operator has no audit of
    which messages were dequeued or sent to DLQ
 4. **Functions / OKE** consumers without trace primitive
    (serverless + kubernetes tiers)
-5. **Workload health view** — workload-health dashboard
+5. **Workload health view**, workload-health dashboard
    panel from v0.89.131-133
 
 Five layers. One control plane. Three primitives covered on
 OCI. The widening pass leaves GCP as the only 2-surface
-cloud — slice 10+ candidate to close at 3-3-3-3 / 12 surfaces.
+cloud, slice 10+ candidate to close at 3-3-3-3 / 12 surfaces.
 
 The Tuesday LinkedIn drumbeat narrative gains: "Your OCI
 Queue carries the task pipeline that feeds Functions.
 Without OCI Logging configured, when a message lands in
 the DLQ at 2am the operator has no record of which
-consumer attempted it — only that the DLQ count
+consumer attempted it, only that the DLQ count
 incremented. Squadron flagged the queue; one PR enables
 delivery logging across the queue's lifecycle events."

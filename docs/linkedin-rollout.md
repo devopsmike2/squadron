@@ -3,7 +3,7 @@
 Companion to `docs/thesis.md`. This document maps the public
 rollout of Squadron's universal-observability-control-plane
 thesis to a sequence of LinkedIn posts, slow and technical, that
-land over months — not weeks. The goal is to surface Squadron to
+land over months, not weeks. The goal is to surface Squadron to
 SREs and platform engineers in a way that earns trust through
 evidence, not hype.
 
@@ -11,7 +11,7 @@ evidence, not hype.
 
 Every post lands under one consistent positioning statement.
 
-> **Squadron — universal insight, dynamic discovery, intuitive
+> **Squadron, universal insight, dynamic discovery, intuitive
 > remediation, user friendly.**
 
 The five-word pillars are the post-title vocabulary. A post about
@@ -40,7 +40,7 @@ Production guidance:
 - Screenshots come from the actual running deployment, not
   mockups. A real proposer reasoning panel beats any hand-drawn
   approximation.
-- GIFs are short — 6 to 12 seconds. Loop cleanly.
+- GIFs are short, 6 to 12 seconds. Loop cleanly.
 - Widgets are saved as standalone HTML files in
   `docs/widgets/` so they can be embedded in future docs or
   blog posts without rebuilding.
@@ -56,7 +56,7 @@ the running deployment. Code blocks come from the actual files.
 Logs come from real runs.
 
 This is the explicit anti-pattern to what most OSS projects do
-on LinkedIn — which is to post features that almost work,
+on LinkedIn, which is to post features that almost work,
 mockups that don't reflect the build, and "we're working on"
 posts that the audience correctly discounts.
 
@@ -96,7 +96,7 @@ account permanently.
   one specific to the topic (`#SRE`, `#PlatformEngineering`,
   `#ObservabilityControlPlane`).
 
-## Phase 1 — what's already real (months 1-3)
+## Phase 1, what's already real (months 1-3)
 
 The first 8-10 posts show what the OSS repo already ships at
 v0.84.0. Every post links to a tagged release. Every demo is
@@ -117,7 +117,7 @@ Each post 200-400 words. Includes one piece of evidence
 (screenshot, log, code block). Lands one technical idea. Drives
 the reader to the repo or the docs.
 
-## Phase 2 — tease the thesis (months 3-6)
+## Phase 2, tease the thesis (months 3-6)
 
 The next 6-8 posts lay groundwork for the universal-discovery
 direction without committing to specifics yet. The audience
@@ -137,7 +137,7 @@ They build the *conceptual frame* the audience will use when
 discovery slices ship. By the time slice 1 lands the audience
 already understands why it's structured the way it is.
 
-## Phase 3 — ship the slices (months 6+)
+## Phase 3, ship the slices (months 6+)
 
 Posts now map 1:1 to shipped features. Each tagged release that
 advances the thesis gets exactly one post. The slow drip
@@ -181,7 +181,7 @@ strong; writing them down makes them easier to refuse.
   community is 3 GitHub stars.** Earn the framing before using
   it.
 - **The metrics post that's actually a vanity post.** "10,000
-  stars in 6 months!" — only post numeric milestones if they
+  stars in 6 months!", only post numeric milestones if they
   carry a thesis-relevant message. "10,000 stars and 40% of our
   users are running it in production" carries a message.
   Stars alone don't.
@@ -195,7 +195,7 @@ material exhausted.
 Phase 2 conceptual scaffolding.
 
 **Months 6+:** One post per shipped release tag. Approximately
-one every 2-4 weeks. Phase 3 — every post is evidence.
+one every 2-4 weeks. Phase 3, every post is evidence.
 
 Total: roughly 24 posts in the first 12 months, accelerating
 slightly as the discovery slices ship. This is a quarter of what
@@ -218,7 +218,7 @@ substantive per post.
 
 What success does *not* look like:
 
-- 50k followers at month 12 — that level of growth in this
+- 50k followers at month 12, that level of growth in this
   audience usually means the content has shifted toward
   entertainment rather than substance. Pull back if this
   happens.
@@ -234,8 +234,8 @@ Re-read this document quarterly. Update it when:
 - A phase ends and the next one begins.
 - The thesis document changes materially (it's the source of
   truth; this plan reflects it).
-- A post lands in a way that surprises us — positively or
-  negatively — and the cadence or tone should adjust.
+- A post lands in a way that surprises us, positively or
+  negatively, and the cadence or tone should adjust.
 - The first discovery slice ships, because that's the moment
   Phase 3 starts and the content shape shifts from
   "demonstrate" to "evidence."

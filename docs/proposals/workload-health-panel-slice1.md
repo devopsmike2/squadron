@@ -21,8 +21,8 @@ single resource, but it leaves a dashboard-level gap:
 
 - An operator opening Squadron's dashboard at `/discovery`
   sees the existing TRACE COVERAGE + SPAN QUALITY panels.
-- The substrate's three diagnostics — cold-start, sampling,
-  error rate — are only visible by navigating to each
+- The substrate's three diagnostics, cold-start, sampling,
+  error rate, are only visible by navigating to each
   per-provider Discovery page and scanning the Serverless
   table column-by-column.
 - A multi-cloud operator with serverless across all 4 clouds
@@ -44,7 +44,7 @@ The panel:
 - Hides when no serverless inventory exists OR all 3
   percentages are zero
 
-This is a polish arc — exposes existing data at a new
+This is a polish arc, exposes existing data at a new
 surface. No new substrate, no new metrics, no new
 recommendation kinds.
 
@@ -73,7 +73,7 @@ recommendation kinds.
   spans the operator's entire connected fleet. Per-environment
   filtering is slice 2+.
 
-## 3. Detection — already done
+## 3. Detection, already done
 
 Slice 1 of Workload Health reuses the existing
 detection rules:
@@ -154,7 +154,7 @@ The Discovery dashboard at `/discovery` currently shows:
 
 Slice 1 of Workload Health adds a third panel:
 
-3. **WORKLOAD HEALTH (SERVERLESS)** panel — between TRACE
+3. **WORKLOAD HEALTH (SERVERLESS)** panel, between TRACE
    COVERAGE and SPAN QUALITY for vertical narrative flow:
    coverage → workload health → span quality.
 
@@ -177,7 +177,7 @@ Each column:
 - Title (kind-friendly name)
 - Headline % (totals.cold_start_exceeded_pct, etc.)
 - Resource count
-- Clickable — deep-links to per-provider Recommendations tab
+- Clickable, deep-links to per-provider Recommendations tab
   filtered by the corresponding kind prefix
   (lambda-cold-start-baseline / cloudrun-cold-start-baseline
   / etc. for cold-start; span-quality-sampling-too-aggressive
@@ -255,7 +255,7 @@ slice 1 is purely surfacing existing data at a new endpoint
 
 ## 8. Acceptance tests
 
-1. **Aggregation includes only serverless resources** —
+1. **Aggregation includes only serverless resources**,
    compute/db/k8s inventory rows don't contribute.
 2. **Cold-start exceeded count counts resources whose
    latest 24h cold-start observation exceeds threshold**.
@@ -286,7 +286,7 @@ slice 1 is purely surfacing existing data at a new endpoint
     `span-quality-error-rate-spike`**.
 14. **Footer count = sum of unique resources with any
     issue** (matches any_issue_count from the endpoint).
-15. **Cold-start parity preserved** — proposer prompts
+15. **Cold-start parity preserved**, proposer prompts
     byte-identical to v0.89.130 when no workload health
     rows trigger recommendations.
 
@@ -344,7 +344,7 @@ that filtering.
 
 **Strategic frame:**
 
-This is a polish arc — the substrate has paid for itself
+This is a polish arc, the substrate has paid for itself
 three times over already. The Workload Health panel
 exposes the substrate's three diagnostics at the dashboard
 level where multi-cloud operators get a one-glance
@@ -352,14 +352,14 @@ serverless health picture without paging through 4
 per-provider pages.
 
 The universal claim doesn't grow a new verb or new tier.
-What changes is the SURFACE — the existing diagnostic
+What changes is the SURFACE, the existing diagnostic
 work becomes visible at the dashboard's primary entrypoint.
 
 The Tuesday LinkedIn drumbeat narrative gains the most
 operator-friendly framing yet: "Open Squadron's dashboard.
 TRACE COVERAGE tells you if telemetry is flowing.
 WORKLOAD HEALTH tells you if your serverless fleet is
-healthy across three dimensions — latency, throughput,
+healthy across three dimensions, latency, throughput,
 errors. SPAN QUALITY tells you if the spans you receive
 are diagnostically usable. Three panels. One screen. Then
 drill into whichever's flashing amber."

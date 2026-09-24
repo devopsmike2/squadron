@@ -71,7 +71,7 @@ squadronctl auth whoami
 ```
 
 If the Squadron server has `auth.enabled: false`, the token can be
-omitted — the server accepts unauthenticated requests. Production
+omitted, the server accepts unauthenticated requests. Production
 deployments should always have auth on; see [Authentication](./auth.md).
 
 ## Common commands
@@ -103,7 +103,7 @@ the group by default:
 # Add the intent/effective hashes and the unified diff behind the verdict.
 squadronctl agents get <agent-id> --drift
 
-# Print ONLY the reported effective config (raw YAML) — pipe it to a file
+# Print ONLY the reported effective config (raw YAML), pipe it to a file
 # or a diff tool.
 squadronctl agents get <agent-id> --effective > effective.yaml
 ```
@@ -132,7 +132,7 @@ squadronctl agents set-group <agent-id> --none
 # config. Prints fell_back_to / group_id / pushed.
 squadronctl agents clear-config <agent-id>
 
-# Assign an existing config to a group (config_id reference — create the
+# Assign an existing config to a group (config_id reference, create the
 # config first with `configs apply`). Pushes it to every agent in the group.
 squadronctl groups assign-config <group-id> --config <config-id>
 ```
@@ -218,7 +218,7 @@ squadronctl rollouts create \
   --warmup-seconds 60
 ```
 
-For label-mode rollouts, drive the API directly with curl — the CLI's
+For label-mode rollouts, drive the API directly with curl, the CLI's
 `--stages` flag is percent-mode only.
 
 ### Manage tokens
@@ -293,7 +293,7 @@ jobs:
 ```
 
 The job fails on exit 2 (rolled back) or exit 3 (timeout), which
-GitHub renders as a failed workflow — wire your usual notification on
+GitHub renders as a failed workflow, wire your usual notification on
 that.
 
 ## Exit codes
@@ -320,7 +320,7 @@ squadronctl audit list -o json \
   | jq '.[] | select(.actor != "system")'  # find operator-attributed events
 ```
 
-The `human` output format is intentionally not stable — it's optimized
+The `human` output format is intentionally not stable, it's optimized
 for terminal readability and may change between releases. Pipelines
 should use `-o json`.
 
@@ -337,8 +337,8 @@ If your CI runner (`otel-cli`, GitHub Actions OpenTelemetry, GitLab's
 OTel integration, etc.) already injects a `TRACEPARENT` env var into
 spawned child processes, `squadronctl` honors it automatically.
 Every API call carries the inherited traceparent forward, so the
-server-side request span — and everything that runs under it on the
-Squadron side — becomes a child of the CI span:
+server-side request span, and everything that runs under it on the
+Squadron side, becomes a child of the CI span:
 
 ```bash
 otel-cli exec --service-name ci-deploy --name "deploy v2.3" -- \
@@ -349,7 +349,7 @@ otel-cli exec --service-name ci-deploy --name "deploy v2.3" -- \
     --wait
 ```
 
-No env vars on `squadronctl` itself are required for this path —
+No env vars on `squadronctl` itself are required for this path,
 `TRACEPARENT` is the only thing it reads from the environment.
 
 ### Native OTLP export from squadronctl
@@ -385,7 +385,7 @@ chain.
 `squadronctl` ends its root span and shuts down the OTLP exporter
 inline before the process exits (3-second timeout). The last span
 in the invocation always lands, even on the error path. If the
-OTLP endpoint is unreachable, the export silently fails — the CLI
+OTLP endpoint is unreachable, the export silently fails, the CLI
 never blocks user feedback on telemetry.
 
 See [self-monitoring.md](./self-monitoring.md) for the server-side
@@ -432,25 +432,25 @@ squadronctl plans get plan-abc123 -o json | jq '.state'
 ### `squadronctl plans create --steps <file>`
 
 POST a new plan from a JSON file. The body is
-`{"steps":[<RolloutInput>, ...]}` — each step has the same shape
+`{"steps":[<RolloutInput>...]}`, each step has the same shape
 `POST /api/v1/rollouts` accepts. The server assigns a shared
 `plan_id` and `plan_step_index` 0..N-1 in step order; the request's
 own values are ignored. Only step 0's `require_approval` flag is
-honored — the plan approves as a unit at step 0.
+honored, the plan approves as a unit at step 0.
 
 ```bash
 cat > plan.json <<EOF
 {
   "steps": [
     {
-      "name": "Step 0 — drop noisy attribute",
+      "name": "Step 0, drop noisy attribute",
       "group_id": "web-prod",
       "target_config_id": "cfg-abc",
       "stages": [{"mode": "percent", "percentage": 100}],
       "require_approval": true
     },
     {
-      "name": "Step 1 — rotate Splunk index",
+      "name": "Step 1, rotate Splunk index",
       "group_id": "web-prod",
       "target_config_id": "cfg-def",
       "stages": [{"mode": "percent", "percentage": 100}]

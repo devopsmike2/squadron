@@ -1,4 +1,4 @@
-# Consumer-Lag Substrate Integration — slice 5 (closes the slice-2 lag deferrals)
+# Consumer-Lag Substrate Integration, slice 5 (closes the slice-2 lag deferrals)
 
 Status: chunk 1 shipping in v0.89.182 (#824 Stream 221).
 
@@ -27,7 +27,7 @@ poison-rate substrate arc (slice 4, v0.89.177-181) closed the
 per-cloud MetricQuerier substrate the cold-start latency arc
 built. It's the same proven pattern, now applied to the lag axis.
 
-## 2. Scope — backlog axis, not silence
+## 2. Scope, backlog axis, not silence
 
 This arc closes the **backlog-depth** half of the lag axis
 (`lag_backlog_depth` + `lag_backlog_depth_high`). The
@@ -40,14 +40,14 @@ does. Honest framing: backlog becomes real; silence remains a
 documented deferral. A high backlog is the primary lag signal
 operators act on, so this closes the operationally important half.
 
-## 3. Chunk 1 (this slice) — GCP Cloud Tasks backlog
+## 3. Chunk 1 (this slice), GCP Cloud Tasks backlog
 
 Reads `cloudtasks.googleapis.com/queue/depth` (a GAUGE: number of
 tasks currently in the queue) via Cloud Monitoring, scoped to the
 queue with `resource.labels.queue_id`. Because it's a gauge, the
 query uses the `ALIGN_MAX` per-series aligner and the substrate's
-MAX cross-period rollup — i.e. the **peak backlog over the trailing
-window** — rather than the `ALIGN_DELTA` + SUM the count metrics
+MAX cross-period rollup, i.e. the **peak backlog over the trailing
+window**, rather than the `ALIGN_DELTA` + SUM the count metrics
 (poison-rate, sampling-rate) use.
 
 ```
@@ -65,14 +65,14 @@ datapoints) → keep the honest-framing absent sentinel (`-1`); a
 non-empty series → real reading (even a real `0` = empty queue).
 If the metric name doesn't match GCP's current reference, the
 query returns no datapoints and the detector degrades safely to
-`-1` — never false data.
+`-1`, never false data.
 
-## 4. Chunk 2 (future) — Azure Service Bus backlog
+## 4. Chunk 2 (future), Azure Service Bus backlog
 
 Reads the `ActiveMessages` metric per queue via the **EntityName
 dimension split** the poison-rate chunk 3b (v0.89.180) already
 built (`$filter="EntityName eq '*'"`). This closes the slice-2
-§3.2 lag gap reusing existing infrastructure — one metric name
+§3.2 lag gap reusing existing infrastructure, one metric name
 change from the dead-letter path. Worst-queue attribution, same as
 the poison-rate per-queue path.
 
@@ -89,7 +89,7 @@ to the pre-enrichment projection.
 
 Unchanged. The same `monitoring.timeSeries.list` (GCP) /
 `microsoft.insights` (Azure) read the cold-start + poison-rate
-substrate already uses covers the backlog metrics — no new
+substrate already uses covers the backlog metrics, no new
 permission.
 
 ## 7. Chunk map

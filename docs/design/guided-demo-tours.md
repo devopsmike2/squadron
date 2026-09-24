@@ -1,13 +1,13 @@
 # Design: guided use-case tours (in-app demo)
 
-Status: **accepted — building** (Michael, this session)
+Status: **accepted, building** (Michael, this session)
 Date: 2026-07-02
 
 ## Problem
 
 The demo today only covers per-cloud discovery (canned inventory + AI recs) plus a
-separate CLI-seeded cost-spike loop (`cmd/squadron-demo-seed`). A first-time user —
-e.g. an SRE evaluating the OSS — never sees Squadron's flagship capabilities:
+separate CLI-seeded cost-spike loop (`cmd/squadron-demo-seed`). A first-time user,
+e.g. an SRE evaluating the OSS, never sees Squadron's flagship capabilities:
 safe fleet config rollouts, cost-spike → AI-fix → incident, on-prem agent
 onboarding, or env → Terraform IaC. There's no guided path that says "here's how
 Squadron handles *your* use-case, step by step."
@@ -19,21 +19,21 @@ runs an **in-app coach-mark tour over the real pages**, backed by **real seeded
 data**, narrating each step as it drives the actual UI.
 
 Five tours:
-1. **Instrument my cloud** — discovery → gaps → AI recs → merge-ready Terraform PR.
-2. **Safe config rollout** — fleet → push an OTel config change as a staged canary.
-3. **Cost spike → AI fix** — cost spike → AI proposes → approve → action → incident.
-4. **On-prem agent onboarding** — one-command install → agents in Fleet w/ config+metrics+logs.
-5. **Cloud env → Terraform IaC** — scanned inventory → generate import blocks → PR.
+1. **Instrument my cloud**, discovery → gaps → AI recs → merge-ready Terraform PR.
+2. **Safe config rollout**, fleet → push an OTel config change as a staged canary.
+3. **Cost spike → AI fix**, cost spike → AI proposes → approve → action → incident.
+4. **On-prem agent onboarding**, one-command install → agents in Fleet w/ config+metrics+logs.
+5. **Cloud env → Terraform IaC**, scanned inventory → generate import blocks → PR.
 
 ## Approach
 
 ### Tour engine (frontend, dependency-free)
 
-A small custom coach-mark engine — no new npm dependency (keeps the bundle + the
+A small custom coach-mark engine, no new npm dependency (keeps the bundle + the
 partial-install CI surface clean, and we need cross-route control a generic lib
 fights us on).
 
-- `components/tour/TourHost.tsx` — mounted at app root inside `<Router>` next to
+- `components/tour/TourHost.tsx`, mounted at app root inside `<Router>` next to
   `CommandPalette` (so it can `useNavigate` and portal an overlay across routes).
   Holds the active tour + step index. Listens for a `TOUR_START_EVENT`
   (`CustomEvent`, mirrors the existing `ASK_OPEN_EVENT` pattern) so any component
@@ -44,11 +44,11 @@ fights us on).
   centered intro/outro card.
 - Step lifecycle: on step change, if `location.pathname !== step.route`, navigate;
   then **poll for the target selector** (rAF loop, ~3s timeout) before painting the
-  spotlight — pages load async (SWR), so we wait. Timeout → show the card centered
+  spotlight, pages load async (SWR), so we wait. Timeout → show the card centered
   with a "couldn't find this element" soft note (never a dead tour).
 - Robustness: highlight + narrate + user clicks **Next**. We do NOT auto-click real
   buttons (fragile); some steps auto-navigate routes, and a step may call a small
-  `onEnter` hook (e.g. ensure the demo connection is seeded) — idempotent + guarded.
+  `onEnter` hook (e.g. ensure the demo connection is seeded), idempotent + guarded.
 
 ### Tour registry (declarative)
 
@@ -66,7 +66,7 @@ type TourStep = {
 type Tour = { id: string; title: string; blurb: string; icon: string; steps: TourStep[] };
 ```
 
-Pages expose stable `data-tour="<name>"` anchors on the elements a tour points at —
+Pages expose stable `data-tour="<name>"` anchors on the elements a tour points at,
 decouples tours from styling/class churn. Adding anchors is additive and harmless.
 
 ### Use Cases page + nav
@@ -94,8 +94,8 @@ Tours must run on real data end-to-end:
   **"Instrument my cloud"** (discovery demo already seeded). tsc/build gate; ship.
 - **Slice 1**: extract seed logic → package; in-app demo-seed endpoint (fleet
   group+config+agents, cost-spike+incident) + disable; tests; ship.
-- **Slice 2+** (shipped): authored the remaining four tours — `config-rollout`,
-  `cost-spike-fix`, `onprem-onboarding`, `env-to-terraform` — in
+- **Slice 2+** (shipped): authored the remaining four tours, `config-rollout`,
+  `cost-spike-fix`, `onprem-onboarding`, `env-to-terraform`, in
   `components/tour/tours.ts`, against real seeded data. Compact, always-present
   elements carry `data-tour` anchors for spotlighting (`rollouts-new`,
   `cost-spike-banner`, `ask-squadron-hero`, `aws-tab-inventory`, `aws-generate-tf`);
@@ -107,7 +107,7 @@ Tours must run on real data end-to-end:
 ## Non-goals / risks
 
 - Not a replacement for the hero video (`docs/demo-script.md`); complementary.
-- No auto-clicking of destructive/real controls in a tour (open-PR, apply) — the
+- No auto-clicking of destructive/real controls in a tour (open-PR, apply), the
   tour highlights and narrates; the user chooses to act.
 - Seed data is demo-scoped (reserved ids) and removable, matching today's model.
 - Live-verification (per the definition-of-done) needs a running stack; unit/tsc

@@ -14,16 +14,16 @@ Just want to see it move in five minutes? The Docker path in
 ## Things that are true for every OSS deployment
 
 - **Single instance.** OSS uses an embedded store (SQLite + DuckDB). Postgres,
-  HA, and multi-replica clustering are commercial-tier — keep it to one instance.
+  HA, and multi-replica clustering are commercial-tier, keep it to one instance.
 - **Four ports.** 8080 (UI/API), 4320 (OpAMP WebSocket to collectors),
   4317/4318 (OTLP gRPC/HTTP).
-- **Not in the hot path.** Your telemetry never flows through Squadron — only
+- **Not in the hot path.** Your telemetry never flows through Squadron, only
   configs, status, and health. If Squadron is down, collectors keep running on
   their last pushed config.
 - **OpAMP needs long timeouts.** It's a persistent WebSocket; any proxy in front
   of port 4320 needs hour-range read/send timeouts, not the usual 60 seconds.
 
-For the full reference — deployment shapes, production checklist, and
-operational traps — see [`../deployment.md`](../deployment.md). For what OSS
+For the full reference, deployment shapes, production checklist, and
+operational traps, see [`../deployment.md`](../deployment.md). For what OSS
 includes vs. the commercial tier, see
 [`../oss-vs-enterprise.md`](../oss-vs-enterprise.md).

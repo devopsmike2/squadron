@@ -1,11 +1,11 @@
-# #603 — Connect IaC repo, slice 2: HCL-aware merging
+# #603, Connect IaC repo, slice 2: HCL-aware merging
 
 **Status:** proposal, slice-2 scoping. Closes #627 Stream 28.
 **See also:** [603-connect-iac-repo.md](603-connect-iac-repo.md)
 (slice 1 contract, v0.89.3); slice 1.5 lives in code at
 [`internal/iac/dispositions.go`](../../internal/iac/dispositions.go)
 + the disposition routing in
-[`internal/api/handlers/iac_github.go:1025–1199`](../../internal/api/handlers/iac_github.go)
+[`internal/api/handlers/iac_github.go:1025-1199`](../../internal/api/handlers/iac_github.go)
 (v0.89.11 #626 Stream 27).
 
 ## 1. Problem
@@ -13,7 +13,7 @@
 Slice 1.5 closed half the merge-friction problem. The 4 `new_file`
 kinds (`ec2-otel-layer`, `s3-access-logging`,
 `eks-observability-addon`, `dynamodb-contributor-insights`) land
-as sibling `squadron_<resource_kind>.tf` files — merge-clean on
+as sibling `squadron_<resource_kind>.tf` files, merge-clean on
 first try.
 
 The 5 `patch_existing` kinds (`lambda-otel-layer`, `rds-pi-em`,
@@ -21,7 +21,7 @@ The 5 `patch_existing` kinds (`lambda-otel-layer`, `rds-pi-em`,
 still go through `appendSnippetWithTrailingNewline`
 ([`iac_github.go:1129`](../../internal/api/handlers/iac_github.go))
 with the `[needs manual merge]` title prefix and label
-([`iac_github.go:1173–1199`](../../internal/api/handlers/iac_github.go)).
+([`iac_github.go:1173-1199`](../../internal/api/handlers/iac_github.go)).
 If the operator merges anyway, `terraform plan` fails with a
 duplicate-resource error on the redeclared block.
 
@@ -30,15 +30,15 @@ block by address, applies a structured patch, writes the result
 back. The title prefix and the `needs-manual-merge` label drop.
 The `KindDispositions` map at
 [`dispositions.go:84`](../../internal/iac/dispositions.go)
-does NOT change — slice 2 changes HOW `patch_existing` lands,
+does NOT change, slice 2 changes HOW `patch_existing` lands,
 not WHICH kinds are classified that way.
 
 ## 2. Non-goals (slice 2)
 
 - HCL parsing for GitLab, Bitbucket, Azure DevOps. GitHub only.
 - HCL-aware merging on `new_file` kinds.
-- JSON-encoded IaC (CDK, Pulumi, CloudFormation) — slice 7.
-- Squadron auto-applying or auto-merging — slice 1 §5 invariant.
+- JSON-encoded IaC (CDK, Pulumi, CloudFormation), slice 7.
+- Squadron auto-applying or auto-merging, slice 1 §5 invariant.
 - `terraform fmt` enforcement. Squadron writes valid HCL but
   preserves the operator's existing style (hclwrite round-trip).
 - Multi-file patches.
@@ -62,33 +62,33 @@ kinds; the handler's HCL writer consumes it. Locked contract.
 
 `target_resource_address` is the two-segment
 `<resource_type>.<name>` form. Module-prefixed addresses
-(`module.foo.aws_lambda_function.bar`) are out of scope — the
+(`module.foo.aws_lambda_function.bar`) are out of scope, the
 placement-map row pins the file, which pins the module.
 
 `op` enum (locked):
 
-- **`scalar_set`** — set a scalar (string/bool/int/number) at
+- **`scalar_set`**, set a scalar (string/bool/int/number) at
   `attribute_path`, replacing existing value. Used by
   `rds-pi-em`.
-- **`list_append_dedupe`** — append `value` to an existing list;
+- **`list_append_dedupe`**, append `value` to an existing list;
   case-sensitive dedupe; original order preserved. Used by
   `lambda-otel-layer.layers` and
   `eks-cluster-logging.enabled_cluster_log_types`.
-- **`nested_block_set`** — find the singleton nested block at
+- **`nested_block_set`**, find the singleton nested block at
   `attribute_path`, set attributes from `value`, create if
   missing. Used by `alb-access-logs.access_logs`.
-- **`nested_block_find_or_create`** — repeated nested block;
+- **`nested_block_find_or_create`**, repeated nested block;
   `value.key_attribute` + `value.key_value` pin which one;
   `value.set` is the attributes to write. Update in place if
   found, append if no match. Used by
   `ecs-container-insights.setting`.
-- **`map_merge`** — at a map-valued path, set the named key
+- **`map_merge`**, at a map-valued path, set the named key
   without disturbing siblings. Used by
   `lambda-otel-layer.environment.variables` (the example uses
-  `scalar_set` against the terminal map key — same effect on a
+  `scalar_set` against the terminal map key, same effect on a
   single key; `map_merge` is the explicit multi-key form).
 
-Patch validation runs BEFORE any GitHub call — malformed `op`
+Patch validation runs BEFORE any GitHub call, malformed `op`
 or missing `attribute_path` returns `MalformedPatch`; no
 branch.
 
@@ -110,7 +110,7 @@ gains a `patch_existing` branch before the existing
    addresses that DO exist as a hint. Multiple matches →
    `PatchFailed{reason: "ambiguous_address"}`.
 4. Apply each operation via hclwrite's typed setters
-   (`SetAttributeValue`, `AppendNewBlock`). §6–§8 spec the
+   (`SetAttributeValue`, `AppendNewBlock`). §6-§8 spec the
    per-op semantics.
 5. Serialize via `f.Bytes()`. No external `terraform fmt`.
 6. PUT the file via the existing `client.PutFileContent` call at
@@ -120,7 +120,7 @@ gains a `patch_existing` branch before the existing
    names the patched address + operations applied.
 
 Any `PatchFailed` falls through to the slice 1.5 append-only path
-with the manual-merge label. The recommendation is never lost —
+with the manual-merge label. The recommendation is never lost,
 the operator gets the slice 1.5 experience plus a one-line note
 in the PR body naming the failure reason.
 
@@ -143,7 +143,7 @@ If the target resource carries
 `["layers"]`, the patch is a no-op at apply time though the file
 change is real. Squadron can't tell whether the hint is
 intentional (state-import staging, drift acceptance) or stale.
-Detect at PR time, warn in PR body — NOT blocking, since the
+Detect at PR time, warn in PR body, NOT blocking, since the
 operator may want the file change for state-import or future
 ignore-changes removal. The `recommendation.pr_opened` audit
 payload gains `patch_no_op_at_apply: true`.
@@ -151,7 +151,7 @@ payload gains `patch_no_op_at_apply: true`.
 ## 7. List append vs replace semantics
 
 For `enabled_cluster_log_types` and `layers` the op is
-append-and-dedupe, NOT replace — replace would wipe the
+append-and-dedupe, NOT replace, replace would wipe the
 operator's existing instrumentation. Dedupe by case-sensitive
 string equality; preserve original order of existing entries;
 append new entries at the end in patch order; preserve comments
@@ -163,11 +163,11 @@ replace the entire map and is a malformed-patch error.
 
 ## 8. Nested-block update semantics
 
-`aws_lb.access_logs` — singleton: `nested_block_set` calls
+`aws_lb.access_logs`, singleton: `nested_block_set` calls
 `Body().FirstMatchingBlock("access_logs", nil)`, sets the named
 attributes, falls back to `Body().AppendNewBlock` if absent.
 
-`aws_ecs_cluster.setting` — repeated, keyed: walk
+`aws_ecs_cluster.setting`, repeated, keyed: walk
 `Body().Blocks()` filtering `block.Type() == "setting"`, match
 where `name == value.key_value` (`"containerInsights"`), set
 `value`. Append a new
@@ -209,7 +209,7 @@ in-PR preview UI.
 1. **PR shape parity with slice 1.5.** Differentiate the slice 2
    PR title/body so operators see at a glance it's merge-clean,
    or keep the same shape (minus title prefix + label) so the
-   PR-template checklist doesn't churn? Leaning same-shape —
+   PR-template checklist doesn't churn? Leaning same-shape,
    absence of the warning IS the signal.
 2. **`squadronctl iac dry-run`.** Local CLI that previews the
    patched file before Open PR. Reduces "did Squadron really do
@@ -266,7 +266,7 @@ each pinned to a `patch_existing` kind or a cross-cutting case.
    `list_append_dedupe` with
    `value = ["audit", "authenticator", "controllerManager"]`.
    Assert: result is
-   `["api", "audit", "authenticator", "controllerManager"]` —
+   `["api", "audit", "authenticator", "controllerManager"]`,
    duplicate "audit" folded, original order first, new entries
    appended in order.
 
