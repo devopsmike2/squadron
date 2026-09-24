@@ -68,6 +68,15 @@ type AuditEvent struct {
 	Payload    map[string]any `json:"payload,omitempty"`
 	CreatedAt  time.Time      `json:"created_at"`
 
+	// Env / Cluster are the descriptive, UNhashed cluster/environment labels
+	// stamped at append time from the agent's AgentDescription (ADR 0053 slice
+	// 4b-3a). Empty when the event has no resolvable env/cluster. They back the
+	// scoped audit views and the ?env=/?cluster= filters; deliberately NOT part
+	// of the tamper-evident hash chain (ADR 0044/0051 — descriptive, not
+	// authoritative).
+	Env     string `json:"env,omitempty"`
+	Cluster string `json:"cluster,omitempty"`
+
 	// v0.57 — cached AI explanation surface. Empty when the row has not
 	// been explained yet; non-empty after the first explain call. The
 	// UI shows the cached value directly without round-tripping the LLM
