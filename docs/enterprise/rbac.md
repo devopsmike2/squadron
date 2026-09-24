@@ -42,6 +42,13 @@ A **role** is a tenant-scoped bundle of permissions. Each permission is
   type; when `false`, it is restricted to the listed IDs.
 - **resource_ids** — the explicit allow-list used when `all_resources` is
   `false`.
+- **label_match** *(optional; ADR 0053)* — a `{key: value}` map that further
+  narrows the permission to resources carrying matching **cluster/environment**
+  labels. All entries must match (AND) against the resource's server-observed
+  `deployment.environment` / `k8s.cluster.name`; an unknown key or an empty label
+  on the resource **fails closed**. Omit it (the default) for a
+  label-agnostic permission. This is how you build a *prod-only* or
+  *us-west-2-only* role — see [Cluster/environment-scoped roles](#clusterenvironment-scoped-roles).
 
 A **binding** attaches a role to a principal. There is no user model, so a
 binding keys on the API token: `{role_id, principal_kind, principal_ref}` where
@@ -86,6 +93,85 @@ curl -sX DELETE localhost:8080/api/v1/rbac/roles/<role-id> -H "Authorization: Be
 curl -s         localhost:8080/api/v1/rbac/bindings              -H "Authorization: Bearer $TOKEN"   # {"bindings":[...]}
 curl -sX DELETE localhost:8080/api/v1/rbac/bindings/<binding-id>  -H "Authorization: Bearer $TOKEN"
 ```
+
+## Cluster/environment-scoped roles
+
+*(ADR 0053. Released in enterprise `v0.89.486`.)*
+
+Add a `label_match` to a permission to scope it to a cluster or environment. The
+authorizer stamps the target's server-observed `deployment.environment` /
+`k8s.cluster.name` onto the `identity.Resource` and admits the permission only
+when every `label_match` entry matches. This works for agent and rollout actions
+and for the scoped audit views (`resource_type: "audit"`).
+
+Create a **prod-only** auditor — read audit events in `prod`, nothing else:
+
+```bash
+curl -sX POST localhost:8080/api/v1/rbac/roles \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+        "name": "prod-auditor",
+        "permissions": [
+          {"scope":"audit:read","resource_type":"audit","all_resources":true,
+           "label_match":{"deployment.environment":"prod"}}
+        ]
+      }'
+```
+
+A holder of this role must query the scope it is granted and **fails closed**
+everywhere else:
+
+```text
+GET /api/v1/audit-review/?env=prod      -> 200  (only prod events)
+GET /api/v1/audit-review/?env=staging   -> 403  (no role grants this scope)
+GET /api/v1/audit-review/               -> 403  (unscoped request fails closed)
+```
+
+The same shape scopes agent/rollout mutation roles, e.g. an `agents:write`
+permission with `label_match:{"deployment.environment":"prod"}` lets a
+prod on-call PATCH prod agents (200) but not staging ones (403).
+
+!!! warning "This is a least-privilege filter within the tenant"
+    On its own, `label_match` scopes what an *operator* may touch. Because
+    `deployment.environment` / `k8s.cluster.name` are client-asserted
+    `AgentDescription` labels, it is **not** an agent-spoofing boundary unless
+    you also bind those labels to the enrollment credential — see
+    [Authenticated env/cluster binding](#authenticated-envcluster-binding).
+
+## Authenticated env/cluster binding
+
+*(ADR 0056. Released: OSS seam `v0.89.485` + enterprise fill `v0.89.486`.)*
+
+By default an agent's `deployment.environment` / `k8s.cluster.name` come from the
+`AgentDescription` it reports — a display hint the agent controls. To make
+cluster/env scoping a real boundary, **pin** the authorized values onto the
+agent's OpAMP enrollment token. The pin rides the token **label** as
+whitespace-separated `env:` / `cluster:` segments (composable with the
+identity pin `pin:<fleetid>` from ADR 0052):
+
+```bash
+# Mint a prod-pinned enrollment token (requires the agents:write scope).
+curl -sX POST localhost:8080/api/v1/auth/tokens \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"label":"env:prod cluster:us-west-2","scopes":["opamp:enroll"]}'
+```
+
+When an agent connects with that token, the pinned values are **authoritative**:
+they overwrite whatever the agent reports, and a disagreeing reported label is
+logged + counted (`opamp_label_pin_mismatch_total`) but the agent is never
+dropped (**relabel-and-log**). So a staging box presenting `env=prod` is
+relabeled to its token-authorized env and can never reach prod-scoped config or
+audit.
+
+- **Minting is gated.** The `env:` / `cluster:` (and `pin:`) label prefixes
+  require the `agents:write` scope; an ordinary `auth:write` token-minter cannot
+  issue a scope-pinned enrollment token.
+- **Leading run only.** Pins are honored from the leading contiguous run of
+  pin segments, matching the mint guard's leading-prefix check — a pin segment
+  after a plain name segment (e.g. `ci-runner env:prod`) is neither gated nor
+  honored, so it cannot smuggle in an ungated scope.
+- **Grace-first.** Unpinned enrollment tokens are unaffected; adopt the boundary
+  by minting pinned tokens.
 
 ## Break-glass so you never lock yourself out
 
