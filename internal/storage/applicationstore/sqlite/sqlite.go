@@ -251,6 +251,11 @@ func (s *Storage) migrate() error {
 		target_id TEXT,
 		action TEXT NOT NULL,
 		payload TEXT,
+		-- ADR 0053 slice 4b: descriptive, UNhashed cluster/environment labels
+		-- resolved from the target agent at append time. Nullable; NOT part of
+		-- the tamper-evident hash chain (see internal/audit/chain).
+		env TEXT,
+		cluster TEXT,
 		-- ADR 0011 slice 3b: per-tenant scoping column (see agents).
 		tenant_id TEXT NOT NULL DEFAULT 'default',
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -744,6 +749,15 @@ func (s *Storage) migrate() error {
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation TEXT`,
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation_model TEXT`,
 		`ALTER TABLE audit_events ADD COLUMN ai_explanation_generated_at DATETIME`,
+
+		// ADR 0053 slice 4b — descriptive cluster/environment labels on
+		// audit_events. Nullable, additive, and deliberately NOT part of
+		// the tamper-evident hash chain (internal/audit/chain): they are
+		// resolved from the target agent at append time for filtering, not
+		// attested. No index — the access pattern is a bounded filtered
+		// timeline scan, not a point lookup.
+		`ALTER TABLE audit_events ADD COLUMN env TEXT`,
+		`ALTER TABLE audit_events ADD COLUMN cluster TEXT`,
 
 		// v0.60 — operator initiated rollback chain. When this rollout
 		// was created by clicking "Roll back" on a previous rollout,
@@ -3089,8 +3103,8 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	}
 
 	stmt := `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	if _, err := s.db.ExecContext(ctx, stmt,
 		e.ID,
@@ -3101,6 +3115,8 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		nullableString(e.TargetID),
 		e.Action,
 		payloadStr,
+		nullableString(e.Env),
+		nullableString(e.Cluster),
 		tenant,
 		e.CreatedAt,
 		seq,
@@ -3147,7 +3163,7 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 	}
 	// Build a parameterized query. We always add a LIMIT clause; the rest
 	// of the clauses are appended conditionally.
-	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1"
+	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1"
 	var args []any
 	if apply {
 		q += " AND tenant_id = ?"
@@ -3168,6 +3184,14 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 	if filter.Actor != "" {
 		q += " AND actor = ?"
 		args = append(args, filter.Actor)
+	}
+	if filter.Env != "" {
+		q += " AND env = ?"
+		args = append(args, filter.Env)
+	}
+	if filter.Cluster != "" {
+		q += " AND cluster = ?"
+		args = append(args, filter.Cluster)
 	}
 	if !filter.Since.IsZero() {
 		q += " AND timestamp >= ?"
@@ -3191,11 +3215,12 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		e := &types.AuditEvent{}
 		var targetID sql.NullString
 		var payload sql.NullString
+		var env, cluster sql.NullString
 		var aiExplanation, aiModel sql.NullString
 		var aiGeneratedAt sql.NullTime
 		if err := rows.Scan(
 			&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
-			&targetID, &e.Action, &payload, &e.CreatedAt,
+			&targetID, &e.Action, &payload, &env, &cluster, &e.CreatedAt,
 			&aiExplanation, &aiModel, &aiGeneratedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan audit event: %w", err)
@@ -3205,6 +3230,12 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		}
 		if payload.Valid && payload.String != "" {
 			_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+		}
+		if env.Valid {
+			e.Env = env.String
+		}
+		if cluster.Valid {
+			e.Cluster = cluster.String
 		}
 		if aiExplanation.Valid {
 			e.AIExplanation = aiExplanation.String
@@ -3228,7 +3259,7 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 	if err != nil {
 		return nil, err
 	}
-	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = ?"
+	q := "SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = ?"
 	args := []any{id}
 	if apply {
 		q += " AND tenant_id = ?"
@@ -3239,11 +3270,12 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 	e := &types.AuditEvent{}
 	var targetID sql.NullString
 	var payload sql.NullString
+	var env, cluster sql.NullString
 	var aiExplanation, aiModel sql.NullString
 	var aiGeneratedAt sql.NullTime
 	err = row.Scan(
 		&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
-		&targetID, &e.Action, &payload, &e.CreatedAt,
+		&targetID, &e.Action, &payload, &env, &cluster, &e.CreatedAt,
 		&aiExplanation, &aiModel, &aiGeneratedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -3257,6 +3289,12 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 	}
 	if payload.Valid && payload.String != "" {
 		_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+	}
+	if env.Valid {
+		e.Env = env.String
+	}
+	if cluster.Valid {
+		e.Cluster = cluster.String
 	}
 	if aiExplanation.Valid {
 		e.AIExplanation = aiExplanation.String

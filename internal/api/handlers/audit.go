@@ -132,6 +132,8 @@ func (h *AuditHandlers) HandleListAuditEvents(c *gin.Context) {
 		TargetType: c.Query("target_type"),
 		TargetID:   c.Query("target_id"),
 		Actor:      c.Query("actor"),
+		Env:        c.Query("env"),
+		Cluster:    c.Query("cluster"),
 	}
 
 	if raw := c.Query("since"); raw != "" {

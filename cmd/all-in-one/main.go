@@ -488,6 +488,26 @@ func runSquadron(cmd *cobra.Command, args []string) error {
 		}
 		return a.Labels["deployment.environment"], a.Labels["k8s.cluster.name"]
 	})
+	// ADR 0053 slice 4b-3a — stamp descriptive env/cluster on agent-targeted
+	// audit events at append time, resolved from the same agent labels the
+	// middleware resolver reads. Best-effort and UNhashed: these columns are
+	// never folded into the tamper-evident audit hash chain. A parse/lookup
+	// miss leaves them empty. Wired via type assertion (mirrors the
+	// SetSiemDispatcher wiring): the setter is an impl detail, not on the
+	// AuditService interface.
+	if impl, ok := auditService.(*services.AuditServiceImpl); ok {
+		impl.SetAgentLabelResolver(func(ctx context.Context, agentID string) (string, string) {
+			aid, err := uuid.Parse(agentID)
+			if err != nil {
+				return "", ""
+			}
+			a, err := agentService.GetAgent(ctx, aid)
+			if err != nil || a == nil {
+				return "", ""
+			}
+			return a.Labels["deployment.environment"], a.Labels["k8s.cluster.name"]
+		})
+	}
 	// ADR 0053 slice 4b-2 — populate Resource.Env/Cluster on rollout :id routes
 	// from the rollout's label-mode stage selectors, so a cluster/env-scoped
 	// role authorizes only rollouts targeting its env/cluster. INERT in OSS

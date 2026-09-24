@@ -339,7 +339,12 @@ CREATE TABLE IF NOT EXISTS audit_events (
     chain_algo                  TEXT,
     ai_explanation              TEXT,
     ai_explanation_model        TEXT,
-    ai_explanation_generated_at TIMESTAMPTZ
+    ai_explanation_generated_at TIMESTAMPTZ,
+    -- ADR 0053 slice 4b — descriptive, UNhashed cluster/environment labels
+    -- resolved from the target agent at append time. Nullable; NOT part of
+    -- the tamper-evident hash chain.
+    env                         TEXT,
+    cluster                     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audit_events_timestamp ON audit_events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, timestamp DESC);
@@ -371,6 +376,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_chain_checkpoints_tenant ON audit_chain_che
 -- have it from the CREATE TABLE above). Existing rows read NULL = legacy and
 -- are NEVER re-hashed.
 ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS chain_algo TEXT;
+
+-- ADR 0053 slice 4b — descriptive cluster/environment labels on audit_events.
+-- Additive, nullable, idempotent; NOT part of the tamper-evident hash chain.
+ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS env TEXT;
+ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS cluster TEXT;
 
 -- ADR 0044 — per-tenant high-water-mark head. The latest sealed
 -- {head_seq, head_row_hash}, authenticated by a MAC a DB writer without the key

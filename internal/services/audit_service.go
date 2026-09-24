@@ -83,9 +83,13 @@ type AuditEventFilter struct {
 	TargetType string
 	TargetID   string
 	Actor      string // exact-match on actor; backs per-actor access-review timelines (ADR 0020)
-	Since      time.Time
-	Until      time.Time // Timestamp < Until; symmetric with Since, backs export cursor pagination (ADR 0020)
-	Limit      int
+	// Env / Cluster are exact-match filters on the descriptive, UNhashed
+	// cluster/environment labels stamped at append time (ADR 0053 slice 4b).
+	Env     string
+	Cluster string
+	Since   time.Time
+	Until   time.Time // Timestamp < Until; symmetric with Since, backs export cursor pagination (ADR 0020)
+	Limit   int
 }
 
 // Canonical actor values. Use these for events Squadron itself generates so

@@ -128,8 +128,8 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		INSERT INTO audit_events (id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, tenant_id, created_at, seq, prev_hash, row_hash, chain_algo)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		e.ID,
 		e.Timestamp,
 		e.Actor,
@@ -138,6 +138,8 @@ func (s *Storage) CreateAuditEvent(ctx context.Context, e *types.AuditEvent) err
 		nullString(e.TargetID),
 		e.Action,
 		payloadStr,
+		nullString(e.Env),
+		nullString(e.Cluster),
 		tenant,
 		e.CreatedAt,
 		seq,
@@ -187,7 +189,7 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1`
+	q := `SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE 1=1`
 	var args []any
 	n := 0
 	if apply {
@@ -214,6 +216,16 @@ func (s *Storage) ListAuditEvents(ctx context.Context, filter types.AuditEventFi
 		n++
 		q += fmt.Sprintf(" AND actor = $%d", n)
 		args = append(args, filter.Actor)
+	}
+	if filter.Env != "" {
+		n++
+		q += fmt.Sprintf(" AND env = $%d", n)
+		args = append(args, filter.Env)
+	}
+	if filter.Cluster != "" {
+		n++
+		q += fmt.Sprintf(" AND cluster = $%d", n)
+		args = append(args, filter.Cluster)
 	}
 	if !filter.Since.IsZero() {
 		n++
@@ -253,7 +265,7 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = $1`
+	q := `SELECT id, timestamp, actor, event_type, target_type, target_id, action, payload, env, cluster, created_at, ai_explanation, ai_explanation_model, ai_explanation_generated_at FROM audit_events WHERE id = $1`
 	args := []any{id}
 	if apply {
 		q += ` AND tenant_id = $2`
@@ -275,11 +287,11 @@ func (s *Storage) GetAuditEvent(ctx context.Context, id string) (*types.AuditEve
 // human-facing view).
 func scanAuditEvent(sc scanner) (*types.AuditEvent, error) {
 	e := &types.AuditEvent{}
-	var targetID, payload, aiExplanation, aiModel sql.NullString
+	var targetID, payload, env, cluster, aiExplanation, aiModel sql.NullString
 	var aiGeneratedAt sql.NullTime
 	if err := sc.Scan(
 		&e.ID, &e.Timestamp, &e.Actor, &e.EventType, &e.TargetType,
-		&targetID, &e.Action, &payload, &e.CreatedAt,
+		&targetID, &e.Action, &payload, &env, &cluster, &e.CreatedAt,
 		&aiExplanation, &aiModel, &aiGeneratedAt,
 	); err != nil {
 		return nil, err
@@ -289,6 +301,12 @@ func scanAuditEvent(sc scanner) (*types.AuditEvent, error) {
 	}
 	if payload.Valid && payload.String != "" {
 		_ = json.Unmarshal([]byte(payload.String), &e.Payload)
+	}
+	if env.Valid {
+		e.Env = env.String
+	}
+	if cluster.Valid {
+		e.Cluster = cluster.String
 	}
 	if aiExplanation.Valid {
 		e.AIExplanation = aiExplanation.String
