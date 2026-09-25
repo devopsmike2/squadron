@@ -11,6 +11,13 @@ import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 
 import {
+  type PermRow,
+  emptyPermRow,
+  permLabel,
+  permRowsToPermissions,
+} from "./SettingsIdentity.helpers";
+
+import {
   type Binding,
   type BindingInput,
   type Permission,
@@ -83,35 +90,6 @@ import { UsagePanel } from "@/components/UsagePanel";
 const ROLES_KEY = "rbac-roles";
 const BINDINGS_KEY = "rbac-bindings";
 const TENANTS_KEY = "tenants";
-
-// A permission row in the role create drawer. resource_ids is kept as raw text
-// (comma / newline separated) and parsed on submit.
-interface PermRow {
-  scope: string;
-  resource_type: string;
-  allResources: boolean;
-  resourceIdsText: string;
-}
-
-const emptyPermRow = (): PermRow => ({
-  scope: "",
-  resource_type: "",
-  allResources: true,
-  resourceIdsText: "",
-});
-
-const permLabel = (p: Permission): string => {
-  const base = p.scope + (p.resource_type ? `@${p.resource_type}` : "");
-  return (
-    base + (p.all_resources ? " (all)" : ` (${p.resource_ids.length} ids)`)
-  );
-};
-
-const parseIds = (text: string): string[] =>
-  text
-    .split(/[,\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 
 export default function SettingsIdentityPage() {
   const { data: roles, error: rolesError } = useSWR<Role[]>(
@@ -195,14 +173,7 @@ export default function SettingsIdentityPage() {
     setRoleSubmitting(true);
     setRoleError(null);
     try {
-      const permissions: Permission[] = permRows
-        .filter((r) => r.scope.trim() !== "")
-        .map((r) => ({
-          scope: r.scope.trim(),
-          resource_type: r.resource_type.trim(),
-          all_resources: r.allResources,
-          resource_ids: r.allResources ? [] : parseIds(r.resourceIdsText),
-        }));
+      const permissions: Permission[] = permRowsToPermissions(permRows);
       const input: RoleInput = { name: roleName, permissions };
       await createRole(input);
       setRoleOpen(false);
@@ -633,6 +604,35 @@ export default function SettingsIdentityPage() {
                       className="font-mono text-xs"
                     />
                   )}
+                  {/* ADR 0053 — optional cluster/environment scope. Leave blank
+                      for a label-agnostic permission; set one or both to build a
+                      prod-only or single-cluster role. */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      value={row.env}
+                      onChange={(e) =>
+                        setPermRows((rows) =>
+                          rows.map((r, j) =>
+                            j === i ? { ...r, env: e.target.value } : r,
+                          ),
+                        )
+                      }
+                      placeholder="env (deployment.environment)"
+                      className="font-mono text-xs"
+                    />
+                    <Input
+                      value={row.cluster}
+                      onChange={(e) =>
+                        setPermRows((rows) =>
+                          rows.map((r, j) =>
+                            j === i ? { ...r, cluster: e.target.value } : r,
+                          ),
+                        )
+                      }
+                      placeholder="cluster (k8s.cluster.name)"
+                      className="font-mono text-xs"
+                    />
+                  </div>
                 </div>
               ))}
               <Button
