@@ -12,9 +12,44 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/devopsmike2/squadron/extension/identity"
 	"github.com/devopsmike2/squadron/internal/api/middleware"
 	"github.com/devopsmike2/squadron/internal/services"
 )
+
+// authorizeRolloutTargets runs the wired Authorizer's rollouts:write check
+// against every distinct cluster/environment the given stages target (ADR 0053
+// slice 4b-2b). POST /rollouts and /rollouts/plans have no :id at authz time, so
+// resolveResource can't populate env/cluster from the route; this derives them
+// from the request BODY instead. Each labeled stage's deployment.environment /
+// k8s.cluster.name becomes one Resource the caller must be authorized for, so a
+// cluster/env-scoped operator cannot slip an out-of-scope stage past the check.
+// A rollout with no labeled stages (percent/group-targeted) gets a single
+// env-agnostic check, matching the per-action resolver's empty-label behavior.
+// Returns true when authorized for ALL targets. INERT under the OSS
+// ScopeAuthorizer (flat-scope allow, byte-identical to the old route-level
+// RequireScope); the enterprise authorizer enforces the LabelMatch.
+func authorizeRolloutTargets(c *gin.Context, stageSets ...[]services.RolloutStage) bool {
+	type ec struct{ env, cluster string }
+	targets := map[ec]struct{}{}
+	for _, stages := range stageSets {
+		for _, st := range stages {
+			if st.Mode == services.RolloutStageModeLabel && st.LabelSelector != nil {
+				targets[ec{st.LabelSelector["deployment.environment"], st.LabelSelector["k8s.cluster.name"]}] = struct{}{}
+			}
+		}
+	}
+	if len(targets) == 0 {
+		targets[ec{}] = struct{}{}
+	}
+	for t := range targets {
+		if !middleware.AuthorizeScopeResource(c, services.ScopeRolloutsWrite,
+			identity.Resource{Type: "rollout", Env: t.env, Cluster: t.cluster}) {
+			return false
+		}
+	}
+	return true
+}
 
 // RolloutHandlers serves /api/v1/rollouts.
 type RolloutHandlers struct {
@@ -83,6 +118,18 @@ func (h *RolloutHandlers) HandleCreateRollout(c *gin.Context) {
 	var input services.RolloutInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body", "detail": err.Error()})
+		return
+	}
+	// ADR 0053 slice 4b-2b — rollouts:write, resource-aware, against the target
+	// env/cluster derived from the body (the route has no :id at create time).
+	// Byte-identical to the old route-level RequireScope under OSS; the enterprise
+	// authorizer denies a cluster/env-scoped operator creating out-of-scope.
+	if !authorizeRolloutTargets(c, input.Stages) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":          "forbidden",
+			"detail":         "token is not authorized to create a rollout targeting this environment/cluster",
+			"required_scope": services.ScopeRolloutsWrite,
+		})
 		return
 	}
 	// v0.47 — record the requester so the two-person rule has
@@ -636,6 +683,23 @@ func (h *RolloutHandlers) HandleCreatePlan(c *gin.Context) {
 	}
 	if len(req.Steps) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "plan requires at least one step"})
+		return
+	}
+	// ADR 0053 slice 4b-2b — rollouts:write, resource-aware, against every target
+	// env/cluster across all plan steps (a plan is N rollout creates). Replaces
+	// the route-level RequireScope so a cluster/env-scoped operator can create an
+	// in-scope plan and is denied one that targets an env/cluster outside its
+	// scope. Byte-identical to the old flat check under OSS.
+	stageSets := make([][]services.RolloutStage, 0, len(req.Steps))
+	for _, step := range req.Steps {
+		stageSets = append(stageSets, step.Stages)
+	}
+	if !authorizeRolloutTargets(c, stageSets...) {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":          "forbidden",
+			"detail":         "token is not authorized to create a plan targeting this environment/cluster",
+			"required_scope": services.ScopeRolloutsWrite,
+		})
 		return
 	}
 	// v0.89.14 (#630) — when any plan step is kind=action, require
