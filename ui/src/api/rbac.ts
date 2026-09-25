@@ -10,6 +10,12 @@ export interface Permission {
   resource_type: string;
   all_resources: boolean;
   resource_ids: string[];
+  // ADR 0053 — optional cluster/environment scoping. When set, the permission
+  // only grants on resources whose server-observed labels match every entry
+  // (AND), keyed by deployment.environment / k8s.cluster.name. Omitted for a
+  // label-agnostic permission. Enterprise-enforced; ignored by the OSS
+  // authorizer.
+  label_match?: Record<string, string>;
 }
 
 export interface Role {
