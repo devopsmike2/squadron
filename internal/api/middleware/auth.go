@@ -353,3 +353,27 @@ func AuthorizeScope(c *gin.Context, required string) bool {
 	}, required, resolveResource(c))
 	return decision.Allow
 }
+
+// AuthorizeScopeResource is AuthorizeScope with a caller-supplied Resource, for
+// in-handler checks that must scope against a resource derived from the request
+// BODY rather than the matched route — e.g. a rollout's target
+// deployment.environment / k8s.cluster.name at create time, before an :id (and
+// therefore resolveResource's route-based lookup) exists (ADR 0053 slice 4b-2b).
+// Same authorizer and ADR-0045 fail-closed semantics as AuthorizeScope: with
+// auth off a zero actor passes through (true); with auth on it is denied. The OSS
+// ScopeAuthorizer ignores the Resource (flat-scope allow, byte-identical to the
+// old route-level RequireScope), while the enterprise deny-by-default,
+// resource-aware Authorizer consumes res.Env/res.Cluster for the cluster/env
+// LabelMatch decision.
+func AuthorizeScopeResource(c *gin.Context, required string, res identity.Resource) bool {
+	actor := ActorFromGin(c)
+	if actor.IsZero() {
+		return !authEnabled
+	}
+	decision := authorizer.Authorize(c.Request.Context(), identity.Principal{
+		ID:     actor.TokenID,
+		Label:  actor.TokenLabel,
+		Scopes: actor.Scopes,
+	}, required, res)
+	return decision.Allow
+}

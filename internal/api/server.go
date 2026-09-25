@@ -3125,7 +3125,11 @@ func (s *Server) registerRoutes() {
 		rollouts := v1.Group("/rollouts")
 		{
 			rollouts.GET("", middleware.RequireScope(services.ScopeRolloutsRead), rolloutHandlers.HandleListRollouts)
-			rollouts.POST("", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreateRollout)
+			// ADR 0053 slice 4b-2b — no route-level RequireScope: the handler runs
+			// the rollouts:write check resource-aware against the target env/cluster
+			// derived from the body (a cluster/env-scoped role needs the body's
+			// labels, which the route can't see). OSS behavior is unchanged.
+			rollouts.POST("", rolloutHandlers.HandleCreateRollout)
 			// v0.73 — plan create. N rollout inputs become a single
 			// plan with shared PlanID assigned server side. The
 			// engine support for plans landed in v0.70-72; this
@@ -3133,7 +3137,9 @@ func (s *Server) registerRoutes() {
 			// produce one. Same scope as regular Create because
 			// creating a plan is conceptually N rollout creates.
 			// Read/list endpoint for plans lands in v0.74.
-			rollouts.POST("/plans", middleware.RequireScope(services.ScopeRolloutsWrite), rolloutHandlers.HandleCreatePlan)
+			// ADR 0053 slice 4b-2b — resource-aware rollouts:write done in-handler
+			// across all plan steps' target env/cluster (see HandleCreateRollout).
+			rollouts.POST("/plans", rolloutHandlers.HandleCreatePlan)
 			// v0.74 — plan read. Returns the envelope (forward steps
 			// + rollback steps + derived state). Same scope as
 			// /rollouts/:id since the data is a view over rollouts.
