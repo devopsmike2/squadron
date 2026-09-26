@@ -14,6 +14,7 @@ import {
   type EnrollmentPins,
   buildEnrollmentLabel,
   hasEnrollmentPins,
+  parseEnrollmentLabel,
 } from "./SettingsTokens.helpers";
 
 import {
@@ -458,7 +459,9 @@ export default function SettingsTokensPage() {
               <tbody>
                 {tokens.map((t) => (
                   <tr key={t.id} className="border-b last:border-0">
-                    <td className="py-2 pr-3 font-medium">{t.label}</td>
+                    <td className="py-2 pr-3 font-medium">
+                      {renderLabel(t.label)}
+                    </td>
                     <td className="py-2 pr-3 text-xs">
                       {renderScopes(t.scopes)}
                     </td>
@@ -548,6 +551,52 @@ function renderStatus(t: APIToken): React.ReactNode {
     >
       active
     </Badge>
+  );
+}
+
+// renderLabel shows a token's label. When the label carries an OpAMP enrollment
+// pin (ADR 0056), the leading pin run is peeled off and rendered as small
+// pin:/env:/cluster: badges so operators can see a token's binding at a glance
+// instead of reading it out of the raw label string. The trailing free text (if
+// any) shows as the ordinary label.
+function renderLabel(label: string): React.ReactNode {
+  const parsed = parseEnrollmentLabel(label);
+  if (!parsed.hasPins) {
+    return label;
+  }
+  const { pins, rest } = parsed;
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {rest ? (
+        <span>{rest}</span>
+      ) : (
+        <span className="text-muted-foreground italic">enrollment pin</span>
+      )}
+      {pins.fleetId && (
+        <Badge
+          variant="outline"
+          className="text-[10px] font-mono bg-sky-500/10 text-sky-700 border-sky-500/20"
+        >
+          pin:{pins.fleetId}
+        </Badge>
+      )}
+      {pins.env && (
+        <Badge
+          variant="outline"
+          className="text-[10px] font-mono bg-violet-500/10 text-violet-700 border-violet-500/20"
+        >
+          env:{pins.env}
+        </Badge>
+      )}
+      {pins.cluster && (
+        <Badge
+          variant="outline"
+          className="text-[10px] font-mono bg-teal-500/10 text-teal-700 border-teal-500/20"
+        >
+          cluster:{pins.cluster}
+        </Badge>
+      )}
+    </span>
   );
 }
 

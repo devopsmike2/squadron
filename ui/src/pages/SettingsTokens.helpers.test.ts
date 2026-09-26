@@ -4,6 +4,7 @@ import {
   type EnrollmentPins,
   buildEnrollmentLabel,
   hasEnrollmentPins,
+  parseEnrollmentLabel,
 } from "./SettingsTokens.helpers";
 
 const pins = (over: Partial<EnrollmentPins> = {}): EnrollmentPins => ({
@@ -41,5 +42,43 @@ describe("buildEnrollmentLabel — ADR 0052/0056 pin label", () => {
 
   it("hasEnrollmentPins is true when any field is set", () => {
     expect(hasEnrollmentPins(pins({ cluster: "eu-1" }))).toBe(true);
+  });
+});
+
+describe("parseEnrollmentLabel — inverse of buildEnrollmentLabel", () => {
+  it("reads no pins from a plain label", () => {
+    const r = parseEnrollmentLabel("ci-bot");
+    expect(r.hasPins).toBe(false);
+    expect(r.pins).toEqual(pins());
+    expect(r.rest).toBe("ci-bot");
+  });
+
+  it("round-trips a fully pinned label", () => {
+    const p = pins({ fleetId: "fleet-abc", env: "prod", cluster: "us-west-2" });
+    const r = parseEnrollmentLabel(buildEnrollmentLabel(p));
+    expect(r.hasPins).toBe(true);
+    expect(r.pins).toEqual(p);
+    expect(r.rest).toBe("");
+  });
+
+  it("reads a partial pin run", () => {
+    const r = parseEnrollmentLabel("env:prod");
+    expect(r.pins.env).toBe("prod");
+    expect(r.pins.fleetId).toBe("");
+    expect(r.pins.cluster).toBe("");
+    expect(r.rest).toBe("");
+  });
+
+  it("keeps trailing free text as rest and stops at the first non-pin segment", () => {
+    const r = parseEnrollmentLabel("pin:f1 env:prod ci notes here");
+    expect(r.pins.fleetId).toBe("f1");
+    expect(r.pins.env).toBe("prod");
+    expect(r.rest).toBe("ci notes here");
+  });
+
+  it("treats a mid-label pin prefix as free text, not a pin", () => {
+    const r = parseEnrollmentLabel("ci-bot env:prod");
+    expect(r.hasPins).toBe(false);
+    expect(r.rest).toBe("ci-bot env:prod");
   });
 });
