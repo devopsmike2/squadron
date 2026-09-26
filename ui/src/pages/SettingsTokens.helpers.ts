@@ -26,3 +26,37 @@ export const buildEnrollmentLabel = (p: EnrollmentPins): string => {
 // hasEnrollmentPins reports whether any pin field is set.
 export const hasEnrollmentPins = (p: EnrollmentPins): boolean =>
   buildEnrollmentLabel(p) !== "";
+
+// ParsedEnrollmentLabel is the inverse of buildEnrollmentLabel: the pins read
+// off an existing token's label, plus whatever free text trails the leading pin
+// run.
+export interface ParsedEnrollmentLabel {
+  pins: EnrollmentPins;
+  hasPins: boolean;
+  // rest is the label text after the leading pin run (an ordinary label has all
+  // of its text here and no pins).
+  rest: string;
+}
+
+// parseEnrollmentLabel reads the leading whitespace-separated run of
+// pin:/env:/cluster: segments off a token label, mirroring the server's parse
+// (ADR 0056). Parsing stops at the first segment without a known prefix; the
+// remainder is returned as rest. A plain label yields no pins and rest === label.
+export const parseEnrollmentLabel = (label: string): ParsedEnrollmentLabel => {
+  const pins: EnrollmentPins = { fleetId: "", env: "", cluster: "" };
+  const parts = label.trim().split(/\s+/);
+  let i = 0;
+  for (; i < parts.length; i++) {
+    const seg = parts[i];
+    if (seg.startsWith("pin:")) pins.fleetId = seg.slice("pin:".length);
+    else if (seg.startsWith("env:")) pins.env = seg.slice("env:".length);
+    else if (seg.startsWith("cluster:"))
+      pins.cluster = seg.slice("cluster:".length);
+    else break;
+  }
+  return {
+    pins,
+    hasPins: hasEnrollmentPins(pins),
+    rest: parts.slice(i).join(" "),
+  };
+};
