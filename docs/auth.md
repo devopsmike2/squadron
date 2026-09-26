@@ -124,6 +124,18 @@ are" (no token / bad token), **403 Forbidden** means "I know who you
 are but you can't do this" (auth OK, scope missing). CLI clients
 should branch on the status code, not the message.
 
+> **Enterprise build: scopes alone do not grant access.** Everything in
+> this section describes the open-source edition, where a token's scopes
+> are the authority. On the **enterprise** build, authorization is
+> role-based and deny-by-default: a token's flat scopes are *not*
+> consulted, so a freshly minted token, even one carrying `["*"]`, gets a
+> **403** on every scoped route until it is bound to an RBAC role. Only
+> the break-glass bootstrap token works out of the box. Use the bootstrap
+> token to create a role and bind your token to it, keying the binding on
+> `token_id` or `token_label` (those are the only valid `principal_kind`
+> values). The full flow is in
+> [docs/enterprise/rbac.md](enterprise/rbac.md).
+
 ### Vocabulary
 
 | Scope                | Gates                                                      |
