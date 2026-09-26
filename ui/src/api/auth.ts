@@ -63,6 +63,14 @@ export const ALL_SCOPES: ReadonlyArray<{
   },
   { id: "auth:read", label: "View API tokens", group: "Auth" },
   { id: "auth:write", label: "Create / revoke API tokens", group: "Auth" },
+  // ADR 0042 — the scope an OpAMP agent's enrollment token must carry to
+  // authenticate on the control channel. Pin it to a cluster/env/fleet identity
+  // with the Enrollment pin helper below (ADR 0052/0056).
+  {
+    id: "opamp:enroll",
+    label: "Enroll an OpAMP agent (control-channel connect)",
+    group: "OpAMP",
+  },
 ];
 
 interface ListResponse {

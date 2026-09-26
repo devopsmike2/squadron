@@ -11,6 +11,12 @@ import { useState } from "react";
 import useSWR, { mutate } from "swr";
 
 import {
+  type EnrollmentPins,
+  buildEnrollmentLabel,
+  hasEnrollmentPins,
+} from "./SettingsTokens.helpers";
+
+import {
   ALL_SCOPES,
   type APIToken,
   createAPIToken,
@@ -24,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const TOKENS_KEY = "api-tokens";
+const OPAMP_ENROLL_SCOPE = "opamp:enroll";
 
 export default function SettingsTokensPage() {
   const {
@@ -46,6 +53,20 @@ export default function SettingsTokensPage() {
     "never" | "7" | "30" | "90" | "custom"
   >("never");
   const [expiryCustom, setExpiryCustom] = useState("");
+  // ADR 0052/0056 — optional OpAMP enrollment pin. When any field is set the
+  // token's label becomes the composed pin run (that IS the pin carrier) and
+  // opamp:enroll is ensured on submit. Minting a pinned token requires the
+  // caller to hold agents:write (enforced server-side).
+  const [pins, setPins] = useState<EnrollmentPins>({
+    fleetId: "",
+    env: "",
+    cluster: "",
+  });
+  const pinLabel = buildEnrollmentLabel(pins);
+  const pinned = hasEnrollmentPins(pins);
+  // The label actually submitted: the composed pin run when pinning, else the
+  // operator's free-text label.
+  const effectiveLabel = pinned ? pinLabel : newLabel.trim();
   // freshPlaintext holds the just-issued token plaintext for the
   // "copy this now" modal. Cleared when the operator dismisses the
   // modal — at which point Squadron has no way to recover it.
@@ -86,15 +107,27 @@ export default function SettingsTokensPage() {
     e.preventDefault();
     setSubmitting(true);
     setSubmitError(null);
-    const scopes = scopesForSubmit();
+    let scopes = scopesForSubmit();
+    // A pinned token is an enrollment credential: ensure it carries opamp:enroll
+    // (unless the operator picked full access, which already covers it).
+    if (pinned && !fullAccess && !scopes.includes(OPAMP_ENROLL_SCOPE)) {
+      scopes = [...scopes, OPAMP_ENROLL_SCOPE];
+    }
     if (scopes.length === 0) {
       setSubmitError("Pick at least one scope, or choose 'Full access'.");
       setSubmitting(false);
       return;
     }
+    if (effectiveLabel === "") {
+      setSubmitError(
+        pinned ? "Enter at least one pin value." : "Enter a label.",
+      );
+      setSubmitting(false);
+      return;
+    }
     try {
       const resp = await createAPIToken(
-        newLabel.trim(),
+        effectiveLabel,
         scopes,
         expiryForSubmit(),
       );
@@ -104,6 +137,7 @@ export default function SettingsTokensPage() {
       setFullAccess(false);
       setExpiryChoice("never");
       setExpiryCustom("");
+      setPins({ fleetId: "", env: "", cluster: "" });
       setCreating(false);
       await mutate(TOKENS_KEY);
     } catch (err) {
@@ -165,7 +199,8 @@ export default function SettingsTokensPage() {
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
                   placeholder="ci-bot, deploy-pipeline, alice@example.com"
-                  required
+                  required={!pinned}
+                  disabled={pinned}
                   autoFocus
                 />
                 <p className="text-xs text-muted-foreground">
@@ -228,6 +263,55 @@ export default function SettingsTokensPage() {
                 </p>
               </div>
 
+              {/* OpAMP enrollment pin (ADR 0052/0056). Optional. When any field
+                  is set the token label becomes the composed pin run and the
+                  label field above is ignored; opamp:enroll is added on submit.
+                  Minting a pinned token requires the caller to hold agents:write
+                  (enforced server-side). */}
+              <div className="space-y-2 rounded-md border p-3">
+                <Label>OpAMP enrollment pin (optional)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Bind this enrollment token to a fleet identity and/or a
+                  cluster/environment. The agent can then only claim what it is
+                  pinned to. Leave blank for an ordinary token.
+                </p>
+                <div className="grid gap-2 md:grid-cols-3">
+                  <Input
+                    value={pins.fleetId}
+                    onChange={(e) =>
+                      setPins((p) => ({ ...p, fleetId: e.target.value }))
+                    }
+                    placeholder="fleet id (pin:)"
+                    className="font-mono text-xs"
+                  />
+                  <Input
+                    value={pins.env}
+                    onChange={(e) =>
+                      setPins((p) => ({ ...p, env: e.target.value }))
+                    }
+                    placeholder="env (deployment.environment)"
+                    className="font-mono text-xs"
+                  />
+                  <Input
+                    value={pins.cluster}
+                    onChange={(e) =>
+                      setPins((p) => ({ ...p, cluster: e.target.value }))
+                    }
+                    placeholder="cluster (k8s.cluster.name)"
+                    className="font-mono text-xs"
+                  />
+                </div>
+                {pinned && (
+                  <p className="text-xs">
+                    Token label: <span className="font-mono">{pinLabel}</span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      opamp:enroll will be added automatically. Minting a pinned
+                      token requires the agents:write scope.
+                    </span>
+                  </p>
+                )}
+              </div>
+
               {/* Expiry picker. Never is the safe default (matches
                   pre-v0.11 behavior); setting an expiry is encouraged
                   for human-issued tokens. The canned 7/30/90-day
@@ -279,13 +363,14 @@ export default function SettingsTokensPage() {
                   onClick={() => {
                     setCreating(false);
                     setNewLabel("");
+                    setPins({ fleetId: "", env: "", cluster: "" });
                     setSubmitError(null);
                   }}
                   disabled={submitting}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={submitting || !newLabel.trim()}>
+                <Button type="submit" disabled={submitting || !effectiveLabel}>
                   {submitting ? "Issuing..." : "Issue token"}
                 </Button>
               </div>
