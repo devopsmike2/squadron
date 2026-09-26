@@ -76,6 +76,21 @@ curl -sX POST localhost:8080/api/v1/rbac/roles \
 # -> 201 {"id":"...","name":"rollout-operator","permissions":[...]}
 ```
 
+For a full-admin role, use the wildcard scope with an any-type permission. The
+resource type is "any" when it is `"*"` or omitted entirely; the scope wildcard
+is `"*"`:
+
+```bash
+curl -sX POST localhost:8080/api/v1/rbac/roles \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"platform-admin",
+        "permissions":[{"scope":"*","resource_type":"*","all_resources":true}]}'
+```
+
+Note the wildcards are exact: `"*"` matches any scope and (for `resource_type`)
+any type. Prefix globs such as `agents:*` are not expanded, so enumerate the
+concrete scopes a narrower role needs rather than relying on a partial glob.
+
 Bind it to a principal by token label:
 
 ```bash
