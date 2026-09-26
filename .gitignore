@@ -18,6 +18,29 @@ coverage.html
 /data/
 *.db
 *.duckdb
+# SQLite sidecar files — WAL/SHM are multi-MB runtime artifacts that must
+# never be committed (a stray `git add -A` otherwise sweeps them in).
+*.db-wal
+*.db-shm
+*.db.wal
+*.telemetry.db*
+
+# Local run / live-proof scratch directories. These hold runtime DBs, exported
+# audit chains, and generated TLS material — none of it belongs in git, and it
+# can contain secrets (keys, tokens). Keep them local-only.
+/data-*/
+/data-proof/
+/data-enterprise/
+*.pinmark
+
+# Secrets and credential material — belt-and-suspenders so a proof/run never
+# leaks a private key or token into a commit.
+secrets.key
+*.key
+*.srl
+*.csr
+!**/testdata/**/*.key
+.env.bak*
 
 # Go workspace file
 go.work
