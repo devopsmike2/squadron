@@ -203,6 +203,27 @@ role exists, letting you provision the first real roles and tenants. Revoke the
 bootstrap token once real scoped tokens and roles are in place; keep a
 break-glass label as the strict-identity lockout safety net.
 
+## First-run admin seed
+
+So a freshly enabled instance yields a usable admin path without a manual
+role/binding step, Squadron seeds one automatically on first start (ADR 0057).
+When the default tenant's RBAC store is **pristine** (no roles and no bindings),
+startup creates a `platform-admin` role (wildcard scope, any resource type, all
+instances) and binds it to the bootstrap token **label** (`token_label` →
+`bootstrap`). A durable PAT minted under that label is then admin via a real,
+auditable role binding (`matched_role: platform-admin`) — not only the
+break-glass bypass — and the role shows up in `GET /rbac/roles` as a working
+example to clone or bind other tokens to.
+
+The seed is conservative: it runs only on a pristine store, so it never clobbers
+or resurrects grants you have provisioned or deleted, and it grants nothing an
+unbound token could use (deny-by-default still holds — an unbound token is 403).
+Disable it entirely with:
+
+```bash
+export SQUADRON_RBAC_SEED_ADMIN=0
+```
+
 ## Deny-by-default: flat scopes stop being an authority
 
 !!! warning "Once real roles exist, flat token scopes are NOT consulted"
