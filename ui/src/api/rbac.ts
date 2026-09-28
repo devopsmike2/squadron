@@ -71,3 +71,22 @@ export const createBinding = (input: BindingInput): Promise<Binding> =>
 
 export const deleteBinding = (id: string): Promise<void> =>
   apiDelete<void>(`/rbac/bindings/${id}`);
+
+// Catalog is the canonical authoring vocabulary served by GET /rbac/catalog in
+// BOTH editions (unlike the role/binding routes, which 404 in OSS). It lets the
+// role editor offer validated dropdowns instead of free-text scope/resource_type
+// that an operator would otherwise have to guess (the trap issue #84 hit for
+// principal_kind). Older servers that predate the endpoint 404 — callers fall
+// back to free-text on any error.
+export interface RBACCatalog {
+  scopes: string[];
+  resource_types: string[];
+}
+
+export const getCatalog = async (): Promise<RBACCatalog> => {
+  const resp = await apiGet<RBACCatalog>("/rbac/catalog");
+  return {
+    scopes: resp.scopes ?? [],
+    resource_types: resp.resource_types ?? [],
+  };
+};

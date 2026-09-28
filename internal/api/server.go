@@ -661,6 +661,14 @@ func (s *Server) SetEnterpriseRBACHandler(h EnterpriseRBACHandler) {
 // the seam is unit-testable with a bare *Server.
 func (s *Server) mountEnterpriseRBAC(rg gin.IRouter) {
 	rg.Any("/rbac/*path", func(c *gin.Context) {
+		// GET /api/v1/rbac/catalog is served in BOTH editions (it exposes the
+		// static scope + resource-type vocabulary, not tenant data), so the RBAC
+		// role editor can offer typed pickers instead of free-text. It rides the
+		// same wildcard to avoid a gin static-vs-catch-all route conflict.
+		if c.Request.Method == http.MethodGet && c.Param("path") == "/catalog" {
+			s.handleRBACCatalog(c)
+			return
+		}
 		if s.enterpriseRBACHandler == nil {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":  "not found",
@@ -669,6 +677,23 @@ func (s *Server) mountEnterpriseRBAC(rg gin.IRouter) {
 			return
 		}
 		s.enterpriseRBACHandler.HandleRBAC(c)
+	})
+}
+
+// handleRBACCatalog returns the canonical RBAC authoring vocabulary: every valid
+// permission scope (services.AllScopes plus the "*" wildcard) and every resource
+// type the route table resolves (middleware.ResourceTypes). It is non-sensitive
+// static metadata — available in OSS and enterprise alike behind the bearer
+// group — so the role editor (and token scope picker) can present validated
+// choices rather than free-text that a caller has to guess.
+func (s *Server) handleRBACCatalog(c *gin.Context) {
+	scopes := services.AllScopes()
+	out := make([]string, 0, len(scopes)+1)
+	out = append(out, services.ScopeWildcard)
+	out = append(out, scopes...)
+	c.JSON(http.StatusOK, gin.H{
+		"scopes":         out,
+		"resource_types": middleware.ResourceTypes(),
 	})
 }
 

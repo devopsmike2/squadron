@@ -4,6 +4,7 @@
 package middleware
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -96,6 +97,27 @@ var routeResourceType = []struct {
 	{"/api/v1/inventory/expected", "expected-agent"},
 
 	{"/api/v1/telemetry/saved-queries", "saved-query"},
+}
+
+// ResourceTypes returns the distinct RBAC resource-class strings the route
+// table maps to, sorted. It is the canonical vocabulary an enterprise role
+// permission's resource_type is scoped against (ADR 0010), exposed so the
+// RBAC catalog endpoint can offer operators a typed picker instead of
+// free-text (the alternative that made valid values unguessable — cf. issue
+// #84's principal_kind). Derived from routeResourceType so it can never drift
+// from what deriveResourceType actually resolves.
+func ResourceTypes() []string {
+	seen := make(map[string]struct{}, len(routeResourceType))
+	out := make([]string, 0, len(routeResourceType))
+	for _, r := range routeResourceType {
+		if _, ok := seen[r.typ]; ok {
+			continue
+		}
+		seen[r.typ] = struct{}{}
+		out = append(out, r.typ)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // deriveResourceType returns the RBAC resource class for a matched route
