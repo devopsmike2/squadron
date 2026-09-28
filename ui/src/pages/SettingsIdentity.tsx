@@ -17,16 +17,19 @@ import {
   permRowsToPermissions,
 } from "./SettingsIdentity.helpers";
 
+import { ALL_SCOPES } from "@/api/auth";
 import {
   type Binding,
   type BindingInput,
   type Permission,
+  type RBACCatalog,
   type Role,
   type RoleInput,
   createBinding,
   createRole,
   deleteBinding,
   deleteRole,
+  getCatalog,
   listBindings,
   listRoles,
 } from "@/api/rbac";
@@ -89,6 +92,18 @@ import { UsagePanel } from "@/components/UsagePanel";
 
 const ROLES_KEY = "rbac-roles";
 const BINDINGS_KEY = "rbac-bindings";
+const CATALOG_KEY = "rbac-catalog";
+// ANY_TYPE is the Select sentinel for "no resource_type" (any type). A shadcn
+// SelectItem can't carry an empty-string value, so the picker uses this token
+// and maps it back to "" when writing the permission row (empty = any type).
+const ANY_TYPE = "__any__";
+// scopeLabel maps a scope id to its human label from the token scope catalog,
+// so the role editor dropdown reads "agents:read — View agents" rather than the
+// bare id. Falls back to the id for scopes without a catalog entry (e.g. "*").
+const scopeLabel = (id: string): string => {
+  const entry = ALL_SCOPES.find((s) => s.id === id);
+  return entry ? `${id} — ${entry.label}` : id;
+};
 const TENANTS_KEY = "tenants";
 
 export default function SettingsIdentityPage() {
@@ -115,6 +130,15 @@ export default function SettingsIdentityPage() {
     listTenants,
     { shouldRetryOnError: false },
   );
+  // Authoring vocabulary for the role editor's typed pickers. Served in both
+  // editions; on an older server that predates it, the 404 leaves `catalog`
+  // undefined and the permission rows fall back to free-text inputs.
+  const { data: catalog } = useSWR<RBACCatalog>(CATALOG_KEY, getCatalog, {
+    shouldRetryOnError: false,
+  });
+  const scopeOptions = catalog?.scopes ?? [];
+  const resourceTypeOptions = catalog?.resource_types ?? [];
+  const hasCatalog = scopeOptions.length > 0;
 
   // Role create drawer.
   const [roleOpen, setRoleOpen] = useState(false);
@@ -537,32 +561,96 @@ export default function SettingsIdentityPage() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 space-y-2">
-                      <Input
-                        value={row.scope}
-                        onChange={(e) =>
-                          setPermRows((rows) =>
-                            rows.map((r, j) =>
-                              j === i ? { ...r, scope: e.target.value } : r,
-                            ),
-                          )
-                        }
-                        placeholder="rollouts:read or *"
-                        className="font-mono text-xs"
-                      />
-                      <Input
-                        value={row.resource_type}
-                        onChange={(e) =>
-                          setPermRows((rows) =>
-                            rows.map((r, j) =>
-                              j === i
-                                ? { ...r, resource_type: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        placeholder="blank = any type"
-                        className="font-mono text-xs"
-                      />
+                      {hasCatalog ? (
+                        <Select
+                          value={row.scope}
+                          onValueChange={(v) =>
+                            setPermRows((rows) =>
+                              rows.map((r, j) =>
+                                j === i ? { ...r, scope: v } : r,
+                              ),
+                            )
+                          }
+                        >
+                          <SelectTrigger className="font-mono text-xs">
+                            <SelectValue placeholder="Select a scope" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {scopeOptions.map((s) => (
+                              <SelectItem key={s} value={s} className="text-xs">
+                                {scopeLabel(s)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={row.scope}
+                          onChange={(e) =>
+                            setPermRows((rows) =>
+                              rows.map((r, j) =>
+                                j === i ? { ...r, scope: e.target.value } : r,
+                              ),
+                            )
+                          }
+                          placeholder="rollouts:read or *"
+                          className="font-mono text-xs"
+                        />
+                      )}
+                      {hasCatalog ? (
+                        <Select
+                          value={
+                            row.resource_type === ""
+                              ? ANY_TYPE
+                              : row.resource_type
+                          }
+                          onValueChange={(v) =>
+                            setPermRows((rows) =>
+                              rows.map((r, j) =>
+                                j === i
+                                  ? {
+                                      ...r,
+                                      resource_type: v === ANY_TYPE ? "" : v,
+                                    }
+                                  : r,
+                              ),
+                            )
+                          }
+                        >
+                          <SelectTrigger className="font-mono text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={ANY_TYPE} className="text-xs">
+                              (any resource type)
+                            </SelectItem>
+                            {resourceTypeOptions.map((rt) => (
+                              <SelectItem
+                                key={rt}
+                                value={rt}
+                                className="text-xs"
+                              >
+                                {rt}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={row.resource_type}
+                          onChange={(e) =>
+                            setPermRows((rows) =>
+                              rows.map((r, j) =>
+                                j === i
+                                  ? { ...r, resource_type: e.target.value }
+                                  : r,
+                              ),
+                            )
+                          }
+                          placeholder="blank = any type"
+                          className="font-mono text-xs"
+                        />
+                      )}
                     </div>
                     <Button
                       variant="ghost"

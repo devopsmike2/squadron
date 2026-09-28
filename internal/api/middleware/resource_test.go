@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -275,4 +276,25 @@ func TestRequireScope_ResourcePlumbingInertUnderOSS(t *testing.T) {
 	reqDeny.Header.Set("Authorization", "Bearer "+readerTok)
 	rDeny.ServeHTTP(wDeny, reqDeny)
 	assert.Equal(t, http.StatusForbidden, wDeny.Code, "non-matching scope must still 403 with a populated Resource")
+}
+
+// TestResourceTypes_DedupedSortedNonEmpty pins the catalog vocabulary helper:
+// distinct, sorted, no empty class, and drawn from the real route table.
+func TestResourceTypes_DedupedSortedNonEmpty(t *testing.T) {
+	got := ResourceTypes()
+	require.NotEmpty(t, got)
+
+	// Sorted + deduped.
+	assert.True(t, sort.StringsAreSorted(got), "ResourceTypes must be sorted")
+	seen := map[string]bool{}
+	for _, x := range got {
+		assert.NotEmpty(t, x, "no empty resource type")
+		assert.False(t, seen[x], "duplicate resource type %q", x)
+		seen[x] = true
+	}
+
+	// Anchors from routeResourceType so it can't silently drift.
+	for _, want := range []string{"agent", "group", "config", "rollout", "api-token"} {
+		assert.Contains(t, got, want)
+	}
 }
