@@ -82,6 +82,7 @@ exclude_docs: |
 nav:
   - Home: index.md
   - Getting Started:
+      - What is Squadron?: what-is-squadron.md
       - Overview: getting-started.md
       - Quickstart wizard: quickstart.md
       - Quickstart paths: quickstart/README.md

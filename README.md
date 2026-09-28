@@ -10,6 +10,8 @@
 
 </div>
 
+> **New to Squadron?** Start with [**What is Squadron?**](docs/what-is-squadron.md) — the five-minute picture of the gap it fills, the governed-change model behind every feature, and where the project is heading.
+
 Squadron is one place to see every collector in your fleet, change
 its config safely, catch drift before it pages you, and keep the
 whole fleet healthy, with a governed change loop and a
